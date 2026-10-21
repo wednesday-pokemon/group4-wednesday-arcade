@@ -10,6 +10,12 @@ interface NicknameProps {
   tools: ReactNode;
   onBack: () => void;
   onSubmit: (nickname: string) => void;
+  /** Step indicator (default "Step 1 of 4", the v2.5/v3.0 journeys). */
+  stepLabel?: string;
+  /** Screen title (default "What should the board call you?"). */
+  title?: string;
+  /** Optional aside under the form (mystery: Thing's line). */
+  aside?: ReactNode;
 }
 
 function friendlyError(raw: string): string | null {
@@ -20,7 +26,7 @@ function friendlyError(raw: string): string | null {
   return `At least ${NICKNAME.minLength} characters`;
 }
 
-export function Nickname({ initial, tools, onBack, onSubmit }: NicknameProps) {
+export function Nickname({ initial, tools, onBack, onSubmit, stepLabel = 'Step 1 of 4', title = 'What should the board call you?', aside }: NicknameProps) {
   const h1 = useRef<HTMLHeadingElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState(initial);
@@ -42,7 +48,7 @@ export function Nickname({ initial, tools, onBack, onSubmit }: NicknameProps) {
   return (
     <main className="screen screen--left scrim-left" data-testid="screen-nickname">
       <header className="topline">
-        <span className="caps">Step 1 of 4</span>
+        <span className="caps">{stepLabel}</span>
         {tools}
       </header>
       <form
@@ -53,7 +59,7 @@ export function Nickname({ initial, tools, onBack, onSubmit }: NicknameProps) {
           submit();
         }}
       >
-        <h1 ref={h1} tabIndex={-1} className="display screen-title">What should the board call you?</h1>
+        <h1 ref={h1} tabIndex={-1} className="display screen-title">{title}</h1>
         <div className="nickname-field">
           <input
             ref={input}
@@ -85,6 +91,7 @@ export function Nickname({ initial, tools, onBack, onSubmit }: NicknameProps) {
           <Button variant="primary" size="lg" kbd="Enter" type="submit" data-testid="btn-continue">Continue</Button>
           <Button variant="ghost" onClick={onBack} data-testid="btn-back">Back</Button>
         </div>
+        {aside}
       </form>
     </main>
   );

@@ -1,0 +1,114 @@
+// Case 1 — "The Silent Evidence" (plan §2). Game-designer owned.
+//
+// All jobs, events and the crime are invented for THIS GAME'S alternate-universe story; they are not claims about
+// series canon. The culprit is fixed (no randomness for Case 1).
+//
+// Deduction design (full truth table in docs/MYSTERY_DESIGN.md §4):
+// - Each clue supplies one link of the chain against the same person: ACCESS (vault sequence + timing),
+//   KEY (custody of the guard's master key), RELEASE (trace on the Hyde-release latch).
+// - Each of the two innocent suspects is explained by exactly one clue (Barry by the key clue, Isaac by the latch clue);
+//   the access clue explains nobody. So no single clue clears both alternatives, and only all three clues give the
+//   full chain + both alternatives explained. "Case Solved" requires all three (contract rule).
+// - Suspect context is NEUTRAL: exonerating facts appear only inside found clues.
+// - No clue text or deduction says who the killer is; the player draws the conclusion at the accusation.
+import type { CaseDef, ClueId, RoomId } from '../types.ts';
+
+export const SILENT_EVIDENCE: CaseDef = {
+  id: 'silent_evidence',
+  title: 'The Silent Evidence',
+  victim: 'Professor Orloff',
+  culprit: 'thornhill',
+  suspects: [
+    {
+      id: 'thornhill',
+      name: 'Marilyn Thornhill',
+      role: 'Archivist (role in this story)',
+      alibiOrContext: 'Keeps the island archive and its sign-out records.',
+    },
+    {
+      id: 'isaac',
+      name: 'Isaac Night',
+      role: 'Groundskeeper (role in this story)',
+      alibiOrContext: 'Looks after the grounds, paths and drains.',
+    },
+    {
+      id: 'barry',
+      name: 'Barry Dort',
+      role: 'Night guard (role in this story)',
+      alibiOrContext: 'Walks the night rounds and is issued the vault keys.',
+    },
+  ],
+  clues: [
+    {
+      id: 'transfer_note',
+      title: 'Restricted-Transfer Note',
+      roomId: 'research_room',
+      text:
+        "Orloff's desk note: 'Someone ran the archive-only vault sequence at 11:40 pm. Find out who.' " +
+        'Clipped beneath it: an archive transfer slip for the vault, signed M. Thornhill, 11:32 pm. ' +
+        'The sequence is issued only to archive staff.',
+      implicates: ['thornhill'],
+      exonerates: [],
+      deduction: 'Archive vault access minutes before the theft: an opportunity link, not proof of who released the Hyde.',
+    },
+    {
+      id: 'master_key',
+      title: 'Master Key in an Archive Pouch',
+      roomId: 'crypt',
+      text:
+        "Inside the crypt door: the guard's master vault key, sealed in an archive-issue pouch stamped with " +
+        "Thornhill's signature, 11:20 pm. A co-signed watch log shows Dort reported the key missing at 10:55 pm " +
+        'and walked the east wall until midnight.',
+      implicates: ['thornhill'],
+      exonerates: ['barry'],
+      deduction: 'Dort lost the key before the theft and was logged elsewhere; the key moved in archive-issue gear.',
+    },
+    {
+      id: 'greenhouse_trace',
+      title: 'Greenhouse Trace on the Latch',
+      roomId: 'egg_chamber',
+      text:
+        'On the Hyde-release latch: rare greenhouse resin and a torn inventory seal whose number matches kit signed ' +
+        "out on Thornhill's equipment record. Isaac's muddy prints are old and match his logged drain repair; " +
+        'a fresh, cleaner trail leads to the latch.',
+      implicates: ['thornhill'],
+      exonerates: ['isaac'],
+      deduction: "Isaac's prints predate the release; whoever opened the latch carried kit from that signed-out record.",
+    },
+  ],
+};
+
+/** E prompt label per clue (ClueDef has no label field). */
+export const CLUE_INTERACT_LABELS: Record<ClueId, string> = {
+  transfer_note: 'Search the desk',
+  master_key: 'Examine the pouch',
+  greenhouse_trace: 'Inspect the latch',
+};
+
+/** Location shown on a LOCKED (not yet found) clue card — location only, never content. */
+export const CLUE_LOCATION_LABELS: Record<ClueId, string> = {
+  transfer_note: 'Research Room',
+  master_key: 'Crypt Entrance',
+  greenhouse_trace: 'Egg Chamber',
+};
+
+/** Which link of the evidence chain each clue supplies (for board copy / diagnostics). */
+export const CLUE_LINK: Record<ClueId, { key: 'access' | 'key' | 'release'; label: string }> = {
+  transfer_note: { key: 'access', label: 'Vault access and timing' },
+  master_key: { key: 'key', label: 'Custody of the master key' },
+  greenhouse_trace: { key: 'release', label: 'Who opened the release latch' },
+};
+
+/** Human-readable room names for UI (RoomDef.name carries the same strings). */
+export const ROOM_LABELS: Record<RoomId, string> = {
+  pier: 'Pier',
+  path: 'Island Path',
+  research_room: 'Research Room',
+  crypt: 'Ruined Crypt',
+  egg_chamber: 'Egg Chamber',
+  shortcut: 'Shortcut Alley',
+  courtyard: 'Iago Tower Courtyard',
+  tower: 'Iago Tower',
+};
+
+export const CASE_DISCLAIMER = "Jobs and events are invented for this game's story.";

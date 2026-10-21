@@ -7,7 +7,13 @@
 //  * Idempotency receipts, revision checks, supersede, ownership (other station -> 404), operator reset and the
 //    station_status / leaderboard_entries projections mirror session-flow.ts and the SQL RPCs.
 //  * Auth (/auth/v1) and PostgREST (/rest/v1) are served to the REAL supabase-js client through a custom fetch.
-//  * Realtime is a fake channel host (postgres_changes only) with pause/flush for out-of-order delivery.
+//  * Realtime is a fake channel host (postgres_changes + broadcast) with pause/flush for out-of-order delivery.
+//  * mystery-v3.1: the five mystery-* functions run the REAL server modules (supabase/functions/_shared/
+//    mystery-{validation,events,rules}.ts + the synced shared draftOffer / scoring / caseLogic) exactly in the order
+//    of supabase/functions/mystery-*/index.ts; the SQL RPC semantics (idempotent create receipts, rate limit,
+//    supersede, select-from-offer, optimistic last_seq, fill-only recommendations, one immutable result, operator
+//    reset with `scope`) and the RLS read rules (public status/results/views; events/offers/forecasts/advice own
+//    station or operator; test runs hidden) are mirrored from migrations 20261021000500..800.
 import {
   abandonSession, buildSessionView, createInitialState, getPushOptions, prepareWithSeed, resolveWithSeed,
 } from '../../src/game/index.ts';
@@ -16,9 +22,26 @@ import { sha256Hex } from '../../src/game/sha256.ts';
 import { HttpError, errorBody, fromRejection } from '../../supabase/functions/_shared/errors.ts';
 import { redactResolution, redactView } from '../../supabase/functions/_shared/redact.ts';
 import {
-  jsonEqual, parseAdminReset, parseCreateSession, parseFinishSession, parseGetSession, parseJsonText, parsePrepareLeg,
-  parseResolveLeg,
+  MAX_BODY_BYTES, jsonEqual, parseAdminReset, parseCreateSession, parseFinishSession, parseGetSession, parseJsonText,
+  parsePrepareLeg, parseResolveLeg,
 } from '../../supabase/functions/_shared/validation.ts';
+import {
+  MAX_APPEND_BYTES, MAX_FINALIZE_BYTES, parseMysteryAppend, parseMysteryCreate, parseMysteryFinalize, parseMysteryGet,
+  parseMysterySelect,
+} from '../../supabase/functions/_shared/mystery-validation.ts';
+import {
+  RULE_EVENT_TYPES, applyBatch, initialProgress, progressFromRow, progressSummary, ruleFingerprint, splitResend,
+  type ParsedEvent,
+} from '../../supabase/functions/_shared/mystery-events.ts';
+import { computeOffer, computeResult, requireData, requireEggRules, rulesContext } from '../../supabase/functions/_shared/mystery-rules.ts';
+import { fromRpcEnvelope } from '../../supabase/functions/_shared/errors.ts';
+import { buildMysteryBoardServices, buildMysteryStationServices } from '../../src/lib/supabase/mysteryLive.ts';
+import type { Timers } from '../../src/lib/supabase/mysterySync.ts';
+import type { LiveController } from '../../src/app/mystery/liveRun.ts';
+import { createMysteryAnalytics, type MysteryAnalytics } from '../../src/mystery/analytics/index.ts';
+import { Bot } from '../../src/mystery/bot.ts';
+import { MysteryRun } from '../../src/mystery/run.ts';
+import type { Duo, DuoCard } from '../../src/mystery/types.ts';
 import type { GameBackend } from '../../src/lib/backend.ts';
 import { createSupabase, type LiveConfig } from '../../src/lib/supabase/client.ts';
 import { buildLiveServices } from '../../src/lib/supabase/liveServices.ts';
@@ -84,7 +107,7 @@ function wire<T>(x: T): T {
 // ------------------------------------------------------------------------------------------------
 // Realtime fake
 
-type Binding = { filter: { event: string; schema: string; table: string; filter?: string }; cb: (payload: unknown) => void };
+type Binding = { type: string; filter: { event: string; schema?: string; table?: string; filter?: string }; cb: (payload: unknown) => void };
 
 export class FakeChannel {
   readonly bindings: Binding[] = [];
@@ -92,9 +115,21 @@ export class FakeChannel {
   subscribed = false;
   removed = false;
   constructor(readonly topic: string, private readonly hub: FakeRealtime) {}
-  on(_type: string, filter: Binding['filter'], cb: (payload: unknown) => void): this {
-    this.bindings.push({ filter, cb });
+  on(type: string, filter: Binding['filter'], cb: (payload: unknown) => void): this {
+    this.bindings.push({ type, filter, cb });
     return this;
+  }
+  /** Broadcast to every OTHER joined channel with the same topic (config broadcast.self = false). */
+  async send(msg: { type: string; event: string; payload: unknown }): Promise<'ok' | 'error'> {
+    if (msg.type !== 'broadcast' || !this.subscribed || this.removed) return 'error';
+    this.hub.broadcasts.push({ topic: this.topic, event: msg.event, payload: wire(msg.payload) });
+    for (const ch of this.hub.active()) {
+      if (ch === this || ch.topic !== this.topic || !ch.subscribed) continue;
+      for (const b of ch.bindings) {
+        if (b.type === 'broadcast' && b.filter.event === msg.event) b.cb({ type: 'broadcast', event: msg.event, payload: wire(msg.payload) });
+      }
+    }
+    return 'ok';
   }
   subscribe(cb: (status: string) => void): this {
     this.statusCb = cb;
@@ -108,6 +143,7 @@ export class FakeChannel {
   deliver(table: string, eventType: string, row: Record<string, unknown>, old: Record<string, unknown>): void {
     if (!this.subscribed || this.removed) return;
     for (const b of this.bindings) {
+      if (b.type !== 'postgres_changes') continue;
       if (b.filter.table !== table || (b.filter.event !== '*' && b.filter.event !== eventType)) continue;
       if (b.filter.filter) {
         const m = /^(\w+)=eq\.(.+)$/.exec(b.filter.filter);
@@ -126,6 +162,7 @@ export class FakeRealtime {
   paused = false;
   readonly queue: QueuedEvent[] = [];
   readonly log: QueuedEvent[] = [];
+  readonly broadcasts: { topic: string; event: string; payload: unknown }[] = [];
 
   channel(topic: string): FakeChannel {
     const ch = new FakeChannel(topic, this);
@@ -210,6 +247,35 @@ export interface LoggedRequest {
 
 type Caller = { userId: string; role: 'station' | 'operator'; stationId: StationId | null };
 
+/** mystery_sessions row (snake_case, as the SQL table). */
+export interface FakeMysterySession {
+  id: string;
+  station_id: StationId;
+  rules_version: 'mystery-v3.1';
+  create_action_id: string;
+  create_body: unknown;
+  seed: string;
+  is_test: boolean;
+  nickname: string;
+  status: 'offered' | 'playing' | 'finished' | 'dnf' | 'abandoned';
+  selected_slot: number | null;
+  character_id: string | null;
+  pokemon_id: string | null;
+  selected_at: string | null;
+  last_seq: number;
+  last_t: number;
+  event_count: number;
+  terminal_type: 'finish' | 'dnf' | null;
+  progress: unknown;
+  abandoned_reason: 'player_reset' | 'operator_reset' | 'superseded' | null;
+  created_at: string;
+  created_ms: number;
+  finalized_at: string | null;
+}
+
+type Row = Record<string, unknown>;
+type Viewer = { role: 'anon' } | { role: 'station'; stationId: StationId | null } | { role: 'operator' };
+
 const LABELS: Record<StationId, string> = { station_a: 'Station A', station_b: 'Station B' };
 
 export class FakeSupabaseServer {
@@ -222,14 +288,32 @@ export class FakeSupabaseServer {
   readonly restRequests: string[] = [];
   readonly faults: Fault[] = [];
   readonly createReceipts = new Map<string, { body: unknown; response: unknown; sessionId: string }>();
+  readonly operatorAudit: { stationId: StationId; scope: string; sessionIds: string[] }[] = [];
   readonly tokens = new Map<string, string>(); // access token -> user id
   readonly refreshTokens = new Map<string, string>();
   restFailures = 0;
+  // ---- mystery-v3.1 state (tables of migrations 20261021000500..800)
+  readonly mysterySessions = new Map<string, FakeMysterySession>();
+  readonly mysteryOffers = new Map<string, DuoCard[]>();
+  readonly mysteryEvents = new Map<string, Map<number, Row>>();
+  readonly mysteryForecasts = new Map<string, Map<number, Row>>();
+  readonly mysteryRecs = new Map<string, Map<number, Row>>();
+  readonly mysteryResults = new Map<string, Row>();
+  readonly mysteryStationRows = new Map<StationId, Row>();
+  /** Seeds handed out by mystery-create-session before falling back to crypto randomness (deterministic tests). */
+  readonly nextMysterySeeds: string[] = [];
+  /** RATE_LIMITED threshold: creates per station per 60 s of server clock (SQL: 6). */
+  mysteryRateLimit = 6;
+  /** MYSTERY_ALLOW_TEST_SEEDS secret. */
+  mysteryAllowTestSeeds = false;
+  readonly origin: string;
   private clock = Date.parse('2026-10-31T18:00:00.000Z');
   private tokenCounter = 0;
 
-  constructor() {
+  constructor(opts: { origin?: string } = {}) {
+    this.origin = opts.origin ?? FAKE_URL;
     for (const id of ['station_a', 'station_b'] as const) this.stationRows.set(id, this.idleRow(id, null, 0));
+    for (const id of ['station_a', 'station_b'] as const) this.mysteryStationRows.set(id, this.mysteryIdleRow(id, null, 0));
     this.addUser({ id: '00000000-0000-4000-8000-00000000000a', email: 'station-a@regatta.test', password: 'pw-A-123456789', role: 'station', stationId: 'station_a' });
     this.addUser({ id: '00000000-0000-4000-8000-00000000000b', email: 'station-b@regatta.test', password: 'pw-B-123456789', role: 'station', stationId: 'station_b' });
     this.addUser({ id: '00000000-0000-4000-8000-0000000000ff', email: 'ops@regatta.test', password: 'pw-O-123456789', role: 'operator', stationId: null });
@@ -243,6 +327,15 @@ export class FakeSupabaseServer {
   tick(): string {
     this.clock += 1000;
     return new Date(this.clock).toISOString();
+  }
+
+  /** Moves the server clock forward (e.g. past the 60 s create rate-limit window). */
+  advanceClock(ms: number): void {
+    this.clock += ms;
+  }
+
+  now(): number {
+    return this.clock;
   }
 
   /** Invalidates every issued access token (simulates expiry); refresh tokens keep working. */
@@ -370,6 +463,425 @@ export class FakeSupabaseServer {
     return { body: response, replay: false };
   }
 
+
+  // ================================================================ mystery-v3.1
+  mysterySessionsOf(stationId: StationId): FakeMysterySession[] {
+    return [...this.mysterySessions.values()].filter((s) => s.station_id === stationId);
+  }
+
+  private mysteryIdleRow(stationId: StationId, notice: string | null, revision: number): Row {
+    return {
+      station_id: stationId, label: LABELS[stationId], session_id: null, nickname: null, character_id: null, pokemon_id: null,
+      status: 'idle', clues_found: null, catches: null, sightings: null, egg_state: null, active_time_s: null, verdict: null,
+      score: null, is_test: false, notice, revision, updated_at: new Date(this.clock).toISOString(),
+    };
+  }
+
+  /** private.mystery_project_status */
+  private mysteryProject(s: FakeMysterySession): void {
+    if (s.status === 'abandoned') return;
+    const prev = this.mysteryStationRows.get(s.station_id)!;
+    const p = progressFromRow(s.progress);
+    const r = this.mysteryResults.get(s.id);
+    const row: Row = {
+      station_id: s.station_id, label: LABELS[s.station_id], session_id: s.id, nickname: s.nickname, character_id: s.character_id,
+      pokemon_id: s.pokemon_id, status: s.status, clues_found: p.cluesFound.length, catches: p.catches, sightings: p.sightings,
+      egg_state: p.egg,
+      active_time_s: r ? r.active_time_s : (Math.round(s.last_t * 10) / 10).toFixed(1), // numeric(8,1) arrives as a string
+      verdict: r ? r.verdict : null, score: r ? r.score : null, is_test: s.is_test, notice: null,
+      revision: Number(prev.revision) + 1, updated_at: this.tick(),
+    };
+    this.mysteryStationRows.set(s.station_id, row);
+    this.realtime.emit('mystery_station_status', 'UPDATE', row);
+  }
+
+  /** private.mystery_clear_status */
+  private mysteryClear(stationId: StationId, notice: string | null): void {
+    const prev = this.mysteryStationRows.get(stationId)!;
+    this.tick();
+    const row = this.mysteryIdleRow(stationId, notice, Number(prev.revision) + 1);
+    this.mysteryStationRows.set(stationId, row);
+    this.realtime.emit('mystery_station_status', 'UPDATE', row);
+  }
+
+  private mysteryLoad(sessionId: string, stationId: StationId | null): FakeMysterySession {
+    const s = this.mysterySessions.get(sessionId);
+    if (!s || (stationId !== null && s.station_id !== stationId)) throw new HttpError('SESSION_NOT_FOUND', 'Session not found for this station');
+    return s;
+  }
+
+  /** resultView (mystery-db.ts). */
+  private mysteryResultView(r: Row): Row {
+    return {
+      sessionId: r.session_id, rulesVersion: r.rules_version, outcome: r.outcome, dnfReason: r.dnf_reason, verdict: r.verdict,
+      accused: r.accused, correct: r.correct, cluesFound: r.clues_found, eggTier: r.egg_tier, eggPoints: r.egg_points,
+      eggSecurity: Number(r.egg_security), activeTimeS: Number(r.active_time_s), score: r.score === null ? null : Number(r.score),
+      catches: r.catches, sightings: r.sightings, hintsUsed: r.hints_used,
+      duo: { characterId: r.character_id, pokemonId: r.pokemon_id }, nickname: r.nickname, stationId: r.station_id,
+      isTest: r.is_test, claimMatches: r.claim_matches, verified: true, finalizedAt: r.finalized_at,
+    };
+  }
+
+  /** loadEnvelope / sessionView (mystery-db.ts). */
+  private mysteryEnvelope(s: FakeMysterySession): Row {
+    const cards = this.mysteryOffers.get(s.id)!;
+    const result = s.status === 'finished' || s.status === 'dnf' ? this.mysteryResults.get(s.id) ?? null : null;
+    return wire({
+      session: {
+        sessionId: s.id, stationId: s.station_id, rulesVersion: s.rules_version, status: s.status, abandonedReason: s.abandoned_reason,
+        seed: s.seed, nickname: s.nickname, isTest: s.is_test,
+        selected: s.selected_slot === null || !s.character_id || !s.pokemon_id ? null : { characterId: s.character_id, pokemonId: s.pokemon_id, slot: s.selected_slot },
+        lastSeq: s.last_seq, lastT: s.last_t, eventCount: s.event_count, progress: progressSummary(progressFromRow(s.progress)),
+        createdAt: s.created_at, selectedAt: s.selected_at, finalizedAt: s.finalized_at,
+      },
+      offer: { seed: s.seed, cards },
+      result: result ? this.mysteryResultView(result) : null,
+    });
+  }
+
+  /** An RPC answered {ok:false, error, message, ...details}: the functions map it with the real fromRpcEnvelope. */
+  private rpcFail(envelope: Row): never {
+    throw fromRpcEnvelope(envelope);
+  }
+
+  private mysteryNewSeed(): string {
+    return this.nextMysterySeeds.shift() ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  /** Finished (non-test) results in mystery_leaderboard order with SQL rank(). */
+  mysteryLeaderboard(): Row[] {
+    const fin = [...this.mysteryResults.values()].filter((r) => r.outcome === 'finished' && !r.is_test);
+    fin.sort((a, b) => Number(b.score) - Number(a.score) || Number(a.active_time_s) - Number(b.active_time_s)
+      || String(a.finalized_at).localeCompare(String(b.finalized_at)) || String(a.session_id).localeCompare(String(b.session_id)));
+    let rank = 0;
+    return fin.map((r, i) => {
+      const p = fin[i - 1];
+      if (!p || Number(p.score) !== Number(r.score) || Number(p.active_time_s) !== Number(r.active_time_s) || p.finalized_at !== r.finalized_at) rank = i + 1;
+      const { client_claim: _c, ...pub } = r;
+      return { ...pub, rank };
+    });
+  }
+
+  /** mystery_standings: every finisher (ranked) above every DNF (unranked, longest survival first). */
+  mysteryStandings(): Row[] {
+    const fin = this.mysteryLeaderboard().map((r) => ({ ...r, standing_group: 0 }));
+    const dnf = [...this.mysteryResults.values()].filter((r) => r.outcome === 'dnf' && !r.is_test)
+      .sort((a, b) => Number(b.active_time_s) - Number(a.active_time_s) || String(a.finalized_at).localeCompare(String(b.finalized_at))
+        || String(a.session_id).localeCompare(String(b.session_id)))
+      .map(({ client_claim: _c, ...r }) => ({ ...r, standing_group: 1, rank: null }));
+    return [...fin, ...dnf];
+  }
+
+  private mysteryHandle(fn: string, raw: unknown, c: Caller): { status?: number; body: unknown; replay?: boolean } {
+    const stationId = this.requireStation(c);
+    switch (fn) {
+      case 'mystery-create-session': {
+        const body = parseMysteryCreate(raw, this.mysteryAllowTestSeeds);
+        requireData();
+        // ---- RPC mystery_create_session: idempotent per (station, actionId)
+        const existing = this.mysterySessionsOf(stationId).find((s) => s.create_action_id === body.actionId);
+        if (existing) {
+          if (!jsonEqual(existing.create_body, body)) this.rpcFail({ ok: false, error: 'ACTION_ID_CONFLICT', message: 'action id already used with a different request' });
+          return { status: 200, body: this.mysteryEnvelope(existing), replay: true };
+        }
+        const seed = body.testSeed ?? this.mysteryNewSeed();
+        const offer = computeOffer(seed);
+        const recent = this.mysterySessionsOf(stationId).filter((s) => s.created_ms > this.clock - 60_000).length;
+        if (recent >= this.mysteryRateLimit) this.rpcFail({ ok: false, error: 'RATE_LIMITED', message: 'too many sessions created on this station; wait a minute' });
+        for (const old of this.mysterySessionsOf(stationId)) {
+          if (old.status === 'offered' || old.status === 'playing') {
+            old.status = 'abandoned';
+            old.abandoned_reason = 'superseded';
+          }
+        }
+        const id = crypto.randomUUID();
+        const createdAt = this.tick();
+        const s: FakeMysterySession = {
+          id, station_id: stationId, rules_version: 'mystery-v3.1', create_action_id: body.actionId, create_body: wire(body), seed,
+          is_test: body.testSeed !== undefined, nickname: body.nickname, status: 'offered', selected_slot: null, character_id: null,
+          pokemon_id: null, selected_at: null, last_seq: -1, last_t: 0, event_count: 0, terminal_type: null, progress: {},
+          abandoned_reason: null, created_at: createdAt, created_ms: this.clock, finalized_at: null,
+        };
+        this.mysterySessions.set(id, s);
+        this.mysteryOffers.set(id, wire(offer.cards));
+        this.mysteryEvents.set(id, new Map());
+        this.mysteryForecasts.set(id, new Map());
+        this.mysteryRecs.set(id, new Map());
+        this.mysteryProject(s);
+        return { status: 201, body: this.mysteryEnvelope(s) };
+      }
+      case 'mystery-get-session': {
+        const body = parseMysteryGet(raw);
+        const s = body.sessionId
+          ? this.mysteryLoad(body.sessionId, stationId)
+          : this.mysterySessionsOf(stationId).find((x) => x.status === 'offered' || x.status === 'playing') ?? null;
+        if (!s) return { body: { session: null, offer: null, result: null } };
+        return { body: this.mysteryEnvelope(s) };
+      }
+      case 'mystery-select-duo': {
+        const body = parseMysterySelect(raw);
+        const s = this.mysteryLoad(body.sessionId, stationId);
+        // ---- RPC mystery_select_duo: the pair MUST be one of the stored cards; same choice again = replay
+        if (s.selected_slot !== null) {
+          if (s.character_id === body.characterId && s.pokemon_id === body.pokemonId) return { body: this.mysteryEnvelope(s), replay: true };
+          this.rpcFail({ ok: false, error: 'ALREADY_SELECTED', message: 'a different duo was already selected for this session', slot: s.selected_slot });
+        }
+        if (s.status !== 'offered') {
+          this.rpcFail({ ok: false, error: 'SESSION_CLOSED', message: 'session is no longer open', status: s.status, abandonedReason: s.abandoned_reason });
+        }
+        const slot = this.mysteryOffers.get(s.id)!.findIndex((card) => card.characterId === body.characterId && card.pokemonId === body.pokemonId);
+        if (slot < 0) this.rpcFail({ ok: false, error: 'DUO_NOT_OFFERED', message: 'that duo is not one of the three offered cards' });
+        s.status = 'playing';
+        s.selected_slot = slot;
+        s.character_id = body.characterId;
+        s.pokemon_id = body.pokemonId;
+        s.selected_at = this.tick();
+        this.mysteryProject(s);
+        return { body: this.mysteryEnvelope(s) };
+      }
+      case 'mystery-append-events': {
+        const body = parseMysteryAppend(raw);
+        const data = requireData();
+        const egg = requireEggRules();
+        const s = this.mysteryLoad(body.sessionId, stationId);
+        const progress = progressFromRow(s.progress);
+        const storedRows = this.mysteryEvents.get(s.id)!;
+        const stored = new Map<number, ParsedEvent>();
+        for (const e of body.events) {
+          const r = e.seq <= s.last_seq ? storedRows.get(e.seq) : undefined;
+          if (r) stored.set(e.seq, { seq: Number(r.seq), t: Number(r.t), type: r.type as ParsedEvent['type'], payload: wire(r.payload) as Record<string, unknown> });
+        }
+        const { duplicates, fresh } = splitResend(body.events, s.last_seq, stored);
+        const ack = (extra: Row) => wire({
+          sessionId: s.id, accepted: 0, duplicates, lastSeq: s.last_seq, lastT: s.last_t, eventCount: s.event_count,
+          terminal: progress.terminal?.type ?? null, progress: progressSummary(progress), forecastsInserted: 0, recommendationsUpserted: 0,
+          ...extra,
+        });
+        // Pure resend of already-stored events: acknowledge without writing (works even after finalization).
+        if (fresh.length === 0 && body.forecasts.length === 0 && body.recommendations.length === 0) {
+          return { body: ack({}), replay: duplicates > 0 };
+        }
+        if (s.status === 'offered') throw new HttpError('NOT_SELECTED', 'Select a duo before sending gameplay events');
+        if (s.status !== 'playing') {
+          throw new HttpError('SESSION_CLOSED', `Session is ${s.status}`, { status: s.status, abandonedReason: s.abandoned_reason });
+        }
+        const next = applyBatch(progress, fresh, rulesContext(s.seed, data.caseDef, egg));
+        // ---- RPC mystery_append_events (the optimistic last_seq check always holds: one JS turn, no concurrency)
+        if (s.event_count + fresh.length > 20_000) this.rpcFail({ ok: false, error: 'TOO_MANY_EVENTS', message: 'session event budget (20000) exhausted' });
+        const receivedAt = this.tick();
+        let terminal: 'finish' | 'dnf' | null = null;
+        for (const e of fresh) {
+          storedRows.set(e.seq, { session_id: s.id, station_id: s.station_id, seq: e.seq, t: e.t, type: e.type, payload: wire(e.payload), received_at: receivedAt });
+          if (e.type === 'finish' || e.type === 'dnf') terminal = e.type;
+        }
+        if (fresh.length > 0) {
+          s.last_seq = fresh[fresh.length - 1]!.seq;
+          s.last_t = fresh[fresh.length - 1]!.t;
+        }
+        s.event_count += fresh.length;
+        s.progress = wire(next);
+        s.terminal_type = s.terminal_type ?? terminal;
+        let fc = 0;
+        const forecasts = this.mysteryForecasts.get(s.id)!;
+        for (const f of body.forecasts) {
+          if (forecasts.has(f.forecastNo)) continue; // immutable once issued
+          forecasts.set(f.forecastNo, {
+            session_id: s.id, station_id: s.station_id, forecast_no: f.forecastNo, t: f.t, target: f.target, value: f.value,
+            model_label: f.modelLabel, model_version: f.modelVersion, features: wire(f.features),
+          });
+          fc++;
+        }
+        let rc = 0;
+        const recs = this.mysteryRecs.get(s.id)!;
+        for (const x of body.recommendations) {
+          const prev = recs.get(x.recNo);
+          if (!prev) {
+            recs.set(x.recNo, {
+              session_id: s.id, station_id: s.station_id, rec_no: x.recNo, t: x.t, action: x.action, advice: x.advice,
+              trigger: x.trigger, accepted: x.accepted, outcome: x.outcome,
+            });
+            rc++;
+          } else if (prev.accepted === null || prev.outcome === null) {
+            prev.accepted = prev.accepted ?? x.accepted; // fill-only: null -> value, never rewritten
+            prev.outcome = prev.outcome ?? x.outcome;
+            rc++;
+          }
+        }
+        this.mysteryProject(s);
+        return {
+          body: ack({
+            accepted: fresh.length, lastSeq: s.last_seq, lastT: s.last_t, eventCount: s.event_count, terminal: s.terminal_type,
+            progress: progressSummary(next), forecastsInserted: fc, recommendationsUpserted: rc,
+          }),
+        };
+      }
+      case 'mystery-finalize': {
+        const body = parseMysteryFinalize(raw);
+        const s = this.mysteryLoad(body.sessionId, stationId);
+        const respond = (r: Row, replay: boolean) => ({
+          status: replay ? 200 : 201,
+          replay,
+          body: wire({
+            sessionId: s.id,
+            result: this.mysteryResultView(r),
+            rank: r.outcome === 'finished' && !r.is_test ? (this.mysteryLeaderboard().find((x) => x.session_id === s.id)?.rank ?? null) : null,
+          }),
+        });
+        if (s.status === 'finished' || s.status === 'dnf') {
+          const stored = this.mysteryResults.get(s.id);
+          if (!stored) throw new HttpError('INTERNAL', 'Finalized session without a result row');
+          return respond(stored, true);
+        }
+        if (s.status === 'offered') throw new HttpError('NOT_SELECTED', 'No duo selected; nothing to finalize');
+        if (s.status !== 'playing') throw new HttpError('SESSION_CLOSED', `Session is ${s.status}`, { status: s.status, abandonedReason: s.abandoned_reason });
+        const data = requireData();
+        const egg = requireEggRules();
+        const rules = rulesContext(s.seed, data.caseDef, egg);
+        // Re-validate the stored rule events from scratch (independent of the incremental append-time state).
+        const ruleEvents: ParsedEvent[] = [...this.mysteryEvents.get(s.id)!.values()]
+          .filter((r) => (RULE_EVENT_TYPES as readonly string[]).includes(String(r.type)))
+          .sort((a, b) => Number(a.seq) - Number(b.seq))
+          .map((r) => ({ seq: Number(r.seq), t: Number(r.t), type: r.type as ParsedEvent['type'], payload: wire(r.payload) as Record<string, unknown> }));
+        const replayed = applyBatch(initialProgress(), ruleEvents, rules);
+        if (ruleFingerprint(replayed) !== ruleFingerprint(progressFromRow(s.progress))) {
+          throw new HttpError('INVALID_TRANSITION', 'Stored events and stored progress disagree');
+        }
+        const result = computeResult(replayed, data.caseDef, rules.expectedTier, body.clientResult);
+        // ---- RPC mystery_finalize_session
+        if (s.terminal_type === null) this.rpcFail({ ok: false, error: 'RUN_NOT_FINISHED', message: 'no finish or dnf event has been recorded yet', lastSeq: s.last_seq });
+        const finalizedAt = this.tick();
+        const row: Row = {
+          session_id: s.id, station_id: s.station_id, nickname: s.nickname, character_id: s.character_id, pokemon_id: s.pokemon_id,
+          rules_version: 'mystery-v3.1', outcome: result.outcome, dnf_reason: result.dnfReason, verdict: result.verdict,
+          accused: result.accused, correct: result.correct, clues_found: [...result.cluesFound], clue_count: result.cluesFound.length,
+          egg_tier: result.eggTier, egg_points: result.eggPoints, egg_security: result.eggSecurity.toFixed(1),
+          active_time_s: result.activeTimeS.toFixed(1), score: result.score === null ? null : result.score.toFixed(1),
+          catches: result.catches, sightings: result.sightings, hints_used: result.hintsUsed, client_claim: wire(result.clientClaim),
+          claim_matches: result.claimMatches, is_test: s.is_test, finalized_at: finalizedAt,
+        };
+        // SQL CHECK backstop: score = egg_points × 100 − active_time_s (exact on 1-dp numerics)
+        if (result.outcome === 'finished' && Math.round(Number(row.score) * 10) !== Math.round((result.eggPoints * 100 - Number(row.active_time_s)) * 10)) {
+          throw new HttpError('INTERNAL', 'mystery_results_finished_check violated');
+        }
+        this.mysteryResults.set(s.id, row);
+        s.status = result.outcome;
+        s.finalized_at = finalizedAt;
+        this.mysteryProject(s);
+        if (!s.is_test) this.realtime.emit('mystery_results', 'INSERT', row);
+        return respond(row, false);
+      }
+      default:
+        throw new HttpError('METHOD_NOT_ALLOWED', 'Unknown function');
+    }
+  }
+
+  /** Operator nickname moderation for the mystery board (manual SQL delete in production). */
+  moderateMysteryDelete(sessionId: string): void {
+    if (!this.mysteryResults.delete(sessionId)) return;
+    this.realtime.emit('mystery_results', 'DELETE', {}, { session_id: sessionId });
+  }
+
+  /** mystery_abandon_station (admin-reset scope all | mystery). */
+  private mysteryAbandonStation(stationId: StationId, reason: 'operator_reset' | 'player_reset'): string[] {
+    const ids: string[] = [];
+    for (const s of this.mysterySessionsOf(stationId)) {
+      if (s.status !== 'offered' && s.status !== 'playing') continue;
+      s.status = 'abandoned';
+      s.abandoned_reason = reason;
+      ids.push(s.id);
+    }
+    this.mysteryClear(stationId, reason);
+    return ids;
+  }
+
+  // ---------------------------------------------------------------- PostgREST (mystery tables + RLS)
+  private viewer(headers: Headers): Viewer {
+    const m = /^Bearer\s+(.+)$/.exec(headers.get('authorization') ?? '');
+    const userId = m ? this.tokens.get(m[1]) : undefined; // anon key -> anon
+    const user = userId ? this.users.find((u) => u.id === userId) : undefined;
+    if (!user?.role) return { role: 'anon' };
+    return user.role === 'operator' ? { role: 'operator' } : { role: 'station', stationId: user.stationId };
+  }
+
+  private mysteryRows(table: string, v: Viewer): Row[] | null {
+    const own = (r: Row) => v.role === 'operator' || (v.role === 'station' && r.station_id === v.stationId);
+    switch (table) {
+      case 'mystery_station_status':
+        return [...this.mysteryStationRows.values()];
+      case 'mystery_results':
+        // public read hides test runs; the client claim is an operator-only audit column in practice (select list)
+        return [...this.mysteryResults.values()].filter((r) => v.role === 'operator' || !r.is_test);
+      case 'mystery_leaderboard':
+        return this.mysteryLeaderboard();
+      case 'mystery_defeated':
+        return [...this.mysteryResults.values()].filter((r) => r.outcome === 'dnf' && !r.is_test).map(({ client_claim: _c, ...r }) => r);
+      case 'mystery_standings':
+        return this.mysteryStandings();
+      case 'mystery_sessions':
+        return [...this.mysterySessions.values()].map((s) => ({ ...s }) as unknown as Row).filter(own);
+      case 'mystery_offered_duos':
+        return [...this.mysteryOffers.entries()].flatMap(([sid, cards]) => {
+          const s = this.mysterySessions.get(sid)!;
+          return cards.map((c, slot): Row => ({
+            session_id: sid, station_id: s.station_id, slot, character_id: c.characterId, pokemon_id: c.pokemonId, duo_name: c.duoName,
+            role: c.role, rarity: c.rarity, stats: c.stats, card: c,
+          }));
+        }).filter(own);
+      case 'mystery_events':
+        return [...this.mysteryEvents.values()].flatMap((m) => [...m.values()]).filter(own);
+      case 'mystery_forecasts':
+        return [...this.mysteryForecasts.values()].flatMap((m) => [...m.values()]).filter(own);
+      case 'mystery_recommendations':
+        return [...this.mysteryRecs.values()].flatMap((m) => [...m.values()]).filter(own);
+      default:
+        return null;
+    }
+  }
+
+  /** eq / in filters, order, offset + limit (range), select projection — the subset supabase-js emits here. */
+  private applyQuery(rows: Row[], url: URL): Row[] {
+    let out = rows;
+    for (const [key, value] of url.searchParams) {
+      if (['select', 'order', 'limit', 'offset'].includes(key)) continue;
+      const eq = /^eq\.(.*)$/.exec(value);
+      if (eq) {
+        out = out.filter((r) => String(r[key]) === eq[1]);
+        continue;
+      }
+      const inList = /^in\.\((.*)\)$/.exec(value);
+      if (inList) {
+        const set = new Set(inList[1]!.split(',').map((x) => x.replace(/^"|"$/g, '')));
+        out = out.filter((r) => set.has(String(r[key])));
+      }
+    }
+    const order = url.searchParams.get('order');
+    if (order) {
+      const keys = order.split(',').map((o) => {
+        const [col, dir] = o.split('.');
+        return { col: col!, desc: dir === 'desc' };
+      });
+      out = [...out].sort((a, b) => {
+        for (const k of keys) {
+          const x = a[k.col];
+          const y = b[k.col];
+          const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x ?? '').localeCompare(String(y ?? ''));
+          if (c !== 0) return k.desc ? -c : c;
+        }
+        return 0;
+      });
+    }
+    const offset = Number(url.searchParams.get('offset') ?? '0');
+    const limit = Number(url.searchParams.get('limit') ?? 'NaN');
+    if (offset > 0) out = out.slice(offset);
+    if (Number.isFinite(limit)) out = out.slice(0, limit);
+    const select = url.searchParams.get('select');
+    if (select && select !== '*') {
+      const cols = select.split(',').map((c) => c.trim());
+      out = out.map((r) => Object.fromEntries(cols.map((c) => [c, r[c] ?? null])));
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------- identity
   private caller(authorization: string | null): Caller {
     const m = /^Bearer\s+(.+)$/.exec(authorization ?? '');
@@ -387,6 +899,7 @@ export class FakeSupabaseServer {
 
   // ---------------------------------------------------------------- functions
   private handle(fn: string, raw: unknown, c: Caller): { status?: number; body: unknown; replay?: boolean } {
+    if (fn.startsWith('mystery-')) return this.mysteryHandle(fn, raw, c);
     switch (fn) {
       case 'create-session': {
         const stationId = this.requireStation(c);
@@ -461,13 +974,19 @@ export class FakeSupabaseServer {
         if (c.role !== 'operator') throw new HttpError('FORBIDDEN_ROLE', 'Only operator accounts can do this');
         const body = parseAdminReset(raw);
         const abandoned: string[] = [];
-        for (const s of this.sessionsOf(body.stationId)) {
-          if (s.state.status !== 'in_progress') continue;
-          this.transition(null, s.id, body.actionId, 'abandon', { ...body }, 'operator_reset', (state) => ({ ok: true, state: abandonSession(state) }));
-          abandoned.push(s.id);
+        if (body.scope !== 'mystery') {
+          for (const s of this.sessionsOf(body.stationId)) {
+            if (s.state.status !== 'in_progress') continue;
+            this.transition(null, s.id, body.actionId, 'abandon', { ...body }, 'operator_reset', (state) => ({ ok: true, state: abandonSession(state) }));
+            abandoned.push(s.id);
+          }
         }
-        this.clearStation(body.stationId, 'operator_reset');
-        return { body: { stationId: body.stationId, abandonedSessionIds: abandoned, notice: 'operator_reset' } };
+        const mysteryAbandoned = body.scope !== 'legacy' ? this.mysteryAbandonStation(body.stationId, 'operator_reset') : [];
+        if (body.scope !== 'mystery') this.clearStation(body.stationId, 'operator_reset');
+        this.operatorAudit.push({ stationId: body.stationId, scope: body.scope, sessionIds: [...abandoned, ...mysteryAbandoned] });
+        return {
+          body: { stationId: body.stationId, scope: body.scope, abandonedSessionIds: abandoned, abandonedMysterySessionIds: mysteryAbandoned, notice: 'operator_reset' },
+        };
       }
       default:
         throw new HttpError('METHOD_NOT_ALLOWED', 'Unknown function');
@@ -499,6 +1018,8 @@ export class FakeSupabaseServer {
     let response: Response;
     try {
       const caller = this.caller(headers.get('authorization'));
+      const maxBytes = fn === 'mystery-append-events' ? MAX_APPEND_BYTES : fn === 'mystery-finalize' ? MAX_FINALIZE_BYTES : MAX_BODY_BYTES;
+      if (new TextEncoder().encode(text).length > maxBytes) throw new HttpError('PAYLOAD_TOO_LARGE', `Body exceeds ${maxBytes} bytes`);
       const result = this.handle(fn, parseJsonText(text), caller);
       response = json(result.status ?? 200, result.body, { 'x-request-id': requestId, ...(result.replay ? { 'x-idempotent-replay': 'true' } : {}) });
     } catch (err) {
@@ -582,6 +1103,10 @@ export class FakeSupabaseServer {
       rows = [...this.entries.values()].filter((e) => e.status === 'dnf')
         .sort((a, b) => String(b.verified_at).localeCompare(String(a.verified_at)))
         .map(({ status: _s, final_egg_points: _e, final_score: _f, ...rest }) => rest);
+    } else if (table.startsWith('mystery_')) {
+      const mrows = this.mysteryRows(table, this.viewer(headers));
+      if (mrows === null) return json(404, { code: '42P01', message: `relation "${table}" does not exist` });
+      return json(200, wire(this.applyQuery(mrows, url)));
     } else {
       return json(404, { code: '42P01', message: `relation "${table}" does not exist` });
     }
@@ -597,7 +1122,7 @@ export class FakeSupabaseServer {
   readonly fetch: typeof fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-    if (url.origin !== FAKE_URL) throw new TypeError(`unexpected origin ${url.origin}`);
+    if (url.origin !== this.origin) throw new TypeError(`unexpected origin ${url.origin}`);
     if (url.pathname.startsWith('/functions/v1/')) return this.functions(url.pathname.slice('/functions/v1/'.length), init, headers);
     if (url.pathname.startsWith('/auth/v1/')) return this.auth(url, init, headers);
     if (url.pathname.startsWith('/rest/v1/')) return this.rest(url, headers);
@@ -679,3 +1204,138 @@ export async function playRace(
   return { views, resolutions };
 }
 
+
+// ------------------------------------------------------------------------------------------------
+// mystery-v3.1 pages wired to the fake (real adapter: supabase-js + functions transport + Realtime fake)
+
+export interface MysteryStationPage {
+  services: ReturnType<typeof buildMysteryStationServices>;
+  online: ReturnType<typeof fakeOnline>;
+  storage: ReturnType<typeof memoryStorage>;
+  /** Sleeps the function transport would have taken between retries (no real waiting in tests). */
+  sleeps: number[];
+}
+
+export function openMysteryStation(
+  server: FakeSupabaseServer,
+  stationId: StationId,
+  opts: { storage?: ReturnType<typeof memoryStorage>; maxAttempts?: number; online?: ReturnType<typeof fakeOnline> } = {},
+): MysteryStationPage {
+  const storage = opts.storage ?? memoryStorage();
+  const online = opts.online ?? fakeOnline(true);
+  const sleeps: number[] = [];
+  const config: LiveConfig = { url: server.origin, anonKey: ANON_KEY };
+  const client = createSupabase(config, stationId, { fetch: server.fetch, storage, autoRefreshToken: false });
+  const services = buildMysteryStationServices({
+    stationId, config, client, realtime: server.realtime.asHost(), fetch: server.fetch, online,
+    transport: { timeoutMs: 2000, maxAttempts: opts.maxAttempts, sleep: async (ms) => void sleeps.push(ms) },
+    retryDelaysMs: [5, 5, 5],
+  });
+  return { services, online, storage, sleeps };
+}
+
+export interface MysteryBoardPage {
+  services: ReturnType<typeof buildMysteryBoardServices>;
+  online: ReturnType<typeof fakeOnline>;
+  storage: ReturnType<typeof memoryStorage>;
+  clock: { now: number };
+}
+
+export function openMysteryBoard(server: FakeSupabaseServer, opts: { pollMs?: number } = {}): MysteryBoardPage {
+  const storage = memoryStorage();
+  const online = fakeOnline(true);
+  const clock = { now: Date.parse('2026-10-31T18:00:00.000Z') };
+  const config: LiveConfig = { url: server.origin, anonKey: ANON_KEY };
+  const client = createSupabase(config, null, { fetch: server.fetch, storage, autoRefreshToken: false });
+  const services = buildMysteryBoardServices({
+    config, client, realtime: server.realtime.asHost(), fetch: server.fetch, online,
+    transport: { timeoutMs: 2000, sleep: async () => undefined },
+    pollMs: opts.pollMs ?? 60_000, tickMs: 60_000, now: () => clock.now, retryDelaysMs: [5, 5, 5],
+  });
+  return { services, online, storage, clock };
+}
+
+/** Server seeds whose first card, played by the seeded Bot, ends 'finished' (stealthy) / 'dnf' (careless). */
+export const MYSTERY_FINISH_SEED = '2'.repeat(32);
+export const MYSTERY_DNF_SEED = '1'.repeat(32);
+
+/** Deterministic timers for the uploader / heartbeat / finalize back-off (advance() fires what is due, in order). */
+export class ManualTimers implements Timers {
+  private t = 0;
+  private seq = 0;
+  private readonly items = new Map<number, { at: number; fn: () => void; every: number | null }>();
+  setTimeout(fn: () => void, ms: number): unknown {
+    const id = ++this.seq;
+    this.items.set(id, { at: this.t + ms, fn, every: null });
+    return id;
+  }
+  clearTimeout(h: unknown): void {
+    this.items.delete(h as number);
+  }
+  setInterval(fn: () => void, ms: number): unknown {
+    const id = ++this.seq;
+    this.items.set(id, { at: this.t + ms, fn, every: Math.max(1, ms) });
+    return id;
+  }
+  clearInterval(h: unknown): void {
+    this.items.delete(h as number);
+  }
+  pending(): number {
+    return this.items.size;
+  }
+  advance(ms: number): void {
+    const end = this.t + ms;
+    for (;;) {
+      let nextId: number | null = null;
+      let next: { at: number; fn: () => void; every: number | null } | null = null;
+      for (const [id, it] of this.items) if (it.at <= end && (!next || it.at < next.at)) [nextId, next] = [id, it];
+      if (!next || nextId === null) break;
+      this.t = next.at;
+      if (next.every === null) this.items.delete(nextId);
+      else next.at += next.every;
+      next.fn();
+    }
+    this.t = end;
+  }
+}
+
+/** Plays a verified run like the kiosk does (sim at 60 Hz, bot decisions held between frames), driving the
+ *  controller's hooks exactly as useMysteryLoop does. Every 2 s of sim time the timers advance and I/O settles. */
+export async function driveRun(
+  controller: LiveController,
+  session: { sessionId: string; seed: string; selected: Duo | null; offer: { cards: readonly Duo[] } },
+  opts: {
+    stationId: StationId; timers: ManualTimers; profile?: 'stealthy' | 'careless'; maxS?: number;
+    /** Called every 2 s of sim time (after I/O settled). */
+    onChunk?: (run: MysteryRun) => void | Promise<void>;
+    /** Wraps the analytics batch source (tampering tests). */
+    source?: (a: MysteryAnalytics) => MysteryAnalytics;
+  },
+): Promise<{ run: MysteryRun; analytics: MysteryAnalytics }> {
+  const run = new MysteryRun({ duo: session.selected!, seed: session.seed, tutorial: false });
+  const real = createMysteryAnalytics(run, {
+    sessionId: session.sessionId, stationId: opts.stationId, offered: session.offer.cards.map((c) => ({ characterId: c.characterId, pokemonId: c.pokemonId })),
+  });
+  const analytics = opts.source ? opts.source(real) : real;
+  const bot = new Bot(run, { profile: opts.profile ?? 'stealthy', maxTimeS: opts.maxS ?? 600 }, session.seed);
+  const every = Math.max(1, Math.round(60 / bot.o.decisionHz));
+  controller.hooks.runStarted(run, analytics);
+  let held = bot.decide();
+  let step = 0;
+  while (run.status === 'playing' && run.t < (opts.maxS ?? 600)) {
+    const input = step % every === 0 ? (held = bot.decide()) : { ...held, lookYawDelta: 0, lookPitchDelta: 0, interact: false, power: false, move: false, hint: false };
+    step++;
+    real.frame(run, run.update(1 / 60, input));
+    if (step % 120 === 0) {
+      opts.timers.advance(2000);
+      await settle(8);
+      await opts.onChunk?.(run);
+    }
+  }
+  if (run.status === 'accusing') {
+    controller.hooks.flushNow('deposit');
+    real.frame(run, run.accuse(bot.accusation()));
+  }
+  controller.hooks.runEnded(run, analytics);
+  return { run, analytics };
+}

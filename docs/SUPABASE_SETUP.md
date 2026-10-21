@@ -60,7 +60,7 @@ Verify in **SQL Editor**:
 select id, label from public.stations;                                   -- station_a, station_b
 select station_id, status from public.station_status;                    -- both 'idle'
 select tablename from pg_publication_tables where pubname = 'supabase_realtime';
--- exactly: leaderboard_entries, station_status
+-- exactly: leaderboard_entries, station_status   (+ mystery_results, mystery_station_status once §12 is applied)
 ```
 
 ## 4. Deploy the Edge Functions
@@ -144,7 +144,7 @@ select u.email, a.role, a.station_id from public.app_users a join auth.users u o
 Nothing to click: migration `20261021000400_realtime.sql` adds **only** `public.station_status` and
 `public.leaderboard_entries` to the `supabase_realtime` publication. Check **Database → Publications →
 supabase_realtime** (or the SQL in §3). Never add `sessions`, `session_secrets`, `leg_results` or
-`session_actions` there.
+`session_actions` there. (Mystery v3.1 adds exactly `mystery_station_status` and `mystery_results`, see §12.)
 
 ## 7. Configure the Vite app
 
@@ -219,3 +219,151 @@ SUPABASE_URL=http://127.0.0.1:54321 SUPABASE_SERVICE_ROLE_KEY=<from `npx supabas
 ```
 
 Use `VITE_SUPABASE_URL=http://127.0.0.1:54321` and the local anon key from `npx supabase status`.
+
+---
+
+## 12. Mystery v3.1 "The Silent Evidence" (rules `mystery-v3.1`) — additive backend
+
+> **Status: built and tested offline only. NOT deployed.** Nothing below has been pushed to the hosted project;
+> deployment needs the owner's explicit approval. Every step is additive: the v2.5 tables, rows, views, RPCs and
+> functions keep working unchanged (`/?legacy=1`), and v2.5 results are never mixed with mystery results.
+
+### 12.1 What is added
+
+| Piece | Location |
+|---|---|
+| Schema (9 tables, 3 leaderboard views, immutability triggers) | `supabase/migrations/20261021000500_mystery_schema.sql` |
+| RLS + grants | `supabase/migrations/20261021000600_mystery_rls_and_grants.sql` |
+| Atomic RPCs (service role only) | `supabase/migrations/20261021000700_mystery_rpcs.sql` |
+| Realtime (adds `mystery_station_status`, `mystery_results` only) | `supabase/migrations/20261021000800_mystery_realtime.sql` |
+| Edge Functions | `supabase/functions/{mystery-create-session,mystery-get-session,mystery-select-duo,mystery-append-events,mystery-finalize}`; `admin-reset` extended (`scope`) |
+| Server rules (pure, unit-tested) | `supabase/functions/_shared/{mystery-events,mystery-rules,mystery-validation,mystery-db}.ts` |
+| Generated copies of the browser's pure modules | `supabase/functions/_shared/mystery/**` and `_shared/mystery-registry.generated.ts` ← `npm run sync:shared` |
+| Tests | `supabase/tests/004_*`, `005_*` (pgTAP), `supabase/tests/unit/{mystery,shared-identity}.test.ts`, `supabase/tests/offline/mystery-roundtrip.ts` |
+
+Tables (all RLS-enabled; no client role can INSERT/UPDATE/DELETE anything):
+
+| Table | Purpose | Readable by |
+|---|---|---|
+| `mystery_sessions` | session UUID, station, `rules_version = 'mystery-v3.1'`, server seed, status `offered → playing → finished/dnf` (or `abandoned`), selected duo, event projections, validated `progress` | own station, operator |
+| `mystery_offered_duos` | the 3 server-computed cards (slot 0–2; unique (session, slot) and (session, character, pokemon); full `card` + `stats` jsonb) | own station, operator |
+| `mystery_events` | StampedEvents (`seq`, `t`, `type`, `payload`), unique (session, seq), append-only; ≤ 1 finish/dnf, ≤ 1 accusation, ≤ 1 delivery per session | own station, operator |
+| `mystery_clue_events` | one row per discovered clue (derived from validated `clue_found`) | own station, operator |
+| `mystery_forecasts` | prediction **as issued** (`target`, `value`, `model_label` `ml`/`rule_based`, `model_version`, `features`) — immutable | own station, operator |
+| `mystery_recommendations` | advice, `accepted`, `outcome` (fill-only: null → value, never rewritten) | own station, operator |
+| `mystery_results` | one immutable server-recomputed result per session (outcome, verdict, accused, correct, clues, egg tier/points/security, active time, score — null for DNF —, catches, claim audit) | everyone (test runs: operator only) |
+| `mystery_session_actions` | receipts/audit (create, select, finalize, abandon) | operator |
+| `mystery_station_status` | sanitized live status per terminal (Realtime) | everyone |
+
+Views (security invoker, rules-version partitioned, test runs excluded): `mystery_leaderboard` (finishers, `rank`,
+score desc → active time asc → finalized first), `mystery_defeated` (DNFs only), `mystery_standings` (every finisher —
+negative scores included — above every DNF; DNFs unranked, longest survival first; `standing_group` 0/1).
+
+### 12.2 Deploy (only after approval)
+
+```bash
+npm run sync:shared                       # copies src/mystery pure modules + data; fails on impure/out-of-tree imports
+npm run typecheck:functions && npm run test:supabase-unit && npm run test:db:offline && npm run test:db:roundtrip
+npx supabase db push --dry-run            # must list ONLY 20261021000500..800 (the four v2.5 migrations are already applied)
+npx supabase db push
+npx supabase functions deploy --use-api \
+  mystery-create-session mystery-get-session mystery-select-duo mystery-append-events mystery-finalize admin-reset
+```
+
+No new secrets are required. Optional: `npx supabase secrets set MYSTERY_ALLOW_TEST_SEEDS=true` lets
+`mystery-create-session` accept a `testSeed` (operator seed-reuse tests); such sessions are stored with `is_test = true`
+and never ranked or shown publicly. Leave it unset on event day. Redeploy the mystery functions whenever
+`src/mystery/{types,draft,stats,scoring,caseLogic,config}.ts` or `src/mystery/data/**` change (after `npm run sync:shared`):
+the server must compute the same offers, egg tiers and verdicts as the browser.
+
+Verify in the SQL Editor:
+
+```sql
+select station_id, status from public.mystery_station_status;            -- both 'idle'
+select tablename from pg_publication_tables where pubname = 'supabase_realtime' order by 1;
+-- leaderboard_entries, mystery_results, mystery_station_status, station_status
+select count(*) from public.sessions;                                     -- unchanged v2.5 history
+```
+
+### 12.3 Client contract (what the frontend adapter calls)
+
+All calls: `POST {SUPABASE_URL}/functions/v1/<name>`, headers `Authorization: Bearer <station JWT>`, `apikey: <anon>`,
+`Content-Type: application/json`, optional `x-request-id`. The station is always taken from the JWT; bodies never carry
+it. Errors: `{ "error": { "code", "message", "retryable", "details?" }, "requestId" }` (same envelope as v2.5).
+
+| # | Function | Request | Success | Errors |
+|---|---|---|---|---|
+| 1 | `mystery-create-session` | `{ actionId, nickname, testSeed? }` | `201` new / `200` + `x-idempotent-replay` → `MysterySessionEnvelope` | 422 INVALID_INPUT, 403 TEST_SEED_FORBIDDEN, 409 ACTION_ID_CONFLICT, 429 RATE_LIMITED (6 creates/min/station) |
+| 2 | `mystery-get-session` | `{ sessionId? }` | `200` → envelope, or `{session:null,offer:null,result:null}` when nothing is open | 404 SESSION_NOT_FOUND (also for another station's id) |
+| 3 | `mystery-select-duo` | `{ sessionId, characterId, pokemonId }` | `200` → envelope (`status: "playing"`); same choice again = replay | 422 DUO_NOT_OFFERED, 409 ALREADY_SELECTED, 409 SESSION_CLOSED |
+| 4 | `mystery-append-events` | `{ sessionId, events: StampedEvent[≤500], forecasts?: [≤50], recommendations?: [≤50] }` (≤ 256 KB) | `200` → `{ sessionId, accepted, duplicates, lastSeq, lastT, eventCount, terminal, progress, forecastsInserted, recommendationsUpserted }` | 422 EVENT_REJECTED `{seq, rule}`, 409 SEQ_CONFLICT `{seq, lastSeq}`, 409 NOT_SELECTED, 409 SESSION_CLOSED, 422 TOO_MANY_EVENTS (20 000/session) |
+| 5 | `mystery-finalize` | `{ sessionId, clientResult? }` (`clientResult` = the browser `RunResult`, audit only) | `201` → `{ sessionId, result: MysteryResultView, rank }`; every later call `200` + replay with the **same** result | 409 RUN_NOT_FINISHED, 409 NOT_SELECTED, 409 SESSION_CLOSED |
+| – | `admin-reset` (operator) | `{ stationId, reason, actionId, scope?: "all" \| "legacy" \| "mystery" }` | `200` → `{ stationId, scope, abandonedSessionIds, abandonedMysterySessionIds, notice: "operator_reset" }` | as v2.5 |
+
+```jsonc
+// MysterySessionEnvelope
+{
+  "session": {
+    "sessionId": "uuid", "stationId": "station_a", "rulesVersion": "mystery-v3.1",
+    "status": "offered | playing | finished | dnf | abandoned", "abandonedReason": "null | superseded | operator_reset | player_reset",
+    "seed": "32 hex (feed MysteryRun({ seed }))", "nickname": "Ann", "isTest": false,
+    "selected": null, // or { "characterId": "enid", "pokemonId": "drifblim", "slot": 1 }
+    "lastSeq": -1, "lastT": 0, "eventCount": 0,
+    "progress": { "cluesFound": [], "egg": "resting", "eggSecurity": 100, "catches": 0, "sightings": 0, "delivered": false, "accused": false, "terminal": null },
+    "createdAt": "…", "selectedAt": null, "finalizedAt": null
+  },
+  "offer": { "seed": "same 32 hex", "cards": ["DuoCard", "DuoCard", "DuoCard"] }, // exactly draftOffer(seed)
+  "result": null // or MysteryResultView
+}
+// MysteryResultView = RunResult fields (minus hp) + { sessionId, sightings, hintsUsed, nickname, stationId, isTest,
+//   claimMatches, verified: true, finalizedAt }; duo = { characterId, pokemonId }; score null for DNF.
+// forecasts[i]       = { forecastNo, t, target: "detection_15s"|"extraction"|"eta_s", value, modelLabel: "ml"|"rule_based", modelVersion?, features: {name: number|bool|string|null} }
+// recommendations[i] = { recNo, t, action: "snake_id", advice: "≤240 chars", trigger?: "hint"|"context", accepted?: bool|null, outcome?: "snake_id"|null }
+```
+
+Adapter flow (station kiosk):
+
+1. **New visitor** (nickname entered): generate `actionId = crypto.randomUUID()`, persist it in
+   `localStorage['raven.mystery.session']` **before** calling `mystery-create-session`; store the returned
+   `{ sessionId, seed, offer }`. Show `offer.cards` exactly as returned (never call `draftOffer` locally in verified mode).
+2. **Refresh / reconnect**: `mystery-get-session { sessionId }` (or re-send create with the same `actionId`) → the same
+   offer, `selected`, `lastSeq`. If `status` is `abandoned` (superseded / operator reset), start a new visitor flow.
+3. **Card chosen**: `mystery-select-duo`, then `new MysteryRun({ duo, seed: session.seed })`.
+4. **During play**: queue the StampedEvents from `run.update()` / `run.accuse()`; flush every ~2 s or 100 events, **one
+   request in flight**; on network failure resend the same batch (duplicates are ignored). Cosmetic events (e.g. footstep
+   `noise`) may be thinned client-side — seq gaps are allowed — but **every** `clue_found`, `egg_*`, `catch`,
+   `accusation`, `finish`, `dnf`, `hyde_sighted`, `hint_requested` must be sent. Forecasts/recommendations ride along in
+   the same calls. On `409 SEQ_CONFLICT` / `STALE_EVENTS`: `mystery-get-session`, drop everything ≤ `lastSeq`, resend
+   the rest. On `422 EVENT_REJECTED`: stop syncing that run and show it as **unverified** (local result only).
+5. **Run over** (`finish` or `dnf` acknowledged, `terminal` non-null): send any last recommendation outcomes, then
+   `mystery-finalize { sessionId, clientResult: run.result() }`; display the **server** `result` and `rank`.
+   Retrying finalize is always safe.
+6. **Play again**: new `actionId` → `mystery-create-session` (the old open session, if any, is superseded, unranked).
+7. **Dashboard (anon)**: read `mystery_station_status`, `mystery_leaderboard`, `mystery_standings`, `mystery_defeated`,
+   `mystery_results`; subscribe via Realtime to `mystery_station_status` and `mystery_results`. Operator sign-in
+   additionally allows reading events/forecasts/recommendations for the analytics panels.
+
+### 12.4 Tests
+
+| Suite | Command | Covers |
+|---|---|---|
+| pgTAP `004_mystery_structure_rls` (83) + `005_mystery_rpcs` (60) | `npm run test:db:offline` (or `npx supabase test db`) | RLS/privileges per role, constraints, duplicate seq rejected, single terminal, idempotent create/select/finalize, supersede, rate limit, leaderboard with negative scores above DNFs, operator reset, v2.5 rows untouched |
+| Unit (Vitest) | `npm run test:supabase-unit` | parsers, every event-order rule, resend dedupe, verdict/score recomputation, SQL score-CHECK parity, offer determinism + sanity, shared-copy identity |
+| TS ↔ SQL round-trip | `npm run test:db:roundtrip` | 150 random mystery sessions through the real modules + RPCs (plus the 300 v2.5 races) |
+
+### 12.5 Event-day operations (mystery)
+
+* **Stuck terminal:** operator → Reset station → `admin-reset` (default `scope: "all"` resets the v2.5 race and the mystery
+  session of that station). The mystery session becomes `abandoned/operator_reset` (unranked, events kept for analytics),
+  `mystery_station_status` shows `idle` + `notice: operator_reset`. One `operator_audit` row lists all abandoned ids.
+* **Offensive nickname:** `delete from public.mystery_results where session_id = '<id>';` (results cannot be edited).
+* **Function errors:** logs carry `fn`, `requestId`, `status`, `durationMs` plus `mystery_events_appended`,
+  `mystery_finalized` (`claimMatches=false` is logged at `warn`: the browser's own score/verdict differed from the server's).
+
+### 12.4 Client notes (live mystery client, 2026-10-21)
+- Routes: `/` = LOCAL DEMO (never touches the leaderboard); `/?mode=terminal&station=station_a|station_b` = live mystery
+  kiosk (add `&legacy=1` for the v2.5 terminal); `/?mode=dashboard` = live mystery board (`&demo=1` local board,
+  `&legacy=1[&demo=1]` v2.5 board).
+- The live session record is per station: `localStorage['raven.mystery.session:<station>']` (actionId, nickname,
+  sessionId) — separate from the demo's `raven.mystery.session`, so a demo session can never pass as verified.
+- Heartbeat broadcast topic: `raven-mystery-live` (see SECURITY.md §7.5).

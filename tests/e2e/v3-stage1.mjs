@@ -8,7 +8,7 @@
 //   → Stage 1: countdown, row ~3 taps/s while steering toward the dock, Hyde emerges (cinematic + skip hint), Hyde meter,
 //   Esc pause freezes the clock, idle until caught → "THE HYDE HAS CAUGHT YOU! PRESS Q" (Esc cannot pause), Q resolves
 //   it, caught again → DNF screen. Also audits the HUD keep-clear zones (UX_V3_ACTION §1 / checklist 1).
-// Part B: two crew pairs through the dev shortcut `/?mode=play&character=..&pokemon=..&tutorial=0` — the selections
+// Part B: two crew pairs through the dev shortcut `/?mode=rowing&character=..&pokemon=..&tutorial=0` — the selections
 //   change stats, top speed and the ability in the debug state and the HUD; then ~5 taps/s over-pacing shows the
 //   stamina "draining fast" warning and the one-shot "Steady strokes — mashing drains stamina" hint.
 // Part C (1920×1080): HUD + rescue prompt legibility screenshots.
@@ -564,7 +564,7 @@ async function pairRun(browser, characterId, pokemonId, label) {
   const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
   const page = await context.newPage();
   watchConsole(page, `pair ${characterId}+${pokemonId}`);
-  await page.goto(`${BASE}/?mode=play&character=${characterId}&pokemon=${pokemonId}&tutorial=0`);
+  await page.goto(`${BASE}/?mode=rowing&character=${characterId}&pokemon=${pokemonId}&tutorial=0`);
   await page.waitForSelector('[data-testid="countdown"]', { timeout: 20000 });
   await shot(page, `${label}-countdown`);
   await waitCountdown(page);
@@ -588,7 +588,7 @@ async function overpace(browser) {
   const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
   const page = await context.newPage();
   watchConsole(page, 'overpace');
-  await page.goto(`${BASE}/?mode=play&character=gomez&pokemon=gengar&tutorial=0`);
+  await page.goto(`${BASE}/?mode=rowing&character=gomez&pokemon=gengar&tutorial=0`);
   await waitCountdown(page);
   let hintSeen = false;
   let fastSeen = false;
@@ -622,7 +622,7 @@ async function bigScreen(browser) {
   const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const page = await context.newPage();
   watchConsole(page, 'hud 1920');
-  await page.goto(`${BASE}/?mode=play&character=wednesday&pokemon=sableye&tutorial=0`);
+  await page.goto(`${BASE}/?mode=rowing&character=wednesday&pokemon=sableye&tutorial=0`);
   await waitCountdown(page);
   const ctx = await learnSteering(page);
   const st = await rowFor(page, 70, ctx, async (s) => s.hyde.phase !== 'dormant' && s.hyde.phase !== 'stalking' && s.hyde.phase !== 'emerging' && !s.cinematic);
@@ -643,7 +643,8 @@ async function partA(browser) {
   const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
   const page = await context.newPage();
   watchConsole(page, 'journey 1366');
-  await page.goto(BASE);
+  // `/` is the mystery journey since v3.1; the rowing journey lives at ?mode=rowing.
+  await page.goto(`${BASE}/?mode=rowing`);
   await page.evaluate(() => {
     localStorage.clear();
     sessionStorage.clear();

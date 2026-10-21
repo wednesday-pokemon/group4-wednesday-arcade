@@ -134,7 +134,7 @@ export function DashboardApp({ services }: { services: AppServices }) {
             <p className="text-2">The board can’t load verified scores right now. Details: {liveProblem}</p>
             <div className="button-row">
               <Button variant="secondary" icon="reset" onClick={checkLive} data-testid="btn-live-retry">Retry live</Button>
-              <Button variant="ghost" onClick={() => { window.location.search = '?mode=dashboard&demo=1'; }} data-testid="btn-demo-board">
+              <Button variant="ghost" onClick={() => { window.location.search = '?mode=dashboard&legacy=1&demo=1'; }} data-testid="btn-demo-board">
                 Show demo board (unverified)
               </Button>
             </div>

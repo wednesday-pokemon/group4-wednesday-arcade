@@ -1,5 +1,5 @@
-// Synthesised Web Audio only (no audio files). The context starts after the first user gesture;
-// mute is persisted through settings.ts.
+// Synthesised Web Audio cues plus an optional looping music track (an <audio> element routed through the same master
+// gain, so mute covers it). The context starts after the first user gesture; mute is persisted through settings.ts.
 export type Sfx =
   | 'tick' | 'chime' | 'thud' | 'growl' | 'sting' | 'fanfare' | 'toll' | 'splash' | 'scrape'
   // v3 real-time cues
@@ -7,6 +7,8 @@ export type Sfx =
 
 const AMBIENT_LEVEL = 0.05;
 const SFX_LEVEL = 0.5;
+const MUSIC_LEVEL = 0.35;
+const MUSIC_DUCK = 0.65; // at full threat the music drops to 35 % of its level so the Hyde's cues read
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -18,11 +20,15 @@ class AudioEngine {
   private droneFilter: BiquadFilterNode | null = null;
   private threat = 0;
   private nextBeatAt = 0;
+  private musicSrc: string | null = null;
+  private musicEl: HTMLAudioElement | null = null;
+  private musicGain: GainNode | null = null;
 
   /** Call from a user-gesture handler; safe to call repeatedly. */
   unlock(): void {
     if (this.ctx) {
       if (this.ctx.state === 'suspended') void this.ctx.resume();
+      this.startMusic();
       return;
     }
     const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -37,6 +43,40 @@ class AudioEngine {
     this.master.connect(this.ctx.destination);
     this.noise = this.makeNoise(2);
     this.startAmbient();
+    this.startMusic();
+  }
+
+  /** Looping background music (null stops it). Plays once the context is unlocked by a user gesture. */
+  setMusic(src: string | null): void {
+    if (src === this.musicSrc) return;
+    this.musicSrc = src;
+    if (this.musicEl) {
+      this.musicEl.pause();
+      if (src) {
+        this.musicEl.src = src;
+        this.startMusic();
+      }
+    } else this.startMusic();
+  }
+
+  private startMusic(): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.master || !this.musicSrc) return;
+    if (!this.musicEl) {
+      const el = new Audio(this.musicSrc);
+      el.loop = true;
+      el.preload = 'auto';
+      try {
+        this.musicGain = ctx.createGain();
+        this.musicGain.gain.value = MUSIC_LEVEL;
+        ctx.createMediaElementSource(el).connect(this.musicGain);
+        this.musicGain.connect(this.master);
+      } catch {
+        return; // no Web Audio routing → stay silent rather than bypass the mute
+      }
+      this.musicEl = el;
+    }
+    if (this.musicEl.paused) void this.musicEl.play().catch(() => undefined);
   }
 
   setMuted(muted: boolean): void {
@@ -81,6 +121,7 @@ class AudioEngine {
     const t = ctx.currentTime;
     this.droneGain!.gain.setTargetAtTime(this.muted ? 0 : 0.015 + this.threat * 0.11, t, 0.4);
     this.droneFilter!.frequency.setTargetAtTime(160 + this.threat * 520, t, 0.4);
+    this.musicGain?.gain.setTargetAtTime(MUSIC_LEVEL * (1 - MUSIC_DUCK * this.threat), t, 0.6);
     if (level > 0 && !this.muted && t >= this.nextBeatAt) {
       this.heartbeat(t + 0.01);
       this.nextBeatAt = t + (level === 2 ? 0.5 : 1.0);
@@ -91,6 +132,7 @@ class AudioEngine {
   calm(): void {
     this.threat = 0;
     if (this.ctx && this.droneGain) this.droneGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.3);
+    if (this.ctx && this.musicGain) this.musicGain.gain.setTargetAtTime(MUSIC_LEVEL, this.ctx.currentTime, 0.6);
   }
 
   private startDrone(): void {

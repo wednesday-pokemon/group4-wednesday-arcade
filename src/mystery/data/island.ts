@@ -1,0 +1,254 @@
+// Raven Island — the walkable map for "The Silent Evidence" (≈ 90 × 120 m). Game-designer owned.
+//
+// Coordinates: metres, XZ ground plane. −Z = north (Iago Tower), +Z = south (pier). yaw 0 faces −Z (north).
+// Layout and rationale (ASCII map, patrol, pacing): docs/MYSTERY_DESIGN.md §2–§3.
+//
+// Conventions the sim/renderer can rely on:
+// - Walls are capsules (segment a→b, radius thickness/2). Every doorway/gate gap is ≥ 3.0 m CLEAR after subtracting the
+//   wall thickness (player radius 0.4, Hyde radius 0.6). The ravine is 3.5 m clear, courtyard gates 4.0 m.
+// - Room polygons are axis-aligned rectangles listed counter-clockwise SEEN FROM ABOVE (+Y): NW → SW → SE → NE, i.e.
+//   negative signed area in raw (x, z). Rooms can overlap: resolve roomId with FIRST MATCH in `rooms` order;
+//   'path' is the whole-island fallback and is listed last.
+// - Every consecutive pair of patrol waypoints (including last → first) is a straight line that keeps ≥ 0.6 m + wall
+//   radius clear of every wall and cover piece, so the loop works even before nav-grid smoothing.
+// - Landmarks are decoration only (no collision); collision/LOS come from walls and cover.
+import type { CoverDef, HidingSpotDef, MapDef, RoomDef, Vec2, WallDef } from '../types.ts';
+import { MYSTERY_TUNING } from './tuning.ts';
+
+const v = (x: number, z: number): Vec2 => ({ x, z });
+
+function wall(id: string, ax: number, az: number, bx: number, bz: number, thickness: number, height: number, kind: WallDef['kind']): WallDef {
+  return { id, a: v(ax, az), b: v(bx, bz), thickness, height, kind };
+}
+
+/** Axis-aligned rectangle, counter-clockwise seen from above (NW → SW → SE → NE). */
+function rect(minX: number, minZ: number, maxX: number, maxZ: number): Vec2[] {
+  return [v(minX, minZ), v(minX, maxZ), v(maxX, maxZ), v(maxX, minZ)];
+}
+
+function cover(id: string, x: number, z: number, radius: number, height: CoverDef['height'], kind: CoverDef['kind']): CoverDef {
+  return { id, x, z, radius, height, kind };
+}
+
+function hide(id: string, x: number, z: number, radius: number, revealM: number, kind: HidingSpotDef['kind']): HidingSpotDef {
+  return { id, x, z, radius, revealM, kind };
+}
+
+/** Tutorial practice crate on the pier (UX §3 step 3). The Hyde's patrol never enters the pier pocket. */
+export const PRACTICE_CRATE = { id: 'c_practice_crate', x: 3, z: 50, radius: 0.8, searchS: MYSTERY_TUNING.player.practiceSearchS } as const;
+
+/** Id of the wall removed while Gomez's switch is powered. */
+export const SHORTCUT_GATE_WALL_ID = 'gate_shortcut';
+
+const WALLS: WallDef[] = [
+  // ---- island edge (cliffs) and the pier pocket
+  wall('cliff_w', -44, -59, -44, 46, 2, 8, 'cliff'),
+  wall('cliff_e', 44, -59, 44, 46, 2, 8, 'cliff'),
+  wall('cliff_n', -44, -59, 44, -59, 2, 8, 'cliff'),
+  wall('shore_w', -44, 46, -9, 46, 2, 2.5, 'rock'),
+  wall('shore_e', 9, 46, 44, 46, 2, 2.5, 'rock'),
+  wall('pier_w', -9, 46, -9, 59, 1.5, 2, 'rock'),
+  wall('pier_e', 9, 46, 9, 59, 1.5, 2, 'rock'),
+  wall('pier_s', -9, 59, 9, 59, 1.5, 2, 'rock'),
+
+  // ---- ruined crypt (x −43..−18, z −8..26). Doors: south (main entrance) x −24, east z 4, north (to egg chamber) x −36.
+  wall('crypt_s_w', -43, 26, -26.5, 26, 1, 4, 'ruin'),
+  wall('crypt_s_e', -21.5, 26, -18, 26, 1, 4, 'ruin'),
+  wall('crypt_e_s', -18, 26, -18, 6.5, 1, 4, 'ruin'),
+  wall('crypt_e_n', -18, 1.5, -18, -21.5, 1, 4, 'ruin'), // continues as the egg chamber's east wall
+  wall('crypt_inner', -30, 26, -30, 8, 1, 4, 'ruin'), // splits entrance hall (east) from the burial vault (west)
+  wall('crypt_egg_w', -43, -8, -38.5, -8, 1, 4, 'ruin'),
+  wall('crypt_egg_e', -33.5, -8, -18, -8, 1, 4, 'ruin'),
+
+  // ---- egg chamber (x −43..−18, z −34..−8). Doors: south x −36 (from crypt), east z −24 (to terrace).
+  wall('egg_e_n', -18, -26.5, -18, -34, 1, 4, 'stone'),
+  wall('cage_bars', -36, -34, -36, -29, 0.4, 3, 'fence'), // the Hyde's cage; release latch inside
+
+  // ---- ridge between the middle path and the greenhouse terrace; ravine pass at x −12 (3.5 m clear)
+  wall('ridge_w', -18, -10, -14.5, -10, 1.5, 5, 'rock'),
+  wall('ridge_e', -9.5, -10, 20, -10, 1.5, 5, 'rock'),
+
+  // ---- research room (x 20..43, z −10..14). Doors: west z 6, south x 30, north x 31 (into the shortcut alley).
+  wall('res_w_n', 20, -10, 20, 4.1, 0.8, 4, 'stone'),
+  wall('res_w_s', 20, 7.9, 20, 14, 0.8, 4, 'stone'),
+  wall('res_s_w', 20, 14, 28.1, 14, 0.8, 4, 'stone'),
+  wall('res_s_e', 31.9, 14, 43, 14, 0.8, 4, 'stone'),
+  wall('res_n_w', 20, -10, 29.1, -10, 0.8, 4, 'stone'),
+  wall('res_n_e', 32.9, -10, 43, -10, 0.8, 4, 'stone'),
+  wall('res_shelf', 28, -2, 36, -2, 0.6, 2.5, 'stone'), // bookshelf row: the note is behind it
+
+  // ---- shortcut alley (x 26..36, z −34..−10): dead end unless Gomez powers the gate
+  wall('alley_w', 26, -10, 26, -34, 1, 4, 'ruin'),
+  wall('alley_e', 36, -10, 36, -34, 1.5, 6, 'rock'),
+
+  // ---- courtyard south wall with two public gates (x −10 and x 12, 4 m clear) and the powered gate (x 31, 3 m clear)
+  wall('court_s_egg', -43, -34, -18, -34, 1, 3.5, 'stone'),
+  wall('court_s_1', -18, -34, -12.5, -34, 1, 3.5, 'stone'),
+  wall('court_s_2', -7.5, -34, 9.5, -34, 1, 3.5, 'stone'),
+  wall('court_s_3', 14.5, -34, 26, -34, 1, 3.5, 'stone'),
+  wall('court_s_alley_w', 26, -34, 29, -34, 1, 3.5, 'stone'),
+  wall(SHORTCUT_GATE_WALL_ID, 29, -34, 33, -34, 1, 3.5, 'fence'),
+  wall('court_s_alley_e', 33, -34, 36, -34, 1, 3.5, 'stone'),
+  wall('court_s_4', 36, -34, 43, -34, 1, 3.5, 'stone'),
+
+  // ---- Iago Tower (x 3..13, z −57..−46), door on the south side at x 8 (3 m clear)
+  wall('tower_s_w', 3, -46, 6, -46, 1, 9, 'stone'),
+  wall('tower_s_e', 10, -46, 13, -46, 1, 9, 'stone'),
+  wall('tower_w', 3, -46, 3, -57, 1, 9, 'stone'),
+  wall('tower_e', 13, -46, 13, -57, 1, 9, 'stone'),
+  wall('tower_n', 3, -57, 13, -57, 1, 9, 'stone'),
+
+  // ---- middle path features (sight blockers that shape the walk)
+  wall('hedge_mid', -10, 24, 6, 24, 1.2, 2.2, 'hedge'),
+  wall('chapel_s', -8, 12, 2, 12, 1, 3, 'ruin'),
+  wall('chapel_e', 2, 12, 2, 18, 1, 3, 'ruin'),
+  wall('ruin_mid', 8, -4, 16, -4, 1, 2.8, 'ruin'),
+
+  // ---- greenhouse terrace
+  wall('greenhouse_back', -2, -30, -2, -22, 1, 3, 'ruin'),
+];
+
+const COVER: CoverDef[] = [
+  // pier
+  cover(PRACTICE_CRATE.id, PRACTICE_CRATE.x, PRACTICE_CRATE.z, PRACTICE_CRATE.radius, 'low', 'crate'),
+  cover('c_pier_barrel', 5.5, 53.5, 0.6, 'low', 'barrel'),
+  // south lawn / graveyard
+  cover('c_tomb_1', -15, 35, 0.9, 'low', 'tomb'),
+  cover('c_tomb_2', -8, 30, 0.9, 'low', 'tomb'),
+  cover('c_tomb_3', -19, 39, 0.9, 'low', 'tomb'),
+  cover('c_tree_1', -28, 40, 1, 'high', 'tree'),
+  cover('c_tree_2', 18, 40, 1, 'high', 'tree'),
+  cover('c_tree_3', 34, 32, 1, 'high', 'tree'),
+  cover('c_statue_lawn', 24, 36, 0.8, 'high', 'statue'),
+  cover('c_bush_lawn', 6, 28, 1.2, 'low', 'bush'),
+  // middle path
+  cover('c_pillar_m1', -14, 0, 0.7, 'high', 'pillar'),
+  cover('c_pillar_m2', 8, 8, 0.7, 'high', 'pillar'),
+  cover('c_crate_m1', 12, 10, 0.8, 'low', 'crate'),
+  cover('c_crate_m2', -4, 2, 0.8, 'low', 'crate'),
+  // research room
+  cover('c_desk_1', 32, 6, 0.9, 'low', 'crate'),
+  cover('c_desk_2', 24, 10, 0.8, 'low', 'crate'),
+  cover('c_desk_3', 38, 6, 0.8, 'low', 'crate'),
+  cover('c_res_pillar', 26, -6, 0.6, 'high', 'pillar'),
+  // crypt (fog)
+  cover('c_crypt_pillar_1', -24, 14, 0.8, 'high', 'pillar'),
+  cover('c_crypt_pillar_2', -30, 0, 0.8, 'high', 'pillar'),
+  cover('c_sarc_1', -36, 0, 1, 'low', 'tomb'),
+  cover('c_sarc_2', -24, -2, 1, 'low', 'tomb'),
+  cover('c_sarc_3', -36, 20, 1, 'low', 'tomb'),
+  // egg chamber: four pillars around the shrine + a crate
+  cover('c_egg_pillar_1', -32, -16, 0.8, 'high', 'pillar'),
+  cover('c_egg_pillar_2', -24, -16, 0.8, 'high', 'pillar'),
+  cover('c_egg_pillar_3', -32, -24, 0.8, 'high', 'pillar'),
+  cover('c_egg_pillar_4', -24, -24, 0.8, 'high', 'pillar'),
+  cover('c_egg_crate', -40, -14, 0.8, 'low', 'crate'),
+  // greenhouse terrace
+  cover('c_planter_1', 6, -26, 1, 'low', 'crate'),
+  cover('c_planter_2', -8, -20, 1, 'low', 'crate'),
+  cover('c_gh_post', 8, -21, 0.6, 'high', 'pillar'),
+  cover('c_terrace_tree', 20, -28, 1, 'high', 'tree'),
+  // courtyard
+  cover('c_statue_c1', -16, -42, 0.9, 'high', 'statue'),
+  cover('c_statue_c2', 22, -46, 0.9, 'high', 'statue'),
+  cover('c_bush_c1', -24, -50, 1.2, 'low', 'bush'),
+  cover('c_bush_c2', 24, -40, 1.2, 'low', 'bush'),
+  cover('c_tomb_c', -4, -52, 0.9, 'low', 'tomb'),
+];
+
+const HIDING: HidingSpotDef[] = [
+  hide('hs_pier', -6, 50, 1.1, 2, 'alcove'), // tutorial-safe nook beside the boathouse
+  hide('hs_lawn_w', -30, 36, 1.2, 2, 'hedge'), // west of the crypt's main entrance
+  hide('hs_lawn_e', 26, 42, 1.2, 2, 'hedge'), // on the way to the research room
+  hide('hs_chapel', 0, 14, 1, 2, 'alcove'), // inside corner of the chapel ruin (middle path)
+  hide('hs_research', 21.8, -8.2, 1, 1.5, 'wardrobe'), // research room, north-west corner
+  hide('hs_crypt_sarc', -39, 18, 1, 1.5, 'sarcophagus'), // crypt burial vault
+  hide('hs_crypt_alcove', -41.5, -5.5, 1, 2, 'alcove'), // crypt hall, beside the egg-chamber door
+  hide('hs_egg_alcove', -21.5, -31.5, 1, 2, 'alcove'), // egg chamber, north-east corner
+  hide('hs_terrace', 16, -13, 1.2, 2, 'hedge'), // terrace hedge under the ridge
+  hide('hs_court_w', -18, -52, 1.2, 2, 'hedge'), // courtyard west garden
+  hide('hs_court_e', 20, -54, 1.2, 2, 'hedge'), // courtyard behind the tower
+];
+
+const ROOMS: RoomDef[] = [
+  // first match wins — specific rooms first, 'path' last
+  { id: 'tower', name: 'Iago Tower', polygon: rect(3, -57, 13, -46) },
+  { id: 'pier', name: 'Pier', polygon: rect(-9, 44, 9, 60), wet: true },
+  { id: 'research_room', name: 'Research Room', polygon: rect(20, -10, 44, 14) },
+  { id: 'crypt', name: 'Ruined Crypt', polygon: rect(-44, -8, -18, 26), fog: true },
+  { id: 'egg_chamber', name: 'Egg Chamber', polygon: rect(-44, -34, -18, -8), wet: true },
+  { id: 'shortcut', name: 'Shortcut Alley', polygon: rect(26, -34, 36, -10) },
+  { id: 'courtyard', name: 'Iago Tower Courtyard', polygon: rect(-44, -60, 44, -34) },
+  { id: 'path', name: 'Island Path', polygon: rect(-45, -60, 45, 60) },
+];
+
+/**
+ * Hyde patrol: one closed, learnable loop (~288 m, ~120 s at 2.4 m/s). It passes 6–8 m outside every key doorway
+ * (research south + west doors, crypt east + south doors, egg chamber east door, tower door) but never enters a room,
+ * the pier pocket or the shortcut alley. It crosses the ravine twice (north-bound, then south-bound).
+ */
+const PATROL: Vec2[] = [
+  v(0, 36), // P0 lawn centre
+  v(14, 30), // P1
+  v(30, 22), // P2 outside research south door
+  v(15, 14), // P3
+  v(14, 4), // P4 outside research west door
+  v(2, -6), // P5
+  v(-12, -4), // P6 ravine, south side
+  v(-12, -16), // P7 ravine, north side
+  v(-12, -24), // P8 outside egg chamber east door
+  v(-10, -38), // P9 through the west courtyard gate
+  v(-2, -42), // P10 courtyard (Hyde start)
+  v(12, -40), // P11 in front of the tower door
+  v(12, -28), // P12 back through the east courtyard gate
+  v(20, -20), // P13 terrace north-east, near the shortcut alley
+  v(2, -16), // P14 greenhouse
+  v(-12, -14), // P15 ravine, north side
+  v(-11, 4), // P16 outside crypt east door
+  v(-13, 18), // P17
+  v(-12, 30), // P18
+  v(-22, 34), // P19 outside crypt south (main) door
+  v(-8, 42), // P20 lawn north of the pier
+];
+
+export function buildIsland(): MapDef {
+  return {
+    id: 'raven_island_v31',
+    name: 'Raven Island Ruins',
+    bounds: { minX: -45, maxX: 45, minZ: -60, maxZ: 60 },
+    playerStart: { x: 0, z: 54, yaw: 0 }, // on the pier, facing the island (north)
+    hydeStart: { x: -2, z: -42, yaw: -Math.PI / 2 }, // courtyard, facing east along the patrol; 96 m from the pier
+    patrol: PATROL.map((p) => ({ ...p })),
+    walls: WALLS.map((w) => ({ ...w, a: { ...w.a }, b: { ...w.b } })),
+    cover: COVER.map((c) => ({ ...c })),
+    hidingSpots: HIDING.map((h) => ({ ...h })),
+    rooms: ROOMS.map((r) => ({ ...r, polygon: r.polygon.map((p) => ({ ...p })) })),
+    clues: [
+      { clueId: 'transfer_note', roomId: 'research_room', x: 38, z: -6, searchS: 2.5 }, // desk behind the bookshelf
+      { clueId: 'master_key', roomId: 'crypt', x: -22, z: 21, searchS: 2.5 }, // just inside the crypt's main entrance
+      { clueId: 'greenhouse_trace', roomId: 'egg_chamber', x: -40, z: -31, searchS: 3 }, // release latch inside the cage
+    ],
+    eggSpawn: v(-28, -20), // shrine between the four pillars
+    tower: { x: 8, z: -51.5, radius: 3 },
+    safeReleasePoints: [v(0, 49), v(-36, 40), v(36, 40), v(-6, 20), v(-36, -46), v(36, -48)],
+    powerSwitch: { id: 'shortcut_switch', x: 33, z: -13, gateWallId: SHORTCUT_GATE_WALL_ID, openS: 0 },
+    landmarks: [
+      { id: 'pier', kind: 'pier', x: 0, z: 55, yaw: 0, scale: 1 },
+      { id: 'research_hall', kind: 'research_hall', x: 31.5, z: 2, yaw: 0, scale: 1 },
+      { id: 'crypt', kind: 'crypt', x: -30.5, z: 9, yaw: 0, scale: 1 },
+      { id: 'egg_shrine', kind: 'egg_shrine', x: -28, z: -20, yaw: 0, scale: 1 },
+      { id: 'iago_tower', kind: 'iago_tower', x: 8, z: -51.5, yaw: 0, scale: 1 },
+      { id: 'greenhouse', kind: 'greenhouse', x: 3, z: -24, yaw: 0, scale: 1 },
+      { id: 'shortcut_gate', kind: 'gate', x: 31, z: -34, yaw: 0, scale: 1 },
+      { id: 'lamp_pier', kind: 'lamp', x: 0, z: 45, yaw: 0, scale: 1 },
+      { id: 'lamp_lawn', kind: 'lamp', x: 6, z: 36, yaw: 0, scale: 1 },
+      { id: 'lamp_crypt', kind: 'lamp', x: -20, z: 30, yaw: 0, scale: 1 },
+      { id: 'lamp_research', kind: 'lamp', x: 18, z: 18, yaw: 0, scale: 1 },
+      { id: 'lamp_mid', kind: 'lamp', x: -6, z: 4, yaw: 0, scale: 1 },
+      { id: 'lamp_ravine', kind: 'lamp', x: -9, z: -7, yaw: 0, scale: 1 },
+      { id: 'lamp_terrace', kind: 'lamp', x: -14, z: -30, yaw: 0, scale: 1 },
+      { id: 'lamp_gate_e', kind: 'lamp', x: 16, z: -36, yaw: 0, scale: 1 },
+      { id: 'lamp_tower', kind: 'lamp', x: 8, z: -44, yaw: 0, scale: 1 },
+    ],
+  };
+}

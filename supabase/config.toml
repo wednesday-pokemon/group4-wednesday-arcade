@@ -123,6 +123,27 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
+# mystery-v3.1 "The Silent Evidence" (station accounts; same JWT + app_users checks)
+[functions.mystery-create-session]
+enabled = true
+verify_jwt = true
+
+[functions.mystery-get-session]
+enabled = true
+verify_jwt = true
+
+[functions.mystery-select-duo]
+enabled = true
+verify_jwt = true
+
+[functions.mystery-append-events]
+enabled = true
+verify_jwt = true
+
+[functions.mystery-finalize]
+enabled = true
+verify_jwt = true
+
 [analytics]
 enabled = true
 port = 54327

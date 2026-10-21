@@ -1,17 +1,25 @@
 // App shell: URL routing, service boot (live vs LOCAL DEMO, never a silent fallback), global keys (M, F),
 // audio unlock, and the persistent live regions.
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { StationId } from '../game/index.ts';
 import type { AppServices } from '../lib/backend.ts';
 import { createServices } from '../lib/services.ts';
 import { LiveRegions } from './announce.tsx';
 import { audio } from './audio.ts';
+
+const THEME_MUSIC = `${import.meta.env.BASE_URL}audio/MainThemeSong.mp3`;
 import { DashboardApp } from './DashboardApp.tsx';
 import { useHotkeys } from './keyboard.ts';
 import { parseRoute, stationLabel } from './routing.ts';
 import { toggleFullscreen, updateSettings, useSettings, getSettings } from './settings.ts';
 import { TerminalApp } from './TerminalApp.tsx';
 import { V3App } from './v3/V3App.tsx';
+import { MysteryApp } from './mystery/MysteryApp.tsx';
+// The mystery dashboard pulls in the analytics package: lazy so the visitor journey's menu bundle stays small.
+const MysteryDashboardApp = lazy(() => import('./mystery/MysteryDashboardApp.tsx').then((m) => ({ default: m.MysteryDashboardApp })));
+// LIVE station kiosk + LIVE board (Supabase is a further dynamic import inside them).
+const MysteryStationApp = lazy(() => import('./mystery/liveStation.tsx').then((m) => ({ default: m.MysteryStationApp })));
+const MysteryLiveDashboardApp = lazy(() => import('./mystery/liveDashboard.tsx').then((m) => ({ default: m.MysteryLiveDashboardApp })));
 import { MessageScreen, StationGate } from '../ui/screens/GateScreens.tsx';
 
 type Boot =
@@ -57,9 +65,14 @@ function useServices(stationId: StationId | null, forceLocal: boolean, requireSt
   return { boot, retry: () => void start(false), playLocal: () => void start(true), signIn };
 }
 
-function GlobalShell({ children }: { children: ReactNode }) {
+/**
+ * `fullscreenHotkey`: legacy screens toggle fullscreen with F; the mystery game uses F for the character power.
+ * `music`: looping background track for this route (mystery journey and live kiosks); none elsewhere.
+ */
+function GlobalShell({ children, fullscreenHotkey = true, music = null }: { children: ReactNode; fullscreenHotkey?: boolean; music?: string | null }) {
   const settings = useSettings();
   useEffect(() => audio.setMuted(settings.muted), [settings.muted]);
+  useEffect(() => audio.setMusic(music), [music]);
   useEffect(() => {
     const unlock = () => audio.unlock();
     const tick = (e: Event) => {
@@ -80,7 +93,7 @@ function GlobalShell({ children }: { children: ReactNode }) {
       updateSettings({ muted: !getSettings().muted });
       return true;
     }
-    if (key === 'f') {
+    if (key === 'f' && fullscreenHotkey) {
       void toggleFullscreen();
       return true;
     }
@@ -95,6 +108,34 @@ function GlobalShell({ children }: { children: ReactNode }) {
 
 export function App() {
   const route = useMemo(() => parseRoute(window.location.search), []);
+  if (route.kind === 'mystery') {
+    return (
+      <GlobalShell fullscreenHotkey={false} music={THEME_MUSIC}>
+        <MysteryApp characterId={route.characterId} pokemonId={route.pokemonId} seed={route.seed} skipTutorial={route.skipTutorial} />
+      </GlobalShell>
+    );
+  }
+  if (route.kind === 'mystery_station') {
+    return (
+      <GlobalShell fullscreenHotkey={false} music={THEME_MUSIC}>
+        <Suspense fallback={<div className="boot" role="status">Lighting the lanterns…</div>}><MysteryStationApp stationId={route.stationId} /></Suspense>
+      </GlobalShell>
+    );
+  }
+  if (route.kind === 'mystery_live_dashboard') {
+    return (
+      <GlobalShell>
+        <Suspense fallback={<div className="boot" role="status">Lighting the lanterns…</div>}><MysteryLiveDashboardApp /></Suspense>
+      </GlobalShell>
+    );
+  }
+  if (route.kind === 'mystery_dashboard') {
+    return (
+      <GlobalShell>
+        <Suspense fallback={<div className="boot" role="status">Lighting the lanterns…</div>}><MysteryDashboardApp /></Suspense>
+      </GlobalShell>
+    );
+  }
   if (route.kind === 'play') {
     return <GlobalShell><V3App characterId={route.characterId} pokemonId={route.pokemonId} skipTutorial={route.skipTutorial} /></GlobalShell>;
   }
@@ -103,7 +144,7 @@ export function App() {
 
 /** The demo board is its own URL so a refreshed Laptop 1 never silently swaps live for demo data. */
 function showDemoBoard(): void {
-  window.location.search = '?mode=dashboard&demo=1';
+  window.location.search = '?mode=dashboard&legacy=1&demo=1';
 }
 
 function Routed({ route }: { route: Extract<ReturnType<typeof parseRoute>, { kind: 'terminal' | 'dashboard' }> }) {

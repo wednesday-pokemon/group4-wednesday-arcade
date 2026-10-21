@@ -1,0 +1,97 @@
+{
+  "source": "https://pokeapi.co/api/v2",
+  "fetchedAt": "2026-10-21T13:34:26.452Z",
+  "note": "Official artwork via PokéAPI sprites. © Nintendo / Creatures Inc. / GAME FREAK inc. / The Pokémon Company — used for a non-commercial school event; clear rights before any public use.",
+  "partners": {
+    "gengar": {
+      "pokeapiName": "gengar",
+      "pokeapiId": 94,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/94.png"
+    },
+    "alolan_marowak": {
+      "pokeapiName": "marowak-alola",
+      "pokeapiId": 10115,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/10115.png"
+    },
+    "misdreavus": {
+      "pokeapiName": "misdreavus",
+      "pokeapiId": 200,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/200.png"
+    },
+    "galarian_corsola": {
+      "pokeapiName": "corsola-galar",
+      "pokeapiId": 10173,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/10173.png"
+    },
+    "sableye": {
+      "pokeapiName": "sableye",
+      "pokeapiId": 302,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/302.png"
+    },
+    "dusknoir": {
+      "pokeapiName": "dusknoir",
+      "pokeapiId": 477,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/477.png"
+    },
+    "drifblim": {
+      "pokeapiName": "drifblim",
+      "pokeapiId": 426,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/426.png"
+    },
+    "froslass": {
+      "pokeapiName": "froslass",
+      "pokeapiId": 478,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/478.png"
+    },
+    "jellicent": {
+      "pokeapiName": "jellicent-male",
+      "pokeapiId": 593,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/593.png"
+    },
+    "chandelure": {
+      "pokeapiName": "chandelure",
+      "pokeapiId": 609,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/609.png"
+    },
+    "aegislash": {
+      "pokeapiName": "aegislash-shield",
+      "pokeapiId": 681,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/681.png"
+    },
+    "trevenant": {
+      "pokeapiName": "trevenant",
+      "pokeapiId": 709,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/709.png"
+    },
+    "dhelmise": {
+      "pokeapiName": "dhelmise",
+      "pokeapiId": 781,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/781.png"
+    },
+    "decidueye": {
+      "pokeapiName": "decidueye",
+      "pokeapiId": 724,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/724.png"
+    },
+    "dragapult": {
+      "pokeapiName": "dragapult",
+      "pokeapiId": 887,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/887.png"
+    },
+    "basculegion": {
+      "pokeapiName": "basculegion-male",
+      "pokeapiId": 902,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/902.png"
+    },
+    "ceruledge": {
+      "pokeapiName": "ceruledge",
+      "pokeapiId": 937,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/937.png"
+    },
+    "gholdengo": {
+      "pokeapiName": "gholdengo",
+      "pokeapiId": 1000,
+      "artworkUrl": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/1000.png"
+    }
+  }
+}

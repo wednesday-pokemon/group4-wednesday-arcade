@@ -1,8 +1,15 @@
-# HANDOFF — Escape from Raven Island: The Hyde's Regatta
+# HANDOFF — Escape from Raven Island: The Silent Evidence (master revision v3.1)
 
-> Read this first in a new Claude Code session. Then read, in order: `docs/DECISIONS.md` (all rulings incl. user
-> decisions D-25…D-31), `docs/V3_STAGE1_CONTRACT.md`, `docs/GDD_V3_REALTIME.md`, `docs/UX_V3_ACTION.md`,
-> `docs/PROGRESS.md`, `docs/AGENT_SKILL_LOG.md`. Last updated: 2026-10-21 — Phase 1 corrections COMPLETE, awaiting user acceptance (see PROGRESS.md end).
+> **CURRENT DESIGN = MASTER REVISION v3.1** (user, 2026-10-21): `Escape_from_Raven_Island_Game_Development_Plan_v3_1.pdf`
+> (transcribed verbatim to `docs/v3.1/GAME_PLAN_v3_1.md`) + `docs/v3.1/MASTER_PROMPT_v3_1.md`. It supersedes the rowing
+> design (v3.0-realtime), the v2.5 decision race, separate character/Pokémon selection and character-specific analytics.
+> Third-person murder mystery / stealth / egg extraction, 7 Nightshades × 18 Pokémon, three bundled duo cards, Thing
+> narrator, four game-wide analytics, rules_version `mystery-v3.1`.
+>
+> Read in order: `docs/v3.1/GAME_PLAN_v3_1.md`, `docs/v3.1/MASTER_PROMPT_v3_1.md`, `docs/MYSTERY_CONTRACT.md`,
+> `src/mystery/types.ts`, `docs/IMPLEMENTATION_PROGRESS.md`, `docs/UX_MYSTERY.md`, `docs/MYSTERY_DESIGN.md`,
+> `docs/MOVE_LEGALITY.md`, `docs/ACTIVITY_COMPLIANCE.md`, `docs/DECISIONS.md` (D-35+), `docs/AGENT_SKILL_LOG.md`.
+> Restore point for everything before v3.1: git tag `pre-mystery-v3.1`. Everything below this block is HISTORY.
 
 ## What the project is
 Halloween arcade game for Pokémon Day III (event **Oct 27 2026**), 3 laptops: Laptop 1 dashboard/operator

@@ -33,6 +33,15 @@ describe('error-code mapping table (every server ApiErrorCode)', () => {
     INVALID_TRANSITION: ['SERVER', false],
     MISCONFIGURED: ['SERVER', false],
     INTERNAL: ['SERVER', true],
+    NOT_SELECTED: ['WRONG_PHASE', false],
+    ALREADY_SELECTED: ['WRONG_PHASE', false],
+    DUO_NOT_OFFERED: ['INVALID_INPUT', false],
+    STALE_EVENTS: ['STALE_REVISION', false],
+    SEQ_CONFLICT: ['STALE_REVISION', false],
+    EVENT_REJECTED: ['INVALID_INPUT', false],
+    RUN_NOT_FINISHED: ['WRONG_PHASE', false],
+    TOO_MANY_EVENTS: ['INVALID_INPUT', false],
+    TEST_SEED_FORBIDDEN: ['UNAUTHORIZED', false],
   };
 
   for (const code of Object.keys(HTTP_STATUS) as ApiErrorCode[]) {

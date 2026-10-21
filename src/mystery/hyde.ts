@@ -1,0 +1,554 @@
+// The Hyde: a visible pursuer on the nav grid. Modes PATROL → INVESTIGATE_SOUND → SEARCH → CHASE → COOLDOWN.
+// Mode changes happen ONLY through perception (hearing: distance + loudness + wall occlusion → suspicion; sight: cone +
+// range + walls + fog + crouch + hiding → suspicion ramp), timers (chase loss, investigate give-up, search, cooldown) or
+// player effects (stun, lure) and grabs — every change emits a `hyde_mode` event with its reason. No hidden catch rolls:
+// a catch needs physical reach plus a short grab windup (the Hyde lunges at windupSpeedMult × chase speed) that a stun
+// interrupts and a sprint can outrun (walking cannot).
+//
+// Flow (MYSTERY_TUNING): heard noise adds heardGainPerLoudness × loudness to suspicion; once suspicion ≥ investigateAt
+// (or a noise ≥ investigateLoudnessAlways) it investigates the noise. Seen: suspicion += sightGainPerS × (2 − d/range)
+// per second; ≥ chaseAt (or within instantM) → CHASE. Lost sight for chaseLossS → SEARCH (searchS around the last known
+// point) → COOLDOWN (cooldownS, reduced hearing, walks back to its loop) → PATROL. A landed grab → COOLDOWN
+// (cooldownAfterGrabS). Unreachable investigations give up after investigateMaxS (→ SEARCH, reason gave_up).
+import type { SimContext } from './context.ts';
+import { dist, turnToward, wrapAngle, yawTo } from './geometry.ts';
+import { hear } from './noise.ts';
+import { canSee } from './sight.ts';
+import type { GameEvent, HydeMode, HydeRuntime, MapDef, NoiseSource, Vec2 } from './types.ts';
+
+export type ModeReason = Extract<GameEvent, { type: 'hyde_mode' }>['reason'];
+
+export function createHydeRuntime(map: MapDef): HydeRuntime {
+  return {
+    mode: 'PATROL', modeT: 0, x: map.hydeStart.x, z: map.hydeStart.z, yaw: map.hydeStart.yaw, speed: 0,
+    suspicion: 0, canSeePlayer: false, lastKnown: null, target: null, path: [],
+    stunnedUntil: -Infinity, slowedUntil: -Infinity, slowMult: 1, distractedUntil: -Infinity, grabbing: false,
+  };
+}
+
+/** Spawn point: hydeStart unless it is within minSpawnM of the player, else the first patrol waypoint far enough. */
+export function chooseSpawn(map: MapDef, player: Vec2, minSpawnM: number): { x: number; z: number; yaw: number } {
+  if (dist(map.hydeStart, player) >= minSpawnM) return { ...map.hydeStart };
+  for (const p of map.patrol) if (dist(p, player) >= minSpawnM) return { x: p.x, z: p.z, yaw: map.hydeStart.yaw };
+  const far = map.patrol.reduce((a, b) => (dist(b, player) > dist(a, player) ? b : a), map.patrol[0] ?? map.hydeStart);
+  return { x: far.x, z: far.z, yaw: map.hydeStart.yaw };
+}
+
+export class HydeBrain {
+  readonly h: HydeRuntime;
+  patrolIndex = 0;
+  active = false;
+  lastSeenT = -Infinity;
+  windupUntil = -Infinity;
+  grabHoldUntil = -Infinity;
+  cooldownUntil = -Infinity;
+  lureUntil = -Infinity;
+  lastStunEnd = -Infinity;
+  searchCenter: Vec2 | null = null;
+  searchUntil = -Infinity;
+  investigateSince = 0;
+  /** Counters for analytics / tests. */
+  readonly stats = { heard: 0, sightings: 0, chases: 0, grabs: 0 };
+  private preLureKnown: Vec2 | null = null;
+  private searchPauseUntil = -Infinity;
+  private planGoal: Vec2 | null = null;
+  private lastPlanT = -Infinity;
+  private stuckRefX = 0;
+  private stuckRefZ = 0;
+  private stuckRefT = 0;
+  private lastTravelT = -Infinity;
+  private glimpsed = false;
+  private sweepDir = 1;
+
+  constructor(h: HydeRuntime) {
+    this.h = h;
+  }
+
+  /** Place the Hyde (≥ minSpawnM from the player) and start patrolling. */
+  start(ctx: SimContext): void {
+    const s = chooseSpawn(ctx.map, ctx.player, ctx.tuning.hyde.minSpawnM);
+    const snapped = ctx.hydeNav().nearestWalkable(s, 6) ?? s;
+    Object.assign(this.h, { x: snapped.x, z: snapped.z, yaw: s.yaw, mode: 'PATROL' as HydeMode, modeT: 0, path: [], target: null, speed: 0 });
+    this.patrolIndex = this.nearestPatrolIndex();
+    const pts = ctx.map.patrol;
+    if (pts.length > 1 && dist(pts[this.patrolIndex], this.h) < 1) this.patrolIndex = (this.patrolIndex + 1) % pts.length;
+    this.active = true;
+    this.patrolMap = ctx.map;
+  }
+
+  private patrolMap: MapDef | null = null;
+
+  private nearestPatrolIndex(): number {
+    const pts = this.patrolMap?.patrol ?? [];
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const d = dist(pts[i], this.h);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  isStunned(t: number): boolean {
+    return t < this.h.stunnedUntil;
+  }
+
+  isLured(t: number): boolean {
+    return t < this.lureUntil;
+  }
+
+  isDistracted(t: number): boolean {
+    return t < this.h.distractedUntil;
+  }
+
+  isWindingUp(): boolean {
+    return this.windupUntil > -Infinity;
+  }
+
+  /** Perception of the player is off while stunned, lured, holding a grab, or while the player is invulnerable. */
+  perceives(ctx: SimContext): boolean {
+    const t = ctx.t;
+    return this.active && !this.isStunned(t) && !this.isLured(t) && t >= this.grabHoldUntil && t >= ctx.player.invulnerableUntil;
+  }
+
+  setMode(ctx: SimContext, to: HydeMode, reason: ModeReason): void {
+    const from = this.h.mode;
+    if (from === to) return;
+    this.h.mode = to;
+    this.h.modeT = 0;
+    this.h.path = [];
+    this.planGoal = null;
+    this.glimpsed = false;
+    if (to === 'CHASE') this.stats.chases++;
+    if (to === 'INVESTIGATE_SOUND') this.investigateSince = ctx.t;
+    ctx.emit({ type: 'hyde_mode', from, to, reason });
+  }
+
+  private startSearch(ctx: SimContext, center: Vec2, reason: ModeReason, startAt = ctx.t): void {
+    this.searchCenter = { x: center.x, z: center.z };
+    this.searchUntil = startAt + ctx.tuning.hyde.searchS;
+    this.searchPauseUntil = startAt + 0.6;
+    this.h.target = null;
+    this.h.path = [];
+    this.planGoal = null;
+    this.setMode(ctx, 'SEARCH', reason);
+  }
+
+  private startCooldown(ctx: SimContext, seconds: number, reason: ModeReason): void {
+    this.cooldownUntil = ctx.t + seconds;
+    this.patrolIndex = this.nearestPatrolIndex();
+    this.setMode(ctx, 'COOLDOWN', reason);
+  }
+
+  // ------------------------------------------------------------------------------------------------- effects
+
+  /** Freeze for `durationS` (already scaled / capped / diminished by the caller); interrupts a grab windup. */
+  stun(ctx: SimContext, durationS: number): void {
+    const h = this.h;
+    h.stunnedUntil = Math.max(h.stunnedUntil, ctx.t + durationS);
+    this.lastStunEnd = h.stunnedUntil;
+    h.grabbing = false;
+    this.windupUntil = -Infinity;
+    h.speed = 0;
+    if (h.canSeePlayer) ctx.emit({ type: 'hyde_lost' });
+    h.canSeePlayer = false;
+    if (this.isLured(ctx.t)) return; // a decoy is pending (e.g. Shadow Ball = lure + stun): freeze, then go to it
+    h.lastKnown = { x: ctx.player.x, z: ctx.player.z };
+    // afterwards it searches where the hit came from
+    this.startSearch(ctx, h.lastKnown, 'stunned', h.stunnedUntil);
+    this.searchCenter = { ...h.lastKnown };
+    this.searchUntil = h.stunnedUntil + ctx.tuning.hyde.searchS;
+    this.searchPauseUntil = h.stunnedUntil + 0.6;
+  }
+
+  slow(ctx: SimContext, durationS: number, mult: number): void {
+    this.h.slowedUntil = Math.max(this.h.slowedUntil, ctx.t + durationS);
+    this.h.slowMult = Math.max(ctx.tuning.abilities.minHydeSpeedMult, Math.min(1, mult));
+  }
+
+  distract(ctx: SimContext, durationS: number): void {
+    this.h.distractedUntil = Math.max(this.h.distractedUntil, ctx.t + durationS);
+    this.h.grabbing = false;
+    this.windupUntil = -Infinity;
+  }
+
+  /** Pull the Hyde to a decoy for `durationS`; it ignores the player meanwhile. Returns false if it refuses. */
+  lure(ctx: SimContext, point: Vec2, durationS: number): boolean {
+    const h = this.h;
+    if (h.mode === 'CHASE' && !ctx.tuning.abilities.lureBreaksChase) return false;
+    this.preLureKnown = h.mode === 'CHASE' || h.mode === 'INVESTIGATE_SOUND' || h.mode === 'SEARCH' ? (h.lastKnown ? { ...h.lastKnown } : null) : null;
+    this.lureUntil = ctx.t + durationS;
+    h.grabbing = false;
+    this.windupUntil = -Infinity;
+    if (h.canSeePlayer) ctx.emit({ type: 'hyde_lost' });
+    h.canSeePlayer = false;
+    if (h.mode === 'INVESTIGATE_SOUND') {
+      h.path = [];
+      this.planGoal = null;
+      this.investigateSince = ctx.t;
+    } else this.setMode(ctx, 'INVESTIGATE_SOUND', 'lured');
+    h.target = { x: point.x, z: point.z };
+    return true;
+  }
+
+  // ------------------------------------------------------------------------------------------------- hearing
+
+  hearNoise(ctx: SimContext, source: NoiseSource, x: number, z: number, loudness: number): void {
+    if (!this.perceives(ctx) || this.isDistracted(ctx.t)) return;
+    const h = this.h;
+    const T = ctx.tuning;
+    const mult = h.mode === 'COOLDOWN' ? T.noise.cooldownHearingMult : 1;
+    const res = hear(ctx.world, T.noise, loudness, x, z, h.x, h.z, mult);
+    if (!res.heard) return;
+    this.stats.heard++;
+    ctx.emit({ type: 'hyde_heard', source, loudness: round3(loudness), distanceM: round2(res.distanceM), occluded: res.occluded });
+    h.suspicion = Math.min(1, h.suspicion + T.suspicion.heardGainPerLoudness * loudness);
+    h.lastKnown = { x, z };
+    if (h.mode === 'CHASE') return; // the chase keeps going; the noise refreshes the last known point
+    if (h.mode === 'INVESTIGATE_SOUND') {
+      h.target = { x, z };
+      this.investigateSince = ctx.t;
+      return;
+    }
+    if (h.suspicion >= T.suspicion.investigateAt || loudness >= T.suspicion.investigateLoudnessAlways) {
+      this.setMode(ctx, 'INVESTIGATE_SOUND', 'heard_noise');
+      h.target = { x, z };
+    }
+  }
+
+  // ------------------------------------------------------------------------------------------------- step
+
+  /** One fixed step. `onCatch` is called when a grab lands (the run applies HP / egg / release / DNF). */
+  step(ctx: SimContext, dt: number, onCatch: () => void): void {
+    const h = this.h;
+    const t = ctx.t;
+    const T = ctx.tuning;
+    h.modeT += dt;
+    if (!this.active) {
+      h.speed = 0;
+      return;
+    }
+    if (this.grabHoldUntil > -Infinity && t >= this.grabHoldUntil) {
+      this.grabHoldUntil = -Infinity;
+      h.grabbing = false;
+    }
+    if (this.isStunned(t)) {
+      h.speed = 0;
+      return;
+    }
+    // lure expiry: back to where the player was last known (if it knew)
+    if (this.lureUntil > -Infinity && t >= this.lureUntil) {
+      this.lureUntil = -Infinity;
+      if (this.preLureKnown) this.startSearch(ctx, this.preLureKnown, 'lost_sight');
+      this.preLureKnown = null;
+    }
+    const p = ctx.player;
+    const dPlayer = Math.hypot(p.x - h.x, p.z - h.z);
+
+    // ---- sight
+    let seen = false;
+    if (this.perceives(ctx)) {
+      const spot = p.hidden ? hidingRevealAt(ctx, p.x, p.z) : null;
+      const res = canSee(ctx.world, T.sight, h, { x: p.x, z: p.z, crouched: p.crouched, hiddenRevealM: spot }, {
+        fog: ctx.inFog(h.x, h.z) || ctx.inFog(p.x, p.z), distracted: this.isDistracted(t),
+      });
+      seen = res.seen;
+      // bumping into the Hyde gives the player away (unless hidden in a spot or the Hyde is distracted)
+      if (!seen && !p.hidden && !this.isDistracted(t) && dPlayer <= T.hyde.radius + T.player.radius + 0.15) seen = true;
+      if (seen) {
+        if (!h.canSeePlayer) {
+          this.stats.sightings++;
+          ctx.emit({ type: 'hyde_sighted', distanceM: round2(dPlayer) });
+        }
+        const closeness = 1 + Math.max(0, 1 - res.distanceM / Math.max(1e-6, res.rangeM));
+        h.suspicion = Math.min(1, h.suspicion + T.suspicion.sightGainPerS * closeness * dt);
+        h.lastKnown = { x: p.x, z: p.z };
+        this.lastSeenT = t;
+        if (h.mode !== 'CHASE' && (h.suspicion >= T.suspicion.chaseAt || dPlayer <= T.sight.instantM)) {
+          h.suspicion = 1;
+          this.setMode(ctx, 'CHASE', 'saw_player');
+        } else if (h.mode !== 'CHASE') this.glimpsed = true;
+      }
+    }
+    if (h.canSeePlayer && !seen) ctx.emit({ type: 'hyde_lost' });
+    h.canSeePlayer = seen;
+    if (h.mode === 'CHASE') h.suspicion = 1;
+    else if (!seen) h.suspicion = Math.max(0, h.suspicion - T.suspicion.decayPerS * dt);
+
+    // a glimpse that ended before the chase threshold: go and look where the player was
+    if (!seen && this.glimpsed && h.mode !== 'CHASE' && h.lastKnown && this.perceives(ctx)) {
+      this.glimpsed = false;
+      if (h.mode === 'INVESTIGATE_SOUND') {
+        h.target = { ...h.lastKnown };
+        this.investigateSince = t;
+      } else {
+        this.setMode(ctx, 'INVESTIGATE_SOUND', 'saw_player');
+        h.target = { ...h.lastKnown };
+      }
+    }
+
+    // ---- grab windup (the Hyde keeps lunging after the player while winding up)
+    const invulnerable = t < p.invulnerableUntil;
+    if (this.windupUntil > -Infinity) {
+      if (t >= this.windupUntil) {
+        this.windupUntil = -Infinity;
+        h.grabbing = false;
+        const d = Math.hypot(p.x - h.x, p.z - h.z);
+        if (d <= T.grab.connectRangeM && !invulnerable && !this.isDistracted(t) && !this.isLured(t)) {
+          this.stats.grabs++;
+          h.grabbing = true;
+          h.speed = 0;
+          this.grabHoldUntil = t + T.hyde.grabHoldS;
+          h.lastKnown = null;
+          this.startCooldown(ctx, T.hyde.cooldownAfterGrabS, 'grabbed');
+          onCatch();
+          return;
+        }
+      }
+    } else if (h.mode === 'CHASE' && dPlayer <= T.grab.rangeM && !invulnerable && !this.isDistracted(t) && !this.isLured(t)) {
+      this.windupUntil = t + T.grab.windupS;
+      h.grabbing = true;
+    }
+
+    // ---- mode logic + movement
+    const slow = t < h.slowedUntil ? h.slowMult : 1;
+    const lunge = this.windupUntil > -Infinity ? T.hyde.windupSpeedMult : 1;
+    const speed = T.hyde.speed[h.mode] * slow * lunge;
+    switch (h.mode) {
+      case 'PATROL': {
+        if (this.glimpsed && seen) return this.faceAndHold(ctx, p, dt);
+        this.followLoop(ctx, speed, dt);
+        return;
+      }
+      case 'INVESTIGATE_SOUND': {
+        if (this.glimpsed && seen) return this.faceAndHold(ctx, p, dt);
+        const goal = h.target ?? h.lastKnown;
+        if (!goal) {
+          this.startSearch(ctx, h, 'reached_target');
+          return;
+        }
+        if (t - this.investigateSince >= T.hyde.investigateMaxS && !this.isLured(t)) {
+          this.startSearch(ctx, goal, 'gave_up'); // could not get there in time (unreachable / blocked)
+          return;
+        }
+        if (this.travel(ctx, goal, speed, dt, 1.0)) {
+          if (this.isLured(t)) {
+            // waits at the decoy, looking around
+            h.speed = 0;
+            h.yaw = wrapAngle(h.yaw + this.sweepDir * 1.6 * dt);
+          } else this.startSearch(ctx, goal, 'reached_target');
+        }
+        return;
+      }
+      case 'SEARCH': {
+        if (this.glimpsed && seen) return this.faceAndHold(ctx, p, dt);
+        if (t >= this.searchUntil) {
+          this.startCooldown(ctx, T.hyde.cooldownS, 'search_timeout');
+          return;
+        }
+        if (t < this.searchPauseUntil) {
+          h.speed = 0;
+          h.yaw = wrapAngle(h.yaw + this.sweepDir * 1.6 * dt);
+          return;
+        }
+        if (!h.target) h.target = this.pickSearchPoint(ctx);
+        if (this.travel(ctx, h.target, speed, dt, 0.6)) {
+          h.target = null;
+          this.sweepDir = ctx.rng.chance(0.5) ? 1 : -1;
+          this.searchPauseUntil = t + ctx.rng.range(0.8, 1.6);
+        }
+        return;
+      }
+      case 'CHASE': {
+        const lostFor = t - this.lastSeenT;
+        if (!seen && this.windupUntil === -Infinity && (lostFor >= T.hyde.chaseLossS || this.isDistracted(t) || invulnerable)) {
+          this.startSearch(ctx, h.lastKnown ?? { x: h.x, z: h.z }, 'lost_sight');
+          return;
+        }
+        const goal = seen || this.windupUntil > -Infinity ? { x: p.x, z: p.z } : (h.lastKnown ?? { x: p.x, z: p.z });
+        h.target = goal;
+        if (this.travel(ctx, goal, speed, dt, seen ? 0.3 : 0.8, seen)) h.speed = 0;
+        return;
+      }
+      case 'COOLDOWN': {
+        if (t >= this.cooldownUntil) {
+          this.patrolIndex = this.nearestPatrolIndex();
+          this.setMode(ctx, 'PATROL', 'cooldown_done');
+          return;
+        }
+        if (t < this.grabHoldUntil) {
+          h.speed = 0;
+          return;
+        }
+        this.followLoop(ctx, speed, dt);
+        return;
+      }
+    }
+  }
+
+  private followLoop(ctx: SimContext, speed: number, dt: number): void {
+    const pts = ctx.map.patrol;
+    if (pts.length === 0) {
+      this.h.speed = 0;
+      return;
+    }
+    const wp = pts[this.patrolIndex % pts.length];
+    this.h.target = { x: wp.x, z: wp.z };
+    if (this.travel(ctx, wp, speed, dt, ctx.tuning.hyde.waypointReachedM)) {
+      this.patrolIndex = (this.patrolIndex + 1) % pts.length;
+      this.planGoal = null;
+    }
+  }
+
+  private faceAndHold(ctx: SimContext, p: Vec2, dt: number): void {
+    this.h.speed = 0;
+    this.h.yaw = turnToward(this.h.yaw, yawTo(this.h.x, this.h.z, p.x, p.z), ctx.tuning.hyde.turnRatePerS * dt);
+  }
+
+  private pickSearchPoint(ctx: SimContext): Vec2 {
+    const c = this.searchCenter ?? { x: this.h.x, z: this.h.z };
+    const nav = ctx.hydeNav();
+    const comp = nav.componentAt(this.h, 2);
+    for (let i = 0; i < 6; i++) {
+      const a = ctx.rng.range(-Math.PI, Math.PI);
+      const r = ctx.rng.range(1.5, ctx.tuning.hyde.searchRadiusM);
+      const cand = nav.nearestWalkable({ x: c.x + Math.cos(a) * r, z: c.z + Math.sin(a) * r }, 2, comp);
+      if (cand) return cand;
+    }
+    return nav.nearestWalkable(c, 4, comp) ?? { x: this.h.x, z: this.h.z };
+  }
+
+  /**
+   * Walk toward `goal` along the nav grid at `speed`. Returns true once within `arrive` metres of the goal, or when the
+   * goal cannot be got closer to (unreachable / stuck).
+   */
+  private travel(ctx: SimContext, goal: Vec2, speed: number, dt: number, arrive: number, direct = false): boolean {
+    const h = this.h;
+    const t = ctx.t;
+    if (t - this.lastTravelT > dt * 2.5) {
+      this.stuckRefX = h.x;
+      this.stuckRefZ = h.z;
+      this.stuckRefT = t;
+    }
+    this.lastTravelT = t;
+    const d = Math.hypot(goal.x - h.x, goal.z - h.z);
+    if (d <= arrive) {
+      h.speed = 0;
+      return true;
+    }
+    const nav = ctx.hydeNav();
+    const goalMoved = !this.planGoal || Math.hypot(goal.x - this.planGoal.x, goal.z - this.planGoal.z) > 1.0;
+    const stale = h.mode === 'CHASE' && t - this.lastPlanT >= ctx.tuning.hyde.replanS;
+    if (direct && nav.lineWalkable(h, goal)) {
+      h.path = [{ x: goal.x, z: goal.z }];
+      this.planGoal = { x: goal.x, z: goal.z };
+    } else if (goalMoved || stale || h.path.length === 0) {
+      if (h.path.length === 0 && !goalMoved && !stale && t - this.lastPlanT < 0.5) {
+        h.speed = 0; // already at the closest reachable point to an unreachable goal
+        return true;
+      }
+      h.path = nav.findPath(h, goal) ?? [];
+      this.planGoal = { x: goal.x, z: goal.z };
+      this.lastPlanT = t;
+      if (h.path.length === 0) {
+        h.speed = 0;
+        return true;
+      }
+    }
+    let budget = speed * dt;
+    let moved = 0;
+    let guard = 0;
+    while (budget > 1e-6 && h.path.length > 0 && guard++ < 8) {
+      const wp = h.path[0];
+      const dx = wp.x - h.x;
+      const dz = wp.z - h.z;
+      const dd = Math.hypot(dx, dz);
+      if (dd < 0.05) {
+        h.path.shift();
+        continue;
+      }
+      const stepLen = Math.min(budget, dd);
+      const r = ctx.world.move(h.x, h.z, (dx / dd) * stepLen, (dz / dd) * stepLen, ctx.tuning.hyde.radius);
+      const actual = Math.hypot(r.x - h.x, r.z - h.z);
+      h.x = r.x;
+      h.z = r.z;
+      h.yaw = turnToward(h.yaw, yawTo(0, 0, dx, dz), ctx.tuning.hyde.turnRatePerS * dt);
+      moved += actual;
+      budget -= stepLen;
+      if (stepLen >= dd - 1e-6) h.path.shift();
+      if (actual < stepLen * 0.3) break;
+    }
+    h.speed = moved / Math.max(1e-6, dt);
+    if (t - this.stuckRefT >= 1.5) {
+      const progressed = Math.hypot(h.x - this.stuckRefX, h.z - this.stuckRefZ);
+      this.stuckRefX = h.x;
+      this.stuckRefZ = h.z;
+      this.stuckRefT = t;
+      if (progressed < 0.3 && speed > 0.3) {
+        h.path = [];
+        this.planGoal = null;
+        if (h.mode !== 'CHASE') return true;
+      }
+    }
+    if (h.path.length === 0 && Math.hypot(goal.x - h.x, goal.z - h.z) <= arrive + 0.3) return true;
+    return false;
+  }
+
+  /**
+   * The Hyde's predicted path for the next `seconds`, from its CURRENT plan only (no future perception): it follows
+   * the current nav path / target, then (in PATROL / COOLDOWN) the patrol loop. Used by the premonition effect.
+   */
+  predict(ctx: SimContext, seconds: number): Vec2[] {
+    const h = this.h;
+    const out: Vec2[] = [{ x: h.x, z: h.z }];
+    if (!this.active) return out;
+    let t = Math.max(0, h.stunnedUntil - ctx.t);
+    if (t >= seconds) return out;
+    const speed = Math.max(0.1, ctx.tuning.hyde.speed[h.mode] * (ctx.t < h.slowedUntil ? h.slowMult : 1));
+    const nav = ctx.hydeNav();
+    const legs: Vec2[] = [...h.path];
+    if (legs.length === 0 && h.target) legs.push(...(nav.findPath(h, h.target) ?? []));
+    let idx = this.patrolIndex;
+    let pos: Vec2 = { x: h.x, z: h.z };
+    let guard = 0;
+    while (t < seconds && guard++ < 64) {
+      if (legs.length === 0) {
+        if ((h.mode === 'PATROL' || h.mode === 'COOLDOWN') && ctx.map.patrol.length > 0) {
+          const wp = ctx.map.patrol[idx % ctx.map.patrol.length];
+          idx++;
+          legs.push(...(nav.findPath(pos, wp) ?? [wp]));
+          if (legs.length === 0) legs.push(wp);
+        } else break;
+      }
+      const next = legs.shift()!;
+      const d = Math.hypot(next.x - pos.x, next.z - pos.z);
+      const dtLeg = d / speed;
+      if (t + dtLeg > seconds) {
+        const f = (seconds - t) / dtLeg;
+        pos = { x: pos.x + (next.x - pos.x) * f, z: pos.z + (next.z - pos.z) * f };
+        out.push(pos);
+        break;
+      }
+      t += dtLeg;
+      pos = { x: next.x, z: next.z };
+      out.push(pos);
+    }
+    return out;
+  }
+}
+
+export function hidingRevealAt(ctx: SimContext, x: number, z: number): number | null {
+  for (const s of ctx.map.hidingSpots) if (Math.hypot(s.x - x, s.z - z) <= s.radius) return s.revealM;
+  return null;
+}
+
+function round2(x: number): number {
+  return Math.round(x * 100) / 100;
+}
+
+function round3(x: number): number {
+  return Math.round(x * 1000) / 1000;
+}

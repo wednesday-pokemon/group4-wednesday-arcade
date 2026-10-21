@@ -1,0 +1,6 @@
+@echo off
+rem Laptop 3 = Station B. Double-click to open the game kiosk (Alt+F4 exits).
+rem Extra options are passed through, e.g.:  start-station-b.cmd -Live   or   -BaseUrl https://raven.example.org
+rem Default URL: %RAVEN_BASE_URL% or http://localhost:4173  (start scripts\kiosk\serve-dist.cmd first).
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0launch-kiosk.ps1" -Role station_b %*
+if errorlevel 1 pause

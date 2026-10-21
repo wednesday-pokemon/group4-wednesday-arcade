@@ -70,6 +70,16 @@ export const SERVER_CODE_MAP: Readonly<Record<string, BackendErrorCode>> = {
   INVALID_TRANSITION: 'SERVER',
   MISCONFIGURED: 'SERVER',
   INTERNAL: 'SERVER',
+  // mystery-v3.1 (none retryable: re-sending the same request cannot succeed; refetch / restart the step instead)
+  NOT_SELECTED: 'WRONG_PHASE', // run endpoints called before a duo was selected
+  ALREADY_SELECTED: 'WRONG_PHASE', // the session's duo is fixed once chosen
+  DUO_NOT_OFFERED: 'INVALID_INPUT', // selection must be one of the three offered cards
+  STALE_EVENTS: 'STALE_REVISION', // event batch behind the server's last seq -> refetch canonical state
+  SEQ_CONFLICT: 'STALE_REVISION', // same (session, seq) with different content
+  EVENT_REJECTED: 'INVALID_INPUT', // event order / content failed server validation
+  RUN_NOT_FINISHED: 'WRONG_PHASE', // finalisation before deposit + accusation / DNF
+  TOO_MANY_EVENTS: 'INVALID_INPUT', // batch over the size limit
+  TEST_SEED_FORBIDDEN: 'UNAUTHORIZED', // fixed operator seeds need an operator account
 };
 
 /** Server codes the client may safely re-send with the same actionId. */

@@ -19,6 +19,7 @@ import { redactResolution, redactView } from '../../functions/_shared/redact.ts'
 import { jsonEqual } from '../../functions/_shared/validation.ts';
 // @ts-expect-error plain ESM helper without types
 import { bootDatabase } from './boot.mjs';
+import { runMysteryRoundtrip } from './mystery-roundtrip.ts';
 
 type Db = { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, any>[] }> };
 
@@ -203,6 +204,10 @@ const dbOrder = (await db.query('select session_id from public.verified_leaderbo
 check(jsonEqual(engineOrder, dbOrder), 'verified_leaderboard order == engine rankLeaderboard order');
 const dnfCount = (await db.query('select count(*)::int as n from public.defeated_log')).rows[0].n;
 check(dnfCount + dbOrder.length === finished.length, 'completed + dnf == finished');
+
+// mystery-v3.1: offers, event validation, finalize and standings through the real RPCs (also proves v2.5 is untouched)
+const mysterySummary = await runMysteryRoundtrip(db, Math.max(60, Math.round(RACES / 2)), check);
+console.log(mysterySummary);
 
 const summary = (await db.query(`select status, count(*)::int n from public.sessions group by 1 order by 1`)).rows;
 console.log(`races=${RACES} assertions=${assertions} sessions=${JSON.stringify(summary)} ranked=${dbOrder.length} dnf=${dnfCount}`);

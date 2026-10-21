@@ -1,4 +1,4 @@
-# Security design — live/verified mode (rules v2.5)
+# Security design — live/verified mode (rules v2.5 and mystery-v3.1, see §7)
 
 Scope: Supabase backend in `supabase/**` (schema, RLS, RPCs, Edge Functions) and the client contract it
 exposes. LOCAL DEMO mode is explicitly **unverified** and never writes to the leaderboard.
@@ -129,3 +129,122 @@ flowchart LR
 * **Nicknames are not profanity-filtered.** Moderation is a manual delete (SUPABASE_SETUP §10).
 * **Not executed against real Supabase.** See the validation note in the delivery report: SQL ran on PGlite
   (Postgres 18 WASM) with a Supabase-compat layer; functions were type-checked, not run under Deno.
+
+---
+
+## 7. Mystery v3.1 "The Silent Evidence" (rules `mystery-v3.1`)
+
+Additive backend: `supabase/migrations/20261021000500..800`, functions `mystery-*`, `admin-reset` (`scope`). Setup and
+client contract: `docs/SUPABASE_SETUP.md` §12. Status: tested offline (PGlite + Vitest + round-trip); **not deployed**.
+
+### 7.1 What changed in the trust model
+
+In v2.5 the server *was* the game: the client sent decisions, the server rolled every outcome from a secret seed.
+In v3.1 the browser runs a 60 Hz real-time simulation (movement, collision, Hyde hearing/sight/chase, catches) and the
+server receives **events**, not inputs. The server is therefore authoritative only for what it can derive:
+
+| Authoritative on the server | Browser-controlled (validated for shape/order only) |
+|---|---|
+| caller identity + station binding (JWT → `app_users`) | where the player walked, whether they were really near a clue / the tower |
+| seed issuance (`crypto.getRandomValues`, 128 bit) | the sim time `t` of each event (active seconds) |
+| the three cards (`draftOffer(seed)`, stored before the client sees them) | whether/when the Hyde caught the player, HP |
+| selection ∈ stored offer | which cosmetic events are sent (noise, stance, ability use) |
+| egg tier (from the seed) and its points | egg security values |
+| event order rules (clues unique/valid, pickup → delivery → accusation → finish, ≤ 1 terminal) | |
+| verdict (shared `verdictFor`) and score (shared `scoreFor`), recomputed at finalize | |
+| one immutable result per session; rules-version partition; test runs never ranked | |
+
+```mermaid
+flowchart LR
+  K[Kiosk browser<br/>MysteryRun sim, station JWT] -- "create / select / append(events) / finalize" --> F[mystery-* Edge Functions]
+  F -- "draftOffer(seed), eggTierForSeed, verdictFor, scoreFor<br/>(_shared/mystery = byte copy of src/mystery)" --> F
+  F -- "service role -> SECURITY DEFINER RPCs" --> DB[(mystery_* tables, RLS)]
+  DB -- "Realtime: mystery_station_status, mystery_results" --> D[Dashboard anon / operator]
+```
+
+### 7.2 Data classification (new data)
+
+| Data | Where | Who can read |
+|---|---|---|
+| Seed | `mystery_sessions.seed` | owning station (the sim needs it), operator; never anon, never Realtime |
+| Offered cards | `mystery_offered_duos` | owning station, operator |
+| Gameplay events, clue events | `mystery_events`, `mystery_clue_events` | owning station, operator |
+| Forecasts / recommendations | `mystery_forecasts`, `mystery_recommendations` | owning station, operator |
+| Receipts | `mystery_session_actions` | operator |
+| Verified results, live status | `mystery_results` (+ views), `mystery_station_status` | everyone (anon), Realtime; `is_test` rows operator-only |
+
+No personal data beyond the visitor-chosen nickname (3–15 chars, sanitized, CHECK-constrained). Keyboard input and
+per-frame state are never stored (events only; the 1 Hz snapshots stay in the browser).
+
+### 7.3 Threat model (mystery)
+
+| ID | Threat | Mitigation | Verified by |
+|---|---|---|---|
+| M-01 | **Forged / favourite cards** (client invents its offer or picks any of the 126 pairs) | Server issues the seed and stores `draftOffer(seed)` at create, after a sanity check (3 cards, valid ids, distinct pairs, stats 1–5, seed match); select must match a stored card; composite FK `(id, selected_slot)` → offered row; unique (session, slot) and (session, character, pokemon) | 005 "select: a pair that was not offered", "mixing character and Pokemon of two cards"; 004 duplicate-pair offer refused; unit "sanity check refuses tampered offers"; round-trip "stored offer == draftOffer(seed)" |
+| M-02 | **Offer / egg rerolling** (refresh until a good offer or a legendary egg) | Refresh = same `actionId` → the same session and offer (replay); a new offer needs a new session, which supersedes the open one (abandoned, unranked, audited) and is rate-limited (6/min/station) | 005 create replay / supersede / RATE_LIMITED; round-trip refresh check |
+| M-03 | **Egg tier / points inflation** | Delivered tier must equal `eggTierForSeed(seed)` (same tuning object as the sim) and points must equal the tier's points; SQL CHECK `egg_points ∈ {0,1,3,6}` and `score = egg_points × 100 − active_time_s` | unit `egg_tier`, `egg_points`, SQL-CHECK parity sweep (60 000 cases); 004 score CHECK |
+| M-04 | **Verdict tampering** (claim "case solved") | Verdict, `correct` and accused are recomputed from validated `clue_found` + `accusation` events with the shared `verdictFor`; client claims stored in `client_claim`, mismatch flagged (`claim_matches = false`, warn log); CHECK `case_solved ⇒ correct ∧ 3 clues` | unit "client claims are recorded and compared, never trusted"; 004 solved-requires-three-clues |
+| M-05 | **Order cheats** (accuse before delivering, deliver without pickup, same clue twice, two finishes, events after the end, catch after deposit) | Pure validator (`_shared/mystery-events.ts`) rejects the whole batch (422 `EVENT_REJECTED {seq, rule}`); DB backstops: unique (session, seq), one finish/dnf, one accusation, one delivery, unique clue per session, monotonic seq/t re-checked in SQL | unit "event order rules" (all rules); 004/005 backstops; round-trip corrupt streams |
+| M-06 | **Replay / duplicate / divergent resend** | (session, seq) unique; a resent event is ignored only if byte-identical to the stored one, otherwise 409 `SEQ_CONFLICT`; optimistic concurrency on `last_seq` (`STALE_EVENTS`, auto-retried) | unit "resend dedupe"; 005 STALE_EVENTS / seq-below-last; round-trip resends store nothing twice |
+| M-07 | **Double finalization / result edits** | `mystery_results` PK = session; a second finalize returns the stored row (`replay`); immutability trigger; finalize re-validates every stored rule event from scratch and cross-checks it with the incremental state | 005 "second call returns the SAME stored row", "exactly one result row", immutable; round-trip |
+| M-08 | **Cross-station access** | Station from JWT only (bodies have no station field; unknown keys → 422); every RPC re-checks `station_id`; RLS own-station-or-operator on every detail table; other station's ids → 404 | 004 station A/B isolation, unprovisioned user; unit "rejects stationId in body" |
+| M-09 | **Storage / CPU abuse** | 256 KB body, ≤ 500 events and ≤ 50 forecasts/recommendations per call, ≤ 20 000 events per session, strict payload schemas, string caps, 6 creates/min/station | unit parser tests; 005 RATE_LIMITED |
+| M-10 | **Test data on the public board** | `testSeed` accepted only with server secret `MYSTERY_ALLOW_TEST_SEEDS=true` (403 otherwise); `is_test` rows excluded from all views and from the anon policy | 005 "test-seed run is stored but never ranked"; unit TEST_SEED_FORBIDDEN |
+| M-11 | **Back-filled predictions** (analytics honesty) | Forecast rows are immutable at issue (resend ignored); `model_label ∈ {ml, rule_based}`; recommendation `accepted/outcome` are fill-only | 005 forecast/recommendation tests |
+| M-12 | **Browser/server rule drift** (different offers, tiers or verdicts) | `npm run sync:shared` copies the pure modules byte-for-byte (fails on impure code or out-of-tree imports); identity test; redeploy after every sync | `supabase/tests/unit/shared-identity.test.ts` |
+| M-13 | **Privilege drift** | Same REVOKE-then-grant pattern; structural tests on RLS, policies, RPC EXECUTE, security_invoker views, exact Realtime publication list | 004 structure block; 001 publication assertion |
+| M-14 | **v2.5 contamination** | Separate tables/views/RPCs; no v2.5 object altered; mystery rows can never reach `leaderboard_entries` | 005 "v2.5 … untouched"; round-trip v2.5 snapshot check |
+
+### 7.4 Practical anti-cheat limits (browser-controlled movement)
+
+Be explicit with the team and visitors: **mystery scores are "server-verified for consistency", not cheat-proof.**
+A person with devtools on a signed-in kiosk can post a fabricated but rule-consistent event stream, for example three
+`clue_found`, `egg_pickup`, `egg_delivered` at `t = 40`, a correct accusation and `finish`. The server would accept it
+and rank it (score up to `6 × 100 − 40` only if the seed's egg is legendary). The server **cannot** detect this because
+it never sees inputs or positions.
+
+What a cheater **cannot** do: choose or forge cards, change the egg tier or points, claim a verdict that the submitted
+clues/accusation do not support, publish twice or edit a result, write for the other station, touch the v2.5 board,
+or make a DNF rank above a finisher.
+
+Operational mitigations for the event: kiosk/fullscreen mode, staff at the stations, station accounts only on the kiosks
+(sign out afterwards), Realtime dashboard visibility of every run, operator deletion of suspicious results
+(`docs/SUPABASE_SETUP.md` §12.5). `received_at` per event lets an operator compare wall-clock arrival with the claimed
+active time.
+
+Post-event hardening options (not implemented): (1) a plausibility floor — minimum active time derived from map path
+lengths and the duo's max speed; (2) **full server re-simulation** — the sim is deterministic per seed at a fixed 60 Hz
+step, so sending the compact per-step input stream instead of events would let the server replay the run with the same
+`MysteryRun` and derive every event itself (cost: bandwidth and Deno CPU per run).
+
+### 7.5 Deviations from the brief (with justification)
+
+1. **The seed is not secret** (unlike v2.5): the browser simulation needs it. It is still server-issued, stored before
+   use and bound to the offer, so it cannot be chosen.
+2. **Separate `mystery_*` tables** instead of reusing `sessions`/`station_status`: the v2.5 tables have v2.5-specific
+   CHECKs and FKs; reusing them would require ALTERs on deployed objects.
+3. **Extra function `mystery-get-session`** for refresh/reconnect (returns the stored offer and `lastSeq`).
+4. **Natural idempotency** for select and finalize (no `actionId`): same choice → replay; finalize always returns the one
+   stored result. `actionId` is kept for create, where it distinguishes "retry" from "new visitor".
+5. **`admin-reset` default `scope: "all"`** resets both games on the station; a mystery-only reset writes its audit row
+   with note prefix `[mystery]` (the v2.5 `operator_audit.action` CHECK is not altered).
+6. **`hp` is not stored** in `mystery_results`: it is not derivable from events (heals are not emitted). Catches are.
+7. **Forecasts and recommendations ride on `mystery-append-events`** (no extra endpoints; one in-flight queue).
+8. **`001` publication assertion updated** to the new exact list (the invariant "exact allow-list" is unchanged).
+9. **Sim time stored as `double precision`** so `round1(t)` on the server equals the browser's value bit-for-bit.
+
+### 7.6 Observability (mystery)
+
+Same JSON request logs (`fn`, `requestId`, `status`, `durationMs`) plus `mystery_session_created`,
+`mystery_duo_selected`, `mystery_events_appended` (accepted/duplicates/lastSeq), `mystery_stale_retry`,
+`mystery_finalized` (outcome, score, verdict, `claimMatches`; warn when false) and `mystery_progress_mismatch` (error:
+stored events vs stored state disagree — investigate). Suggested alerts: any `INVALID_TRANSITION` or
+`mystery_progress_mismatch`; `EVENT_REJECTED` rate > 5 % of append calls (sim/validator drift after a deploy);
+`claimMatches=false` on more than an occasional run.
+
+## 7.5 Mystery station heartbeat (added 2026-10-21, live client)
+Each kiosk broadcasts an ephemeral Realtime heartbeat every 2 s on the public topic `raven-mystery-live` so Laptop 1 can show
+"Signal lost" after 15 s without traffic (table rows only change when data arrives, which would falsely flag the tutorial,
+card or pause screens). The payload carries only enums and clamped numbers; names, duos, scores and standings shown on the
+board always come from server rows. The topic is spoofable with the anon key, but only cosmetically: forged payloads are
+dropped or clamped and never rendered (tests/integration/mysteryBoard.test.ts).

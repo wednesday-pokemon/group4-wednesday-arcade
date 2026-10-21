@@ -90,8 +90,8 @@ select ok(not has_schema_privilege('anon', 'private', 'USAGE'), 'anon has no usa
 select is(
   (select array_agg(tablename::text order by tablename) from pg_publication_tables
    where pubname = 'supabase_realtime' and schemaname = 'public'),
-  array['leaderboard_entries', 'station_status'],
-  'supabase_realtime publishes exactly station_status and leaderboard_entries from public');
+  array['leaderboard_entries', 'mystery_results', 'mystery_station_status', 'station_status'],
+  'supabase_realtime publishes exactly the sanitized projections (v2.5 station_status/leaderboard_entries + mystery-v3.1 mystery_station_status/mystery_results)');
 select ok(not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime'
                       and tablename in ('sessions', 'session_secrets', 'leg_results', 'session_actions')),
   'sessions/secrets/leg_results/actions are never published');

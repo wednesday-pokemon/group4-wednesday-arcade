@@ -6,16 +6,33 @@ export interface Settings {
   reducedMotion: boolean;
   highContrast: boolean;
   lowGraphics: boolean;
+  /** Mystery look sensitivity 1–10 (5 = default; UX_MYSTERY §7). */
+  lookSensitivity: number;
+  invertY: boolean;
+  /** Crouch key toggles (default, UX ruling) instead of hold. */
+  crouchToggle: boolean;
+  /** Captions are always on (UX §7); only their size is a choice. */
+  captionSize: 'normal' | 'large';
+  /** Show the HUD risk estimate chip (Phase 4). */
+  showRisk: boolean;
+  /** Reduced motion follows the system unless forced. */
+  motionPref: 'system' | 'on' | 'off';
 }
 
 const KEY = 'raven-regatta:settings:v1';
+
+/** Per-visitor preferences, reset on "New investigation" (UX_MYSTERY §7). */
+export const VISITOR_DEFAULTS = { lookSensitivity: 5, invertY: false, crouchToggle: true, captionSize: 'normal', showRisk: true } as const satisfies Partial<Settings>;
 
 function prefersReducedMotion(): boolean {
   return typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 function load(): Settings {
-  const defaults: Settings = { muted: false, reducedMotion: prefersReducedMotion(), highContrast: false, lowGraphics: false };
+  const defaults: Settings = {
+    muted: false, reducedMotion: prefersReducedMotion(), highContrast: false, lowGraphics: false,
+    ...VISITOR_DEFAULTS, motionPref: 'system',
+  };
   try {
     const raw = localStorage.getItem(KEY);
     return raw ? { ...defaults, ...(JSON.parse(raw) as Partial<Settings>) } : defaults;
@@ -29,6 +46,7 @@ const listeners = new Set<() => void>();
 
 function applyClasses(s: Settings): void {
   const root = document.documentElement.classList;
+  root.toggle('captions-large', s.captionSize === 'large');
   root.toggle('reduced-motion', s.reducedMotion);
   root.toggle('high-contrast', s.highContrast);
   root.toggle('low-graphics', s.lowGraphics);
@@ -48,6 +66,16 @@ export function updateSettings(patch: Partial<Settings>): void {
   }
   applyClasses(current);
   listeners.forEach((l) => l());
+}
+
+/** Reduced-motion choice: System follows prefers-reduced-motion; On/Off force it. */
+export function setMotionPref(pref: Settings['motionPref']): void {
+  updateSettings({ motionPref: pref, reducedMotion: pref === 'system' ? prefersReducedMotion() : pref === 'on' });
+}
+
+/** "New investigation": the next visitor starts from the kiosk defaults for look / crouch / captions / risk chip. */
+export function resetVisitorSettings(): void {
+  updateSettings({ ...VISITOR_DEFAULTS });
 }
 
 export function useSettings(): Settings {

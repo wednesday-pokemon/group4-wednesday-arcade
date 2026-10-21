@@ -17,6 +17,18 @@ interface SplashProps {
   steps?: { title: string; body: string }[];
   footnote?: string;
   startLabel?: string;
+  /** Mystery v3.1: subtitle under the title (default: the legacy "The Hyde’s Regatta"). */
+  subtitle?: string;
+  /** Mystery v3.1: one-line tagline under the subtitle. */
+  tagline?: string;
+  /** Mystery v3.1: emblem slot (Thing) shown above the title. */
+  emblem?: ReactNode;
+  /** Mystery v3.1: small caps line above the title (e.g. "Pokémon Day III · Halloween Arcade"). */
+  kicker?: string;
+  /** Accessible name for the steps list (mystery: the tagline verbatim). */
+  stepsLabel?: string;
+  /** The "Press F for fullscreen" toast (false in the mystery journey: F is the character power). */
+  fullscreenHint?: boolean;
 }
 
 function useNeedsFullscreenHint(): boolean {
@@ -34,7 +46,10 @@ function useNeedsFullscreenHint(): boolean {
   return needs;
 }
 
-export function Splash({ stationName, mode, tools, notice, restoring, onStart, steps = TUTORIAL_STEPS, footnote, startLabel }: SplashProps) {
+export function Splash({
+  stationName, mode, tools, notice, restoring, onStart, steps = TUTORIAL_STEPS, footnote, startLabel, subtitle, tagline, emblem,
+  kicker, stepsLabel, fullscreenHint = true,
+}: SplashProps) {
   const h1 = useRef<HTMLHeadingElement>(null);
   const start = useRef<HTMLButtonElement>(null);
   const needsFullscreen = useNeedsFullscreenHint();
@@ -53,11 +68,16 @@ export function Splash({ stationName, mode, tools, notice, restoring, onStart, s
         {tools}
       </header>
       <div className="splash__col">
-        <h1 ref={h1} tabIndex={-1} className="title splash__title">
-          Escape from <span className="splash__title-2">Raven Island</span>
-        </h1>
-        <p className="splash__subtitle">The Hyde’s Regatta</p>
-        <ol className="splash__steps">
+        <div className={emblem ? 'splash__brand' : undefined}>
+          {emblem}
+          {kicker && <p className="caps splash__kicker">{kicker}</p>}
+          <h1 ref={h1} tabIndex={-1} className="title splash__title">
+            Escape from <span className="splash__title-2">Raven Island</span>
+          </h1>
+        </div>
+        <p className="splash__subtitle">{subtitle ?? 'The Hyde’s Regatta'}</p>
+        {tagline && <p className="splash__tagline" data-testid="splash-tagline">{tagline}</p>}
+        <ol className="splash__steps" aria-label={stepsLabel}>
           {steps.map((step, i) => (
             <li key={step.title} className="splash__step" style={{ animationDelay: `calc(var(--stagger) * ${i + 2})` }}>
               <span className="splash__step-num" aria-hidden="true">{i + 1}</span>
@@ -91,7 +111,7 @@ export function Splash({ stationName, mode, tools, notice, restoring, onStart, s
         </div>
         {mode === 'local_demo' && <p className="caps splash__demo">Local demo: scores aren’t verified or ranked live</p>}
       </div>
-      {needsFullscreen && (
+      {fullscreenHint && needsFullscreen && (
         <div className="toast toast--info splash__toast" role="status">
           <Icon name="maximize" />
           Press <kbd>F</kbd> for fullscreen

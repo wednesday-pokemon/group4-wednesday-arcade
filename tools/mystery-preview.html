@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Raven Island - Mystery renderer preview</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #05060f; color: #dfe4ff; font: 13px system-ui, sans-serif; }
+    #wrap { display: flex; flex-direction: column; height: 100%; }
+    #stage { flex: 1; min-height: 0; position: relative; }
+    #bar { padding: 6px 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: #10132b; border-top: 1px solid #2a2f66; }
+    #bar button { background: #232857; color: #dfe4ff; border: 1px solid #4a4f99; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+    #bar button:hover { background: #34399a; }
+    #log { font-family: ui-monospace, monospace; font-size: 11px; color: #9fb0ff; }
+    body.shot #bar { display: none; }
+    #emblems { display: none; flex-wrap: wrap; gap: 10px; padding: 12px; background: #1a1d3a; }
+    #emblems figure { margin: 0; text-align: center; font-size: 12px; }
+    #emblems img { width: 220px; height: 220px; background: #2a2e5a; border-radius: 8px; display: block; }
+    body.emblems #emblems { display: flex; }
+    body.emblems #wrap { display: none; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="stage"></div>
+    <div id="bar"></div>
+  </div>
+  <div id="emblems"></div>
+  <script type="module" src="./mystery-preview.ts"></script>
+</body>
+</html>

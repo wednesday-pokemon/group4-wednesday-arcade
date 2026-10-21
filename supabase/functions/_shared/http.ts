@@ -25,12 +25,13 @@ function jsonResponse(body: unknown, status: number, headers: Record<string, str
   });
 }
 
-export async function readJson(req: Request): Promise<unknown> {
+/** Reads a JSON body capped at `maxBytes` (default 4 KB; mystery-append-events passes a larger cap). */
+export async function readJson(req: Request, maxBytes: number = MAX_BODY_BYTES): Promise<unknown> {
   const declared = Number(req.headers.get('content-length') ?? '0');
-  if (declared > MAX_BODY_BYTES) throw new HttpError('PAYLOAD_TOO_LARGE', `Body exceeds ${MAX_BODY_BYTES} bytes`);
+  if (declared > maxBytes) throw new HttpError('PAYLOAD_TOO_LARGE', `Body exceeds ${maxBytes} bytes`);
   const text = await req.text();
-  if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) {
-    throw new HttpError('PAYLOAD_TOO_LARGE', `Body exceeds ${MAX_BODY_BYTES} bytes`);
+  if (new TextEncoder().encode(text).length > maxBytes) {
+    throw new HttpError('PAYLOAD_TOO_LARGE', `Body exceeds ${maxBytes} bytes`);
   }
   return parseJsonText(text);
 }

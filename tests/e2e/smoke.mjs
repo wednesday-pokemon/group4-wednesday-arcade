@@ -3,7 +3,8 @@
 // Usage:  node tests/e2e/smoke.mjs              (starts `npx vite --port 5180 --strictPort` itself)
 //         E2E_URL=http://localhost:5180 node tests/e2e/smoke.mjs   (uses an already running server)
 // The legacy v2.5 race runs at `/?legacy=1` (LOCAL DEMO; plain `/` is the v3 journey, covered by v3-stage1.mjs).
-// Board assertions use `?mode=dashboard&demo=1`; plain `?mode=dashboard` is
+// Board assertions use `?mode=dashboard&legacy=1&demo=1` (the v2.5 demo board; `demo=1` alone is now the mystery
+// dashboard); plain `?mode=dashboard` is
 // live when .env is configured, so it is only screenshotted (its console errors are reported, not failed on).
 //
 // Plays one full legacy LOCAL DEMO race with keyboard + mouse (splash -> nickname -> captain -> Pokemon -> confirm ->
@@ -207,7 +208,7 @@ async function main() {
     const dash = await context.newPage();
     watchConsole(dash, 'dashboard');
     await dash.setViewportSize({ width: 1366, height: 768 });
-    await dash.goto(`${BASE}/?mode=dashboard&demo=1`);
+    await dash.goto(`${BASE}/?mode=dashboard&legacy=1&demo=1`);
     await dash.waitForSelector('[data-testid="screen-dashboard"]');
     await sleep(800);
     const board = await state(dash);
@@ -228,7 +229,7 @@ async function main() {
     const liveCtx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
     const livePage = await liveCtx.newPage();
     watchConsole(livePage, 'dashboard-live', true);
-    await livePage.goto(`${BASE}/?mode=dashboard`);
+    await livePage.goto(`${BASE}/?mode=dashboard&legacy=1`);
     await livePage.waitForSelector('[data-testid="screen-dashboard"], [data-testid="screen-gate"]', { timeout: 15000 });
     await sleep(4000);
     const liveText = await livePage.evaluate(() => document.body.innerText.trim().length);
@@ -238,7 +239,7 @@ async function main() {
     // Live station URL: only screenshot the sign-in gate. Never sign in or create live sessions from the smoke.
     const stationPage = await liveCtx.newPage();
     watchConsole(stationPage, 'station-live', true);
-    await stationPage.goto(`${BASE}/?mode=terminal&station=station_a`);
+    await stationPage.goto(`${BASE}/?mode=terminal&station=station_a&legacy=1`);
     await stationPage.waitForSelector('[data-testid="screen-gate"], [data-testid="screen-splash"]', { timeout: 15000 });
     await sleep(1000);
     const gate = await stationPage.$('[data-testid="screen-gate"]');
@@ -259,7 +260,7 @@ async function main() {
     // Operator reset from the dashboard tab ends the terminal's race with a clear notice.
     const dash2 = await big.context.newPage();
     watchConsole(dash2, 'dashboard-reset');
-    await dash2.goto(`${BASE}/?mode=dashboard&demo=1`);
+    await dash2.goto(`${BASE}/?mode=dashboard&legacy=1&demo=1`);
     await dash2.click('[data-testid="btn-operator"]');
     await dash2.click('[data-testid="btn-reset-demo"]');
     await dash2.click('[data-testid="confirm-ok"]');

@@ -176,6 +176,8 @@ export interface AdminResetBody {
   stationId: StationId;
   reason: string; // sanitized free-text operator note (audit)
   actionId: string;
+  /** Which game to reset on the station: 'all' (default) = v2.5 session + mystery-v3.1 session. */
+  scope: 'all' | 'legacy' | 'mystery';
 }
 
 export function sanitizeNote(raw: string): string {
@@ -184,12 +186,14 @@ export function sanitizeNote(raw: string): string {
 
 export function parseAdminReset(raw: unknown): AdminResetBody {
   const body = asObject(raw);
-  onlyKeys(body, ['stationId', 'reason', 'actionId']);
+  onlyKeys(body, ['stationId', 'reason', 'actionId', 'scope']);
   if (!isStationId(body.stationId)) invalid('stationId', 'stationId must be "station_a" or "station_b"');
   if (typeof body.reason !== 'string' || body.reason.length > 400) invalid('reason', 'reason must be a short string');
   const note = sanitizeNote(body.reason);
   if (note.length < 3 || note.length > 200) invalid('reason', 'reason must be 3-200 characters');
-  return { stationId: body.stationId, reason: note, actionId: actionId(body) };
+  const scope = body.scope ?? 'all';
+  if (scope !== 'all' && scope !== 'legacy' && scope !== 'mystery') invalid('scope', 'scope must be "all", "legacy" or "mystery"');
+  return { stationId: body.stationId, reason: note, actionId: actionId(body), scope };
 }
 
 // ------------------------------------------------------------------------------------------------
