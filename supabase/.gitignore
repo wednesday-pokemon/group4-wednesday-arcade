@@ -1,0 +1,9 @@
+# Supabase CLI local state
+.branches
+.temp
+# Local secrets for `supabase functions serve` / provisioning — never commit
+.env
+.env.*
+functions/.env
+# Offline test toolchain (PGlite + pgTAP download), see tests/offline/run-pglite.mjs
+.cache/

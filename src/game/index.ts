@@ -1,0 +1,10 @@
+// Public barrel for the shared game domain (rules v2.5). Same files run unmodified in Deno Edge Functions.
+export * from './types.ts';
+export * from './constants.ts';
+export * from './random.ts';
+export * from './abilities.ts';
+export * from './rules.ts';
+export * from './session.ts';
+export * from './scoring.ts';
+export * from './simulation.ts';
+export * from './validation.ts';

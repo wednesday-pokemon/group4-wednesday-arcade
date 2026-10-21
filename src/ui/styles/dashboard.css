@@ -1,0 +1,98 @@
+/* Laptop 1 dashboard — 60/40 top row, three panels below, operator drawer on the right. */
+.dashboard {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) 11.25rem;
+  grid-template-areas:
+    'head head head head head'
+    'board board board stations stations'
+    'recent recent defeated defeated today';
+  gap: var(--gutter);
+  background: radial-gradient(120% 90% at 50% 0%, var(--c-surface-1), var(--c-bg) 70%);
+}
+.dash-head { grid-area: head; display: flex; align-items: center; gap: var(--sp-4); min-height: 4rem; }
+.dash-head__title { font-size: var(--fs-xl); line-height: 1.1; }
+.dash-head__badges { display: flex; align-items: center; gap: var(--sp-3); margin-left: auto; }
+.dash-head__clock { font-size: var(--fs-lg); font-weight: var(--fw-bold); color: var(--c-text-2); }
+.dash-section-title { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.dash-empty { padding: var(--sp-5) 0; font-size: var(--fs-lg); }
+.dash-empty--italic { font-style: italic; color: var(--c-text-2); }
+
+.dash-board { grid-area: board; padding: var(--sp-4) var(--sp-5); min-height: 0; overflow: hidden; }
+.lb { width: 100%; table-layout: fixed; }
+.lb th { font-size: var(--fs-xs); color: var(--c-text-muted); text-transform: uppercase; letter-spacing: var(--tracking-caps); text-align: left; padding-bottom: var(--sp-2); }
+.lb th:nth-child(1) { width: 3.5rem; }
+.lb th:nth-child(3) { width: 4rem; }
+.lb th:nth-child(4) { width: 6.5rem; }
+.lb th:nth-child(5) { width: 7rem; }
+.lb th:nth-child(6) { width: 9rem; }
+.lb td { height: 2.75rem; border-top: 1px solid var(--c-border); vertical-align: middle; overflow: hidden; text-overflow: clip; }
+.lb .num-col { text-align: right; padding-right: var(--sp-3); }
+.lb__rank { font: var(--fw-bold) var(--fs-xl) / 1 var(--font-display); }
+.lb__rank--first { color: var(--c-lantern); }
+.lb__first { display: block; font: var(--fw-bold) var(--fs-xs) / 1 var(--font-body); }
+.lb__name { display: block; font-size: var(--fs-md); font-weight: var(--fw-bold); line-height: 1.1; }
+.lb__crew { display: block; font-size: var(--fs-xs); color: var(--c-text-2); line-height: 1.15; }
+.lb__score { font-size: var(--fs-lg); font-weight: var(--fw-bold); color: var(--c-lantern); }
+.lb__badges { display: flex; gap: var(--sp-1); justify-content: flex-end; }
+.lb tr.is-new td { animation: new-row 6s var(--ease-out) 1; }
+@keyframes new-row { from { background: var(--c-lantern-soft); } to { background: transparent; } }
+
+.dash-stations { grid-area: stations; display: grid; grid-auto-rows: minmax(0, 1fr); gap: var(--gutter); min-height: 0; }
+.station { padding: var(--sp-3) var(--sp-4); display: grid; align-content: start; gap: var(--sp-1); min-height: 0; overflow: hidden; }
+.station.is-stale { opacity: 0.6; }
+.station__head { display: flex; justify-content: space-between; align-items: center; }
+.station__name { font-size: var(--fs-xl); font-weight: var(--fw-bold); line-height: 1.1; }
+.station__crew { font-size: var(--fs-sm); }
+.station__idle { font-style: italic; font-size: var(--fs-lg); color: var(--c-text-2); padding: var(--sp-3) 0; }
+.station__legs { display: flex; gap: 4px; margin: var(--sp-1) 0; }
+.seg { flex: 1; text-align: center; font-size: var(--fs-xs); font-weight: var(--fw-bold); padding: 2px 0; border-radius: var(--r-sm); background: var(--c-surface-2); color: var(--c-text-muted); }
+.seg.is-done { background: var(--c-accent); color: var(--c-ink); }
+.seg.is-current { background: var(--c-lantern); color: var(--c-ink); }
+.station__stats { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); }
+.station__stats dt { display: flex; align-items: center; gap: 4px; font-size: var(--fs-xs); color: var(--c-text-muted); text-transform: uppercase; letter-spacing: var(--tracking-caps); font-weight: var(--fw-bold); }
+.station__stats dt .icon { width: 1em; height: 1em; }
+.station__stats dd { font-size: var(--fs-lg); font-weight: var(--fw-bold); }
+.station__stats .stat--warn dd { color: var(--c-warning); }
+.station__stats .stat--danger dd { color: var(--c-danger); }
+.station__foot { font-size: var(--fs-xs); }
+.badge--phase { color: var(--c-text-2); }
+.badge--phase-in_progress { color: var(--c-lantern); }
+.badge--phase-completed { color: var(--c-success); }
+.badge--phase-dnf { color: var(--c-danger); }
+
+.dash-mini { padding: var(--sp-3) var(--sp-4); min-height: 0; overflow: hidden; }
+[data-testid='recent-finishes'] { grid-area: recent; }
+[data-testid='defeated-log'] { grid-area: defeated; }
+[data-testid='today-stats'] { grid-area: today; }
+.dash-list { display: grid; gap: 2px; }
+.dash-list li { display: grid; grid-template-columns: 1fr auto auto; gap: var(--sp-3); font-size: var(--fs-sm); align-items: baseline; }
+.dash-list__name { font-weight: var(--fw-semi); font-size: var(--fs-md); }
+.today__runs { font-size: var(--fs-md); font-weight: var(--fw-semi); }
+.today__grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); margin: var(--sp-1) 0; }
+.today__grid dt { font-size: var(--fs-xs); }
+.today__grid dd { font-size: var(--fs-lg); font-weight: var(--fw-bold); }
+.route-mix { display: grid; gap: 2px; font-size: var(--fs-xs); }
+.route-mix__bar { display: block; height: 8px; border-radius: 4px; background: var(--c-accent); overflow: hidden; }
+.route-mix__bar > span { display: block; height: 100%; background: var(--c-success); }
+
+/* Operator drawer */
+.drawer-scrim { position: fixed; inset: 0; z-index: var(--z-overlay); background: var(--c-scrim); }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: var(--z-overlay); width: 26rem; padding: var(--sp-5);
+  border-radius: var(--r-lg) 0 0 var(--r-lg); background: var(--c-surface-1); display: grid; align-content: start; gap: var(--sp-4);
+  border-left: 3px solid var(--c-danger); animation: drawer-in var(--dur-3) var(--ease-out);
+}
+@keyframes drawer-in { from { transform: translateX(100%); } to { transform: none; } }
+.drawer__head { display: flex; justify-content: space-between; align-items: center; }
+.drawer__title { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-lg); }
+.drawer__actions { display: grid; gap: var(--sp-3); }
+.drawer__actions .btn { justify-content: flex-start; }
+
+.dash-problem { display: grid; gap: var(--sp-3); padding: var(--sp-4) 0; max-width: 40rem; }
+.dash-problem__title { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-lg); color: var(--c-danger); }
+
+/* Two stacked live station cards must fit 1366x768 without clipping the footer. */
+.station { gap: 2px; padding: var(--sp-2) var(--sp-4); }
+.station__name { font-size: var(--fs-lg); }
+.station__legs { margin: 2px 0; }
+.station__stats dd { font-size: var(--fs-md); }

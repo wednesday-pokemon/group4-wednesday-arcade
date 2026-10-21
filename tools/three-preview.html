@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Raven Regatta - 3D preview harness</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #05060f; color: #dfe4ff; font: 13px system-ui, sans-serif; }
+    #wrap { display: flex; flex-direction: column; height: 100%; }
+    #stage { flex: 1; min-height: 0; position: relative; }
+    #bar { padding: 6px 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: #10132b; border-top: 1px solid #2a2f66; }
+    #bar button { background: #232857; color: #dfe4ff; border: 1px solid #4a4f99; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+    #bar button:hover { background: #34399a; }
+    #bar .sep { width: 1px; height: 18px; background: #3a3f80; margin: 0 4px; }
+    #log { font-family: ui-monospace, monospace; font-size: 11px; color: #9fb0ff; max-width: 48ch; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="stage"></div>
+    <div id="bar"></div>
+  </div>
+  <script type="module" src="./three-preview.ts"></script>
+</body>
+</html>

@@ -1,0 +1,150 @@
+{
+  "modelVersion": "raven-vision-v2.5-1",
+  "rulesVersion": "v2.5",
+  "trainedOn": "simulated",
+  "createdAt": "2026-10-20T19:24:37.446Z",
+  "dataset": {
+    "attemptedRaces": 10000,
+    "observedLegRows": 29670,
+    "trainRaces": 8024,
+    "testRaces": 1976,
+    "seedPrefix": "raven-synthetic-v2.5",
+    "dnfRaces": 1199
+  },
+  "time": {
+    "features": [
+      "intercept",
+      "no_event_time_s",
+      "crash_p_x_crash_extra_s",
+      "collect_p_x_5s",
+      "catch_p_x_catch_extra_s",
+      "shortcut",
+      "leg2",
+      "leg3",
+      "currents",
+      "fog"
+    ],
+    "weights": [
+      -0.08355386064770749,
+      0.9992205648222454,
+      0.8716989880305784,
+      1.0373292586843004,
+      0.9503621267159402,
+      0.20264238561508632,
+      0.06821711581006287,
+      0.026865283785311892,
+      -0.051009242129278126,
+      -0.020639448826637034
+    ],
+    "testMae": 3.375615254196645,
+    "trainMae": 3.277199555711661,
+    "baselineMae": 5.5546128569803095,
+    "ruleBasedMae": 3.3713729928254295
+  },
+  "catch": {
+    "features": [
+      "intercept",
+      "rule_expected_catch_p",
+      "catch_p_no_crash",
+      "catch_p_with_crash",
+      "crash_p",
+      "shortcut",
+      "gap_start_100m",
+      "fog",
+      "leg2",
+      "leg3",
+      "prior_catches"
+    ],
+    "weights": [
+      -4.964080826367026,
+      1.4145257376087634,
+      1.4657734744531197,
+      1.2974203975032177,
+      0.8282756416424104,
+      2.635594669668117,
+      -0.22389596721313265,
+      0.11015009287257017,
+      0.06139608224826496,
+      0.011841999245117906,
+      -0.19491186741115568
+    ],
+    "testBrier": 0.10721810126208246,
+    "trainBrier": 0.1024938638572702,
+    "baselineBrier": 0.1547119245629235,
+    "ruleBasedBrier": 0.10735156903399426,
+    "testBaseRate": 0.19115134950461224,
+    "calibration": [
+      {
+        "lower": 0,
+        "upper": 0.1,
+        "count": 2580,
+        "meanPredicted": 0.005801203123497247,
+        "observedRate": 0
+      },
+      {
+        "lower": 0.1,
+        "upper": 0.2,
+        "count": 979,
+        "meanPredicted": 0.15423982633372774,
+        "observedRate": 0.16956077630234934
+      },
+      {
+        "lower": 0.2,
+        "upper": 0.3,
+        "count": 897,
+        "meanPredicted": 0.2558023534154489,
+        "observedRate": 0.2787068004459309
+      },
+      {
+        "lower": 0.3,
+        "upper": 0.4,
+        "count": 445,
+        "meanPredicted": 0.3435332011071576,
+        "observedRate": 0.30786516853932583
+      },
+      {
+        "lower": 0.4,
+        "upper": 0.5,
+        "count": 425,
+        "meanPredicted": 0.45039502607844656,
+        "observedRate": 0.48
+      },
+      {
+        "lower": 0.5,
+        "upper": 0.6,
+        "count": 82,
+        "meanPredicted": 0.5251565126287914,
+        "observedRate": 0.573170731707317
+      },
+      {
+        "lower": 0.6,
+        "upper": 0.7,
+        "count": 286,
+        "meanPredicted": 0.6464834782441845,
+        "observedRate": 0.6678321678321678
+      },
+      {
+        "lower": 0.7,
+        "upper": 0.8,
+        "count": 109,
+        "meanPredicted": 0.7427074313182618,
+        "observedRate": 0.6972477064220184
+      },
+      {
+        "lower": 0.8,
+        "upper": 0.9,
+        "count": 14,
+        "meanPredicted": 0.8016253305252808,
+        "observedRate": 0.7857142857142857
+      },
+      {
+        "lower": 0.9,
+        "upper": 1,
+        "count": 37,
+        "meanPredicted": 1,
+        "observedRate": 1
+      }
+    ]
+  },
+  "leakageCheck": "Features are computed before resolution from route, push, weather, pre-leg state and rule-engine probes with fixed draws; feature names screened for post-event terms; race-level split verified disjoint."
+}
