@@ -4,11 +4,13 @@
 //   * structure: known event type, typed payload, finite numbers, bounded strings, no extra top-level fields
 //   * ordering:  strictly increasing seq, non-decreasing t (active sim seconds)
 //   * rules:     clue ids valid and unique; egg_pickup before egg_drop/egg_delivered; delivered tier = seed tier and
-//                points = tier points; accusation only after egg_delivered, at most once; finish only after the
+//                points = tier points; accusation only after egg_delivered, at most once (≤ 5 cited evidence ids,
+//                kept raw here and sanitized by finalize with the shared caseLogic.sanitizeEvidence); finish only after the
 //                accusation; at most one terminal event (finish | dnf); nothing after it; catches numbered 1, 2;
 //                dnf 'second_catch' only after catch #2; no catch / dnf / clue after the deposit.
-// Claims the client makes (accusation.correct, finish.verdict/score) are NOT trusted: finalize recomputes them and
-// records whether they matched (mystery_results.claim_matches).
+// Claims the client makes (accusation.correct / deductionCorrect, finish.verdict/score) are NOT trusted: finalize
+// recomputes them from the session's case + the server's own answer key and records whether they matched
+// (mystery_results.claim_matches). The clue ids come from the SESSION'S case (RulesContext.clueIds).
 import type { ClueId, DnfReason, EggState, SuspectId, Verdict } from './mystery/types.ts';
 import { HttpError } from './errors.ts';
 import { jsonEqual } from './validation.ts';
@@ -32,6 +34,8 @@ export const MAX_T = 14400; // 4 h of ACTIVE play: far beyond any real run, reje
 export const MAX_SEQ = 10_000_000;
 export const MAX_BATCH_EVENTS = 500;
 export const MAX_STRING = 160;
+/** Evidence ids cited with one accusation (the deduction board offers three clues + two case-file notes). */
+export const MAX_EVIDENCE = 5;
 
 export interface RulesContext {
   clueIds: readonly ClueId[];
@@ -59,8 +63,14 @@ export interface MysteryProgress {
   eggSecurity: number;
   pickups: number;
   delivered: { seq: number; t: number; tier: LiveEggTier; points: number; security: number } | null;
-  /** suspectId null = the player left the case unsolved (verdict not_accused). */
-  accusation: { seq: number; t: number; suspectId: SuspectId | null; claimedCorrect: boolean; claimedClues: number } | null;
+  /**
+   * suspectId null = the player left the case unsolved (verdict not_accused). `evidence` is the RAW cited list (≤ 5
+   * short strings, unvalidated ids); finalize sanitizes it against the case. Claims are audit-only.
+   */
+  accusation: {
+    seq: number; t: number; suspectId: SuspectId | null; evidence: string[];
+    claimedCorrect: boolean; claimedClues: number; claimedDeduction: boolean;
+  } | null;
   catches: number;
   hpLost: number;
   sightings: number;
@@ -99,14 +109,15 @@ type Field =
   | { k: 'enum'; values: readonly string[] }
   | { k: 'str' }
   | { k: 'nstr' } // string or null
-  | { k: 'strs' };
+  | { k: 'strs'; max: number; len: number };
 
 const num = (min = -1e6, max = 1e6): Field => ({ k: 'num', min, max });
 const int = (min: number, max: number): Field => ({ k: 'int', min, max });
 const bool: Field = { k: 'bool' };
 const en = (...values: string[]): Field => ({ k: 'enum', values });
 const str: Field = { k: 'str' };
-const strs: Field = { k: 'strs' };
+const strs: Field = { k: 'strs', max: 16, len: 40 };
+const evidenceIds: Field = { k: 'strs', max: MAX_EVIDENCE, len: 40 };
 
 const NOISE_SOURCES = ['footstep', 'egg_drop', 'ability', 'interact', 'impact', 'decoy'];
 const STANCES = ['idle', 'walk', 'crouch', 'sprint'];
@@ -138,7 +149,10 @@ const SCHEMAS: Record<MysteryEventType, { fields: Record<string, Field>; strict:
   ability_used: { fields: { key: en('F', 'Q'), abilityId: str, kinds: strs, success: bool, detail: str }, strict: false },
   ability_denied: { fields: { key: en('F', 'Q'), reason: en('cooldown', 'no_target') }, strict: false },
   hint_requested: { fields: {}, strict: false },
-  accusation: { fields: { suspectId: { k: 'nstr' }, correct: bool, cluesFound: int(0, 3) }, strict: true },
+  accusation: {
+    fields: { suspectId: { k: 'nstr' }, correct: bool, cluesFound: int(0, 3), evidence: evidenceIds, deductionCorrect: bool },
+    strict: true,
+  },
   finish: { fields: { verdict: en(...VERDICTS), score: num(-1e6, 1e6) }, strict: true },
   dnf: { fields: { reason: en('second_catch', 'hp_depleted') }, strict: true },
 };
@@ -173,7 +187,9 @@ function checkField(seq: number, name: string, f: Field, v: unknown): void {
       if (v !== null && (typeof v !== 'string' || v.length > MAX_STRING)) bad('must be a short string or null');
       return;
     case 'strs':
-      if (!Array.isArray(v) || v.length > 16 || v.some((s) => typeof s !== 'string' || s.length > 40)) bad('must be a short list of strings');
+      if (!Array.isArray(v) || v.length > f.max || v.some((s) => typeof s !== 'string' || s.length > f.len)) {
+        bad(`must be a list of at most ${f.max} strings of at most ${f.len} characters`);
+      }
       return;
   }
 }
@@ -278,7 +294,11 @@ export function applyEvent(p: MysteryProgress, e: ParsedEvent, ctx: RulesContext
       if (p.accusation) reject(seq, 'accusation_duplicate', `event ${seq}: only one accusation per run`);
       const suspectId = payload.suspectId as SuspectId | null;
       if (suspectId !== null && !ctx.suspectIds.includes(suspectId)) reject(seq, 'suspect_unknown', `event ${seq}: unknown suspect id`);
-      p.accusation = { seq, t, suspectId, claimedCorrect: payload.correct as boolean, claimedClues: payload.cluesFound as number };
+      // (evidence cited with a null suspect is ignored by finalize, never an error: the run stays verifiable)
+      p.accusation = {
+        seq, t, suspectId, evidence: [...(payload.evidence as string[])], claimedCorrect: payload.correct as boolean,
+        claimedClues: payload.cluesFound as number, claimedDeduction: payload.deductionCorrect as boolean,
+      };
       break;
     }
     case 'catch': {

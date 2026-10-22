@@ -177,6 +177,7 @@ export class PredictiveService {
     const obj = x.snapshot.objective;
     if (obj === 'accuse' || obj === 'done') return null;
     if (part) return { seconds: Math.max(0, Math.round(linear(part, featureVector(part.features, x)) * 10) / 10), source: 'ml' };
+    // rule: walking time to the objective + a fixed 4 s for searching / picking up
     const d = x.context?.objectiveDistM;
     if (d === null || d === undefined) return null;
     return { seconds: Math.round((d / (DEFAULT_TUNING.player.walkSpeed * x.duo.walkSpeedMult) + 4) * 10) / 10, source: 'rule' };
@@ -217,7 +218,7 @@ export class PredictiveService {
   }
 }
 
-const INDICATOR = /^(room_|obj_|mode_|stance_|egg_|hidden$|occluded$|inFog$|hydeNeutralized$)/;
+const INDICATOR = /^(room_|case_|obj_|mode_|stance_|egg_|hidden$|occluded$|inFog$|hydeNeutralized$)/;
 
 function clampP(p: number): number {
   if (!Number.isFinite(p)) return 0.5;

@@ -3,10 +3,11 @@
 // too-close, objective, clues, egg, F/Q slots, interaction prompt, Thing line, directional sound captions, toasts.
 import type { EggTier } from '../../game/types.ts';
 import type {
-  AbilityDef, ClueId, EggState, GameEvent, HydeMode, NoiseSource, Objective, RunStatus, Stance,
+  AbilityDef, ClueDef, ClueId, EggState, GameEvent, HydeMode, NoiseSource, Objective, RunStatus, Stance,
 } from '../../mystery/types.ts';
 import type { Interactable, MysteryRunLike } from './runTypes.ts';
-import { clueTitleFallback, type SpokenLine } from './thingLines.ts';
+import { CASES } from '../../mystery/data/cases.ts';
+import type { SpokenLine } from './thingLines.ts';
 
 // ------------------------------------------------------------------------------------------------- noise meter
 
@@ -205,7 +206,7 @@ export interface AbilityHud {
   aimed: boolean;
 }
 
-export interface Toast { id: number; tone: 'danger' | 'lantern' | 'success' | 'info'; headline: string; sub: string | null; icon: 'claw' | 'shieldCheck' | 'fileText' | 'key' | 'sprout' | 'lock' }
+export interface Toast { id: number; tone: 'danger' | 'lantern' | 'success' | 'info'; headline: string; sub: string | null; icon: 'claw' | 'shieldCheck' | ClueDef['icon'] }
 
 export type HydeLevel = 0 | 1 | 2;
 export interface MysteryHudModel {
@@ -227,6 +228,8 @@ export interface MysteryHudModel {
     edgeAt: { x: number; y: number; rot: number } | null;
   };
   objective: Objective;
+  /** The objective sentence for this case (HUD top-left). */
+  objectiveText: string;
   clues: { found: readonly ClueId[]; total: number; order: ClueId[] };
   egg: { state: EggState; tier: Exclude<EggTier, 'none'> | null; points: number; security: number };
   power: AbilityHud;
@@ -244,7 +247,7 @@ export interface MysteryHudModel {
 
 export const OBJECTIVE_TEXT: Record<Objective, string> = {
   find_clues: 'Search the ruins for evidence',
-  find_egg: 'Find the egg in the Egg Chamber',
+  find_egg: 'Find the hidden egg',
   retrieve_egg: 'Your egg was dropped — pick it up (E)',
   deliver_egg: 'Carry the egg to Iago Tower',
   accuse: 'Name the culprit',
@@ -364,13 +367,16 @@ export function buildHud(run: MysteryRunLike, x: HudExtras): MysteryHudModel {
       edge: edgeAt !== null, edgeAt,
     },
     objective: run.objective(),
-    clues: { found: run.cluesFound, total: run.caseDef.clues.length || 3, order: run.caseDef.clues.map((c) => c.id) },
+    objectiveText: objectiveText(run),
+    clues: { found: run.cluesFound, total: run.caseDef.clues.length, order: run.caseDef.clues.map((c) => c.id) },
     egg: { state: run.egg.state, tier: eggKnown ? run.egg.tier : null, points: run.egg.points, security: run.egg.security },
     power: abilityHud('F', run.powerStatus(), x.power, x.now),
     move: abilityHud('Q', run.moveStatus(), x.move, x.now),
     prompt: prompt && {
       ...prompt,
-      warning: prompt.kind === 'tower' && found < 3 ? `You have ${found} of 3 clues — the case may stay unsolved.` : null,
+      warning: prompt.kind === 'tower' && found < run.caseDef.clues.length
+        ? `You have ${found} of ${run.caseDef.clues.length} clues — the case may stay unsolved.`
+        : null,
     },
     thing: x.thing ? { key: x.thing.key, text: x.thing.text, pose: x.thing.pose, why: x.thing.why } : null,
     captions: x.captions,
@@ -385,8 +391,16 @@ export function buildHud(run: MysteryRunLike, x: HudExtras): MysteryHudModel {
 /** Clue title for Thing/captions: the case text when available. */
 export function clueTitle(run: MysteryRunLike, id: string): string {
   const c = run.caseDef.clues.find((x) => x.id === id);
-  return c?.title ?? clueTitleFallback(id as ClueId);
+  return c?.title ?? id;
 }
 
-/** Clue type icon (UX §4: fileText / key / sprout — the type, never who). */
-export const CLUE_ICON: Record<ClueId, 'fileText' | 'key' | 'sprout'> = { transfer_note: 'fileText', master_key: 'key', greenhouse_trace: 'sprout' };
+/** The objective line for this run's case (the egg's hiding place differs per case). */
+export function objectiveText(run: MysteryRunLike): string {
+  const o = run.objective();
+  return o === 'find_egg' ? run.caseDef.egg.objective.replace(/\.$/, '') : OBJECTIVE_TEXT[o];
+}
+
+/** Clue type icon (UX §4: the KIND of evidence, never who), for the clues of every case. */
+export const CLUE_ICON = Object.fromEntries(
+  Object.values(CASES).flatMap((c) => c.clues.map((cl) => [cl.id, cl.icon] as const)),
+) as Record<ClueId, ClueDef['icon']>;

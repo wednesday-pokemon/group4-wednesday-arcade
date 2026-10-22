@@ -7,9 +7,10 @@
 //   results:      analytics.report()      → four analytics panels
 //   Supabase:     analytics.pendingBatch() → body for mystery-append-events; analytics.ackBatch(batch) after 200
 import type { MysteryRun } from '../run.ts';
-import type { Duo, StampedEvent } from '../types.ts';
+import type { CaseId, Duo, StampedEvent } from '../types.ts';
+import { clueCountFor, isCaseId } from './caseInfo.ts';
 import { describeCollector } from './descriptive.ts';
-import { diagnoseSession, topCauses } from './diagnostic.ts';
+import { diagnoseSession, failureReasons, topCauses } from './diagnostic.ts';
 import { duoNumbers, type DuoNumbers, type FeatureInput } from './features.ts';
 import { detectionTimes } from './labels.ts';
 import { PredictiveService, type ModelCard } from './predictive.ts';
@@ -46,7 +47,8 @@ export interface RiskPoint { t: number; p: number; band: RiskBand; detectedNow: 
 
 export interface ResultsAnalytics {
   descriptive: SessionReport;
-  diagnostic: DiagnosticReport & { top: DiagnosticItem[]; topPattern: DiagnosticItem | null };
+  /** `reasons` = why this run fell short: incorrect deduction / missed clues of the case + top stealth mistakes. */
+  diagnostic: DiagnosticReport & { top: DiagnosticItem[]; topPattern: DiagnosticItem | null; reasons: DiagnosticItem[] };
   predictive: {
     /** Exact panel line: "ML estimate · trained on simulated episodes · held-out Brier X (baseline Y)" or the rule-based line. */
     label: string;
@@ -82,11 +84,21 @@ export class MysteryAnalytics {
   private lastForecastBand: RiskBand | null = null;
   private ended = false;
   private readonly roomNames: Map<string, string>;
+  /** The case this session plays (from run.caseDef; null only for a run object without a case). */
+  readonly caseId: CaseId | null;
+  readonly caseVersion: number | null;
+  private readonly clueTotal: number;
 
   constructor(run: MysteryRun, o: MysteryAnalyticsOptions = {}) {
     this.roomNames = new Map(run.map.rooms.map((r) => [r.id as string, r.name]));
+    const caseDef = (run as Partial<Pick<MysteryRun, 'caseDef'>>).caseDef;
+    this.caseId = caseDef && isCaseId(caseDef.id) ? caseDef.id : null;
+    this.caseVersion = this.caseId && caseDef ? caseDef.version : null;
+    this.clueTotal = caseDef?.clues.length || clueCountFor(this.caseId);
     const factors = duoFactorsFromRun(run);
-    this.collector = new TelemetryCollector({ sessionId: o.sessionId ?? null, stationId: o.stationId ?? null, duo: { ...run.duo }, factors });
+    this.collector = new TelemetryCollector({
+      sessionId: o.sessionId ?? null, stationId: o.stationId ?? null, caseId: this.caseId, caseVersion: this.caseVersion, duo: { ...run.duo }, factors,
+    });
     this.duo = duoNumbers(factors);
     this.predictive = new PredictiveService(o.model ?? null);
     this.offered = (o.offered ?? []).map((d) => ({ ...d }));
@@ -131,7 +143,7 @@ export class MysteryAnalytics {
   }
 
   private featureInput(sample: TelemetrySample, prev: TelemetrySample | null): FeatureInput {
-    return { snapshot: sample.snapshot, prev: prev?.snapshot ?? null, context: sample.context, duo: this.duo };
+    return { snapshot: sample.snapshot, prev: prev?.snapshot ?? null, context: sample.context, duo: this.duo, caseId: this.caseId, clueTotal: this.clueTotal };
   }
 
   private sample(run: MysteryRun): void {
@@ -208,9 +220,10 @@ export class MysteryAnalytics {
     const events = this.collector.events;
     const descriptive = describeCollector(this.collector);
     const first = this.collector.samples[0]?.snapshot;
+    const result = this.collector.result;
     const diag = diagnoseSession(events, {
       initialStance: first?.stance, initialRoom: first?.roomId ?? null, factors: this.collector.meta.factors,
-      roomName: (id) => this.roomNames.get(id) ?? id,
+      roomName: (id) => this.roomNames.get(id) ?? id, caseId: this.caseId, result,
     });
     const card = this.predictive.modelCard();
     const rows = this.advice.map((r) => ({
@@ -220,7 +233,7 @@ export class MysteryAnalytics {
     }));
     return {
       descriptive,
-      diagnostic: { ...diag, top: topCauses(diag.causes, 3), topPattern: diag.patterns[0] ?? null },
+      diagnostic: { ...diag, top: topCauses(diag.causes, 3), topPattern: diag.patterns[0] ?? null, reasons: failureReasons(diag) },
       predictive: { label: card.resultsLabel, source: card.source, series: [...this.series], detections: detectionTimes(events), card },
       prescriptive: { engine: ENGINE_LABEL, rows, summary: summariseAdvice(this.advice) },
     };
@@ -231,10 +244,18 @@ export class MysteryAnalytics {
     const result = this.collector.result;
     return {
       sessionId: this.collector.meta.sessionId ?? 'local',
+      caseId: this.caseId,
+      caseVersion: this.caseVersion,
       duo: { ...this.collector.meta.duo },
       offered: this.offered.map((d) => ({ ...d })),
       events: this.collector.events,
-      result: result ? { outcome: result.outcome, verdict: result.verdict, activeTimeS: result.activeTimeS, score: result.score, cluesFound: [...result.cluesFound], catches: result.catches } : null,
+      result: result
+        ? {
+          outcome: result.outcome, verdict: result.verdict, activeTimeS: result.activeTimeS, score: result.score, cluesFound: [...result.cluesFound],
+          catches: result.catches, caseId: result.caseId, caseVersion: result.caseVersion, correct: result.correct,
+          deductionCorrect: result.deductionCorrect, eggPoints: result.eggPoints,
+        }
+        : null,
       recommendations: this.collector.recommendations.map((r) => ({ action: r.action, accepted: r.accepted, outcome: r.outcome })),
       forecasts: this.collector.forecasts.map((f) => ({ t: f.t, target: f.target, value: f.value, modelLabel: f.modelLabel })),
     };

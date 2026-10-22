@@ -1,14 +1,17 @@
 // Training-row schema for data/mystery/rows.csv: one row per 1 Hz snapshot of a simulated episode, holding every raw
 // input the FeatureInput needs (snapshot, previous distance, live context, duo numbers) plus the labels. The scripts
 // rebuild FeatureInputs from these rows with the same feature code the live service uses.
-import type { EggState, HydeMode, Objective, RoomId, Stance, StateSnapshot } from '../types.ts';
+import type { CaseId, EggState, HydeMode, Objective, RoomId, Stance, StateSnapshot } from '../types.ts';
+import { clueCountFor, isCaseId } from './caseInfo.ts';
 import { DUO_NUMBER_KEYS, type DuoNumbers, type FeatureInput } from './features.ts';
 import { anyWithin, DETECTION_HORIZON_S, detectionTimes, isProgressEvent } from './labels.ts';
 import type { SimEpisode } from './episodes.ts';
 import type { LiveContext } from './types.ts';
 
+// `session` must stay the first column (the generator groups shard output by it). `caseId` / `caseVersion` /
+// `clueTotal` identify the case of the episode (empty in pre-case files → legacy, 3 clues).
 export const ROW_COLUMNS = [
-  'session', 'duoIndex', 'characterId', 'pokemonId', 'profile',
+  'session', 'duoIndex', 'characterId', 'pokemonId', 'profile', 'caseId', 'caseVersion', 'clueTotal',
   't', 'roomId', 'stance', 'speed', 'hp', 'catches', 'hidden', 'eggState', 'eggSecurity', 'cluesFound', 'hydeMode',
   'hydeDistanceM', 'hydeOccluded', 'hydeSuspicion', 'recentNoise', 'powerReady', 'moveReady', 'objective',
   'prevHydeDistanceM',
@@ -57,6 +60,7 @@ export function episodeRows(ep: SimEpisode, meta: { duoIndex: number; profile: s
     }
     const r: Record<string, string> = {
       session: ep.seed, duoIndex: String(meta.duoIndex), characterId: ep.duo.characterId, pokemonId: ep.duo.pokemonId, profile: meta.profile,
+      caseId: ep.run.caseDef.id, caseVersion: String(ep.run.caseDef.version), clueTotal: String(ep.run.caseDef.clues.length),
       t: n(s.t), roomId: s.roomId ?? '', stance: s.stance, speed: n(s.speed), hp: n(s.hp), catches: String(s.catches), hidden: b(s.hidden),
       eggState: s.eggState, eggSecurity: n(s.eggSecurity), cluesFound: String(s.cluesFound), hydeMode: s.hydeMode,
       hydeDistanceM: n(s.hydeDistanceM), hydeOccluded: b(s.hydeOccluded), hydeSuspicion: n(s.hydeSuspicion), recentNoise: n(s.recentNoise),
@@ -104,5 +108,7 @@ export function featureInputFromRow(r: Row): FeatureInput {
   };
   const duo = {} as DuoNumbers;
   for (const k of DUO_NUMBER_KEYS) duo[k] = num(r[k], 1);
-  return { snapshot, prev, context, duo };
+  const caseId: CaseId | null = isCaseId(r.caseId) ? r.caseId : null;
+  const clueTotal = r.clueTotal ? num(r.clueTotal) : clueCountFor(caseId);
+  return { snapshot, prev, context, duo, caseId, clueTotal };
 }

@@ -1,12 +1,12 @@
 // Mystery visitor flow (rules mystery-v3.1), a pure reducer:
-//   home → nickname → cards → tutorial → play ⇄ (board overlay | pause overlay) → accusing → results → reset (home).
+//   home → nickname → cards → case (the assigned case file is revealed) → prologue (Thing's case story) → tutorial → play ⇄ (board overlay | pause overlay) → accusing → results → reset (home).
 // No separate character / Pokémon menus: the visitor picks one of the three offered duo cards. Side effects
 // (persisting the session, starting runs) live in MysteryApp; this file only decides what screen comes next.
 import type { ResultsAnalytics } from '../../mystery/analytics/index.ts';
 import type { Duo, RunResult } from '../../mystery/types.ts';
-import { offeredCard, withNickname, withSelected, type MysterySession } from './session.ts';
+import { offeredCard, withClosed, withNickname, withSelected, type MysterySession } from './session.ts';
 
-export type MysteryScreen = 'home' | 'nickname' | 'cards' | 'tutorial' | 'play' | 'accusing' | 'results';
+export type MysteryScreen = 'home' | 'nickname' | 'cards' | 'case' | 'prologue' | 'tutorial' | 'play' | 'accusing' | 'results';
 export type MysteryOverlay = 'none' | 'board' | 'pause';
 
 export interface MysteryFlowState {
@@ -20,6 +20,8 @@ export interface MysteryFlowState {
   analytics: ResultsAnalytics | null;
   /** Dev shortcut tutorial=0: selecting a duo goes straight to play. */
   skipTutorial: boolean;
+  /** Operator `prologue=0` / dev shortcuts: selecting a duo skips the case-file reveal and Thing's story. */
+  skipPrologue: boolean;
 }
 
 export type MysteryAction =
@@ -27,6 +29,8 @@ export type MysteryAction =
   | { type: 'back' }
   | { type: 'nickname'; nickname: string }
   | { type: 'select'; duo: Duo }
+  | { type: 'caseRevealed' }
+  | { type: 'prologueDone' }
   | { type: 'tutorialDone' }
   | { type: 'toggleBoard' }
   | { type: 'closeOverlay' }
@@ -41,13 +45,16 @@ export const ON_ISLAND: readonly MysteryScreen[] = ['tutorial', 'play', 'accusin
 export const isOnIsland = (s: MysteryScreen) => ON_ISLAND.includes(s);
 
 /** Fresh page load: a session that already has a nickname resumes on its (same) three cards. */
-export function initialFlow(session: MysterySession, skipTutorial = false): MysteryFlowState {
-  return { screen: session.nickname ? 'cards' : 'home', overlay: 'none', session, attempt: 0, result: null, analytics: null, skipTutorial };
+export function initialFlow(session: MysterySession, skipTutorial = false, skipPrologue = skipTutorial): MysteryFlowState {
+  return { screen: session.nickname ? 'cards' : 'home', overlay: 'none', session, attempt: 0, result: null, analytics: null, skipTutorial, skipPrologue };
 }
+
+/** Where the journey goes once the prologue is done (or skipped). */
+const afterPrologue = (state: MysteryFlowState): MysteryScreen => (state.skipTutorial ? 'play' : 'tutorial');
 
 /** Dev shortcut `/?mode=mystery&character=..&pokemon=..`: the duo is selected and the run starts immediately. */
 export function shortcutFlow(session: MysterySession, duo: Duo, skipTutorial: boolean): MysteryFlowState {
-  const base = initialFlow({ ...session, nickname: session.nickname || 'Guest' }, skipTutorial);
+  const base = initialFlow({ ...session, nickname: session.nickname || 'Guest' }, skipTutorial, true);
   return mysteryReducer({ ...base, screen: 'cards' }, { type: 'select', duo });
 }
 
@@ -66,7 +73,7 @@ export function mysteryReducer(state: MysteryFlowState, action: MysteryAction): 
       if (state.screen !== 'cards' || !offeredCard(state.session.offer, action.duo)) return state;
       return {
         ...state,
-        screen: state.skipTutorial ? 'play' : 'tutorial',
+        screen: state.skipPrologue ? afterPrologue(state) : 'case',
         overlay: 'none',
         session: withSelected(state.session, action.duo),
         attempt: state.attempt + 1,
@@ -74,6 +81,10 @@ export function mysteryReducer(state: MysteryFlowState, action: MysteryAction): 
         analytics: null,
       };
     }
+    case 'caseRevealed':
+      return state.screen === 'case' ? { ...state, screen: 'prologue' } : state;
+    case 'prologueDone':
+      return state.screen === 'prologue' ? { ...state, screen: afterPrologue(state), overlay: 'none' } : state;
     case 'tutorialDone':
       return state.screen === 'tutorial' ? { ...state, screen: 'play', overlay: 'none' } : state;
     case 'toggleBoard':
@@ -93,9 +104,10 @@ export function mysteryReducer(state: MysteryFlowState, action: MysteryAction): 
       return state.screen === 'play' ? { ...state, screen: 'accusing', overlay: 'none' } : state;
     case 'ended':
       if (!isOnIsland(state.screen)) return state;
-      return { ...state, screen: 'results', overlay: 'none', result: action.result, analytics: action.analytics ?? null };
+      // The session is closed with its result: a refresh can never resume this case for a second accusation.
+      return { ...state, screen: 'results', overlay: 'none', session: withClosed(state.session), result: action.result, analytics: action.analytics ?? null };
     case 'reset':
-      return { screen: 'home', overlay: 'none', session: action.session, attempt: state.attempt, result: null, analytics: null, skipTutorial: state.skipTutorial };
+      return { screen: 'home', overlay: 'none', session: action.session, attempt: state.attempt, result: null, analytics: null, skipTutorial: state.skipTutorial, skipPrologue: state.skipPrologue };
     default:
       return state;
   }

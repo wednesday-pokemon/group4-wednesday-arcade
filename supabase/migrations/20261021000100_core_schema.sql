@@ -1,4 +1,4 @@
--- Escape from Raven Island: The Hyde's Regatta — core schema (rules v2.5)
+-- Nevermore: Deadly Secrets (display name; schema identifiers unchanged) — core schema (rules v2.5)
 -- All writes happen through Edge Functions (service role) calling SECURITY DEFINER RPCs.
 -- Game math NEVER lives in SQL: columns below are projections of the engine's GameState / LegResolution.
 -- Units: simulated time in integer centiseconds (*_cs); scores numeric(10,2).

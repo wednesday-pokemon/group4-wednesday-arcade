@@ -14,6 +14,12 @@
 //    supersede, select-from-offer, optimistic last_seq, fill-only recommendations, one immutable result, operator
 //    reset with `scope`) and the RLS read rules (public status/results/views; events/offers/forecasts/advice own
 //    station or operator; test runs hidden) are mirrored from migrations 20261021000500..800.
+//  * three cases (migration 20261022000100): case drawn per station from a shuffled bag inside create (same algorithm
+//    as private.mystery_draw_case, seeded RNG so tests are reproducible; `nextMysteryCases` forces the next draws),
+//    replay keeps the case, the session's case decides clue ids + answer key, finalize returns `reveal`, and the
+//    column privileges are mirrored: anon / station reads of mystery_results can never select accused, evidence or
+//    client_claim (42501, like PostgREST), Realtime payloads drop those columns, operators read them through
+//    mystery_result_audit.
 import {
   abandonSession, buildSessionView, createInitialState, getPushOptions, prepareWithSeed, resolveWithSeed,
 } from '../../src/game/index.ts';
@@ -33,7 +39,9 @@ import {
   RULE_EVENT_TYPES, applyBatch, initialProgress, progressFromRow, progressSummary, ruleFingerprint, splitResend,
   type ParsedEvent,
 } from '../../supabase/functions/_shared/mystery-events.ts';
-import { computeOffer, computeResult, requireData, requireEggRules, rulesContext } from '../../supabase/functions/_shared/mystery-rules.ts';
+import {
+  caseReveal, caseVersions, computeOffer, computeResult, requireData, requireEggRules, resolveCase, rulesContext,
+} from '../../supabase/functions/_shared/mystery-rules.ts';
 import { fromRpcEnvelope } from '../../supabase/functions/_shared/errors.ts';
 import { buildMysteryBoardServices, buildMysteryStationServices } from '../../src/lib/supabase/mysteryLive.ts';
 import type { Timers } from '../../src/lib/supabase/mysterySync.ts';
@@ -41,7 +49,10 @@ import type { LiveController } from '../../src/app/mystery/liveRun.ts';
 import { createMysteryAnalytics, type MysteryAnalytics } from '../../src/mystery/analytics/index.ts';
 import { Bot } from '../../src/mystery/bot.ts';
 import { MysteryRun } from '../../src/mystery/run.ts';
-import type { Duo, DuoCard } from '../../src/mystery/types.ts';
+import { caseById } from '../../src/mystery/data/cases.ts';
+import { CASE_SOLUTIONS } from '../../src/mystery/data/solutions.ts';
+import { CASE_IDS } from '../../src/mystery/types.ts';
+import type { Accusation, CaseId, Duo, DuoCard } from '../../src/mystery/types.ts';
 import type { GameBackend } from '../../src/lib/backend.ts';
 import { createSupabase, type LiveConfig } from '../../src/lib/supabase/client.ts';
 import { buildLiveServices } from '../../src/lib/supabase/liveServices.ts';
@@ -257,6 +268,8 @@ export interface FakeMysterySession {
   seed: string;
   is_test: boolean;
   nickname: string;
+  case_id: CaseId;
+  case_version: number;
   status: 'offered' | 'playing' | 'finished' | 'dnf' | 'abandoned';
   selected_slot: number | null;
   character_id: string | null;
@@ -275,6 +288,26 @@ export interface FakeMysterySession {
 
 type Row = Record<string, unknown>;
 type Viewer = { role: 'anon' } | { role: 'station'; stationId: StationId | null } | { role: 'operator' };
+
+/** mystery_results columns no client role may select (column privileges, migration 20261022000100). */
+export const MYSTERY_SECRET_RESULT_COLUMNS = ['accused', 'evidence', 'client_claim'] as const;
+const withoutSecrets = (r: Row): Row => {
+  const out = { ...r };
+  for (const k of MYSTERY_SECRET_RESULT_COLUMNS) delete out[k];
+  return out;
+};
+
+/** Small deterministic PRNG (mulberry32) for the fake's case bag: reproducible tests. */
+function seededRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 const LABELS: Record<StationId, string> = { station_a: 'Station A', station_b: 'Station B' };
 
@@ -306,6 +339,12 @@ export class FakeSupabaseServer {
   mysteryRateLimit = 6;
   /** MYSTERY_ALLOW_TEST_SEEDS secret. */
   mysteryAllowTestSeeds = false;
+  /** mystery_case_bags: remaining case ids of the current bag + the case dealt last, per station. */
+  readonly mysteryCaseBags = new Map<StationId, { bag: CaseId[]; last: CaseId | null }>();
+  /** Test hook: the next creates get these cases (in order) INSTEAD of a bag draw (the bag is not touched). */
+  readonly nextMysteryCases: CaseId[] = [];
+  /** RNG of the bag shuffle (SQL: random()). Seeded per server for reproducible tests. */
+  mysteryCaseRandom: () => number = seededRandom(0x5eed);
   readonly origin: string;
   private clock = Date.parse('2026-10-31T18:00:00.000Z');
   private tokenCounter = 0;
@@ -355,7 +394,7 @@ export class FakeSupabaseServer {
   private idleRow(stationId: StationId, notice: string | null, revision: number): Record<string, unknown> {
     return {
       station_id: stationId, label: LABELS[stationId], session_id: null, nickname: null, character_id: null, pokemon_id: null,
-      status: 'idle', phase: null, leg_index: null, route: null, push_level: null, weather: null, hp: null, stamina: null,
+      case_id: null, status: 'idle', phase: null, leg_index: null, route: null, push_level: null, weather: null, hp: null, stamina: null,
       gap_m: null, catches: null, banked_eggs: null, sim_time_cs: null, final_score: null, notice, revision,
       updated_at: new Date(this.clock).toISOString(),
     };
@@ -485,7 +524,7 @@ export class FakeSupabaseServer {
     const r = this.mysteryResults.get(s.id);
     const row: Row = {
       station_id: s.station_id, label: LABELS[s.station_id], session_id: s.id, nickname: s.nickname, character_id: s.character_id,
-      pokemon_id: s.pokemon_id, status: s.status, clues_found: p.cluesFound.length, catches: p.catches, sightings: p.sightings,
+      pokemon_id: s.pokemon_id, case_id: s.case_id, status: s.status, clues_found: p.cluesFound.length, catches: p.catches, sightings: p.sightings,
       egg_state: p.egg,
       active_time_s: r ? r.active_time_s : (Math.round(s.last_t * 10) / 10).toFixed(1), // numeric(8,1) arrives as a string
       verdict: r ? r.verdict : null, score: r ? r.score : null, is_test: s.is_test, notice: null,
@@ -513,8 +552,9 @@ export class FakeSupabaseServer {
   /** resultView (mystery-db.ts). */
   private mysteryResultView(r: Row): Row {
     return {
-      sessionId: r.session_id, rulesVersion: r.rules_version, outcome: r.outcome, dnfReason: r.dnf_reason, verdict: r.verdict,
-      accused: r.accused, correct: r.correct, cluesFound: r.clues_found, eggTier: r.egg_tier, eggPoints: r.egg_points,
+      sessionId: r.session_id, rulesVersion: r.rules_version, caseId: r.case_id, caseVersion: r.case_version, outcome: r.outcome,
+      dnfReason: r.dnf_reason, verdict: r.verdict, accused: r.accused, correct: r.correct, evidence: r.evidence,
+      deductionCorrect: r.deduction_correct, cluesFound: r.clues_found, eggTier: r.egg_tier, eggPoints: r.egg_points,
       eggSecurity: Number(r.egg_security), activeTimeS: Number(r.active_time_s), score: r.score === null ? null : Number(r.score),
       catches: r.catches, sightings: r.sightings, hintsUsed: r.hints_used,
       duo: { characterId: r.character_id, pokemonId: r.pokemon_id }, nickname: r.nickname, stationId: r.station_id,
@@ -529,7 +569,7 @@ export class FakeSupabaseServer {
     return wire({
       session: {
         sessionId: s.id, stationId: s.station_id, rulesVersion: s.rules_version, status: s.status, abandonedReason: s.abandoned_reason,
-        seed: s.seed, nickname: s.nickname, isTest: s.is_test,
+        seed: s.seed, nickname: s.nickname, isTest: s.is_test, caseId: s.case_id, caseVersion: s.case_version,
         selected: s.selected_slot === null || !s.character_id || !s.pokemon_id ? null : { characterId: s.character_id, pokemonId: s.pokemon_id, slot: s.selected_slot },
         lastSeq: s.last_seq, lastT: s.last_t, eventCount: s.event_count, progress: progressSummary(progressFromRow(s.progress)),
         createdAt: s.created_at, selectedAt: s.selected_at, finalizedAt: s.finalized_at,
@@ -544,6 +584,23 @@ export class FakeSupabaseServer {
     throw fromRpcEnvelope(envelope);
   }
 
+  /** private.mystery_draw_case: pop the station's bag; refill with a fresh permutation never starting with `last`. */
+  mysteryDrawCase(stationId: StationId): CaseId {
+    const st = this.mysteryCaseBags.get(stationId) ?? { bag: [], last: null };
+    if (st.bag.length === 0) {
+      const bag = CASE_IDS.map((id) => ({ id, k: this.mysteryCaseRandom() })).sort((a, b) => a.k - b.k).map((x) => x.id);
+      if (bag[0] === st.last) {
+        const j = 1 + Math.floor(this.mysteryCaseRandom() * (bag.length - 1));
+        [bag[0], bag[j]] = [bag[j]!, bag[0]!];
+      }
+      st.bag = bag;
+    }
+    const next = st.bag.shift()!;
+    st.last = next;
+    this.mysteryCaseBags.set(stationId, st);
+    return next;
+  }
+
   private mysteryNewSeed(): string {
     return this.nextMysterySeeds.shift() ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   }
@@ -554,11 +611,18 @@ export class FakeSupabaseServer {
     fin.sort((a, b) => Number(b.score) - Number(a.score) || Number(a.active_time_s) - Number(b.active_time_s)
       || String(a.finalized_at).localeCompare(String(b.finalized_at)) || String(a.session_id).localeCompare(String(b.session_id)));
     let rank = 0;
+    const same = (p: Row, r: Row) => Number(p.score) === Number(r.score) && Number(p.active_time_s) === Number(r.active_time_s)
+      && p.finalized_at === r.finalized_at;
+    const perCase = new Map<unknown, { n: number; rank: number; prev: Row | null }>();
     return fin.map((r, i) => {
       const p = fin[i - 1];
-      if (!p || Number(p.score) !== Number(r.score) || Number(p.active_time_s) !== Number(r.active_time_s) || p.finalized_at !== r.finalized_at) rank = i + 1;
-      const { client_claim: _c, ...pub } = r;
-      return { ...pub, rank };
+      if (!p || !same(p, r)) rank = i + 1;
+      const c = perCase.get(r.case_id) ?? { n: 0, rank: 0, prev: null };
+      c.n++;
+      if (!c.prev || !same(c.prev, r)) c.rank = c.n;
+      c.prev = r;
+      perCase.set(r.case_id, c);
+      return { ...withoutSecrets(r), rank, case_rank: c.rank };
     });
   }
 
@@ -568,7 +632,7 @@ export class FakeSupabaseServer {
     const dnf = [...this.mysteryResults.values()].filter((r) => r.outcome === 'dnf' && !r.is_test)
       .sort((a, b) => Number(b.active_time_s) - Number(a.active_time_s) || String(a.finalized_at).localeCompare(String(b.finalized_at))
         || String(a.session_id).localeCompare(String(b.session_id)))
-      .map(({ client_claim: _c, ...r }) => ({ ...r, standing_group: 1, rank: null }));
+      .map((r) => ({ ...withoutSecrets(r), standing_group: 1, rank: null, case_rank: null }));
     return [...fin, ...dnf];
   }
 
@@ -586,8 +650,11 @@ export class FakeSupabaseServer {
         }
         const seed = body.testSeed ?? this.mysteryNewSeed();
         const offer = computeOffer(seed);
+        const versions = caseVersions(); // p_case_versions
         const recent = this.mysterySessionsOf(stationId).filter((s) => s.created_ms > this.clock - 60_000).length;
         if (recent >= this.mysteryRateLimit) this.rpcFail({ ok: false, error: 'RATE_LIMITED', message: 'too many sessions created on this station; wait a minute' });
+        // forced (test seed) case or the next one from this station's bag; a forced case never touches the bag
+        const caseId: CaseId = body.testCase ?? this.nextMysteryCases.shift() ?? this.mysteryDrawCase(stationId);
         for (const old of this.mysterySessionsOf(stationId)) {
           if (old.status === 'offered' || old.status === 'playing') {
             old.status = 'abandoned';
@@ -598,7 +665,7 @@ export class FakeSupabaseServer {
         const createdAt = this.tick();
         const s: FakeMysterySession = {
           id, station_id: stationId, rules_version: 'mystery-v3.1', create_action_id: body.actionId, create_body: wire(body), seed,
-          is_test: body.testSeed !== undefined, nickname: body.nickname, status: 'offered', selected_slot: null, character_id: null,
+          is_test: body.testSeed !== undefined, nickname: body.nickname, case_id: caseId, case_version: versions[caseId], status: 'offered', selected_slot: null, character_id: null,
           pokemon_id: null, selected_at: null, last_seq: -1, last_t: 0, event_count: 0, terminal_type: null, progress: {},
           abandoned_reason: null, created_at: createdAt, created_ms: this.clock, finalized_at: null,
         };
@@ -665,7 +732,7 @@ export class FakeSupabaseServer {
         if (s.status !== 'playing') {
           throw new HttpError('SESSION_CLOSED', `Session is ${s.status}`, { status: s.status, abandonedReason: s.abandoned_reason });
         }
-        const next = applyBatch(progress, fresh, rulesContext(s.seed, data.caseDef, egg));
+        const next = applyBatch(progress, fresh, rulesContext(s.seed, resolveCase(s.case_id, s.case_version, data).caseDef, egg));
         // ---- RPC mystery_append_events (the optimistic last_seq check always holds: one JS turn, no concurrency)
         if (s.event_count + fresh.length > 20_000) this.rpcFail({ ok: false, error: 'TOO_MANY_EVENTS', message: 'session event budget (20000) exhausted' });
         const receivedAt = this.tick();
@@ -725,6 +792,7 @@ export class FakeSupabaseServer {
             sessionId: s.id,
             result: this.mysteryResultView(r),
             rank: r.outcome === 'finished' && !r.is_test ? (this.mysteryLeaderboard().find((x) => x.session_id === s.id)?.rank ?? null) : null,
+            reveal: caseReveal(resolveCase(r.case_id, undefined), r.outcome as 'finished' | 'dnf'),
           }),
         });
         if (s.status === 'finished' || s.status === 'dnf') {
@@ -736,7 +804,8 @@ export class FakeSupabaseServer {
         if (s.status !== 'playing') throw new HttpError('SESSION_CLOSED', `Session is ${s.status}`, { status: s.status, abandonedReason: s.abandoned_reason });
         const data = requireData();
         const egg = requireEggRules();
-        const rules = rulesContext(s.seed, data.caseDef, egg);
+        const kase = resolveCase(s.case_id, s.case_version, data);
+        const rules = rulesContext(s.seed, kase.caseDef, egg);
         // Re-validate the stored rule events from scratch (independent of the incremental append-time state).
         const ruleEvents: ParsedEvent[] = [...this.mysteryEvents.get(s.id)!.values()]
           .filter((r) => (RULE_EVENT_TYPES as readonly string[]).includes(String(r.type)))
@@ -746,14 +815,16 @@ export class FakeSupabaseServer {
         if (ruleFingerprint(replayed) !== ruleFingerprint(progressFromRow(s.progress))) {
           throw new HttpError('INVALID_TRANSITION', 'Stored events and stored progress disagree');
         }
-        const result = computeResult(replayed, data.caseDef, rules.expectedTier, body.clientResult);
+        const result = computeResult(replayed, kase, rules.expectedTier, body.clientResult);
         // ---- RPC mystery_finalize_session
         if (s.terminal_type === null) this.rpcFail({ ok: false, error: 'RUN_NOT_FINISHED', message: 'no finish or dnf event has been recorded yet', lastSeq: s.last_seq });
         const finalizedAt = this.tick();
         const row: Row = {
           session_id: s.id, station_id: s.station_id, nickname: s.nickname, character_id: s.character_id, pokemon_id: s.pokemon_id,
-          rules_version: 'mystery-v3.1', outcome: result.outcome, dnf_reason: result.dnfReason, verdict: result.verdict,
-          accused: result.accused, correct: result.correct, clues_found: [...result.cluesFound], clue_count: result.cluesFound.length,
+          rules_version: 'mystery-v3.1', case_id: s.case_id, case_version: s.case_version, outcome: result.outcome,
+          dnf_reason: result.dnfReason, verdict: result.verdict, accused: result.accused, correct: result.correct,
+          evidence: [...result.evidence], deduction_correct: result.deductionCorrect,
+          clues_found: [...result.cluesFound], clue_count: result.cluesFound.length,
           egg_tier: result.eggTier, egg_points: result.eggPoints, egg_security: result.eggSecurity.toFixed(1),
           active_time_s: result.activeTimeS.toFixed(1), score: result.score === null ? null : result.score.toFixed(1),
           catches: result.catches, sightings: result.sightings, hints_used: result.hintsUsed, client_claim: wire(result.clientClaim),
@@ -763,11 +834,19 @@ export class FakeSupabaseServer {
         if (result.outcome === 'finished' && Math.round(Number(row.score) * 10) !== Math.round((result.eggPoints * 100 - Number(row.active_time_s)) * 10)) {
           throw new HttpError('INTERNAL', 'mystery_results_finished_check violated');
         }
+        // SQL CHECK backstops of 20261022000100: solved ⇒ correct ∧ deduction ∧ 3 clues; no suspect ⇒ no evidence
+        if (result.verdict === 'case_solved' && !(result.correct && result.deductionCorrect && result.cluesFound.length === 3)) {
+          throw new HttpError('INTERNAL', 'mystery_results_solved_check violated');
+        }
+        if (result.accused === null && (result.deductionCorrect || result.evidence.length > 0)) {
+          throw new HttpError('INTERNAL', 'mystery_results_deduction_check violated');
+        }
         this.mysteryResults.set(s.id, row);
         s.status = result.outcome;
         s.finalized_at = finalizedAt;
         this.mysteryProject(s);
-        if (!s.is_test) this.realtime.emit('mystery_results', 'INSERT', row);
+        // Realtime postgres_changes only carries the columns the subscriber may select (no accused / evidence / claim)
+        if (!s.is_test) this.realtime.emit('mystery_results', 'INSERT', withoutSecrets(row));
         return respond(row, false);
       }
       default:
@@ -809,12 +888,21 @@ export class FakeSupabaseServer {
       case 'mystery_station_status':
         return [...this.mysteryStationRows.values()];
       case 'mystery_results':
-        // public read hides test runs; the client claim is an operator-only audit column in practice (select list)
-        return [...this.mysteryResults.values()].filter((r) => v.role === 'operator' || !r.is_test);
+        // public read hides test runs; accused / evidence / client_claim are not selectable by ANY client role
+        return [...this.mysteryResults.values()].filter((r) => v.role === 'operator' || !r.is_test).map(withoutSecrets);
+      case 'mystery_result_audit':
+        // definer view filtered by private.is_operator(): anon has no privilege, stations get zero rows
+        if (v.role === 'anon') return null;
+        return v.role === 'operator' ? [...this.mysteryResults.values()].map((r) => ({
+          session_id: r.session_id, station_id: r.station_id, case_id: r.case_id, case_version: r.case_version, outcome: r.outcome,
+          verdict: r.verdict, accused: r.accused, correct: r.correct, evidence: r.evidence, deduction_correct: r.deduction_correct,
+          clues_found: r.clues_found, client_claim: r.client_claim, claim_matches: r.claim_matches, is_test: r.is_test,
+          finalized_at: r.finalized_at,
+        })) : [];
       case 'mystery_leaderboard':
         return this.mysteryLeaderboard();
       case 'mystery_defeated':
-        return [...this.mysteryResults.values()].filter((r) => r.outcome === 'dnf' && !r.is_test).map(({ client_claim: _c, ...r }) => r);
+        return [...this.mysteryResults.values()].filter((r) => r.outcome === 'dnf' && !r.is_test).map(withoutSecrets);
       case 'mystery_standings':
         return this.mysteryStandings();
       case 'mystery_sessions':
@@ -1104,7 +1192,19 @@ export class FakeSupabaseServer {
         .sort((a, b) => String(b.verified_at).localeCompare(String(a.verified_at)))
         .map(({ status: _s, final_egg_points: _e, final_score: _f, ...rest }) => rest);
     } else if (table.startsWith('mystery_')) {
-      const mrows = this.mysteryRows(table, this.viewer(headers));
+      const viewer = this.viewer(headers);
+      if (table === 'mystery_case_bags') return json(401, { code: '42501', message: 'permission denied for table mystery_case_bags' });
+      if (table === 'mystery_result_audit' && viewer.role === 'anon') {
+        return json(401, { code: '42501', message: 'permission denied for view mystery_result_audit' });
+      }
+      if (table === 'mystery_results') {
+        // column privileges: selecting (or `*`-selecting) a secret column is a permission error, as in PostgREST
+        const cols = (url.searchParams.get('select') ?? '*').split(',').map((c) => c.trim());
+        if (cols.includes('*') || cols.some((c) => (MYSTERY_SECRET_RESULT_COLUMNS as readonly string[]).includes(c))) {
+          return json(401, { code: '42501', message: 'permission denied for table mystery_results' });
+        }
+      }
+      const mrows = this.mysteryRows(table, viewer);
       if (mrows === null) return json(404, { code: '42P01', message: `relation "${table}" does not exist` });
       return json(200, wire(this.applyQuery(mrows, url)));
     } else {
@@ -1256,8 +1356,11 @@ export function openMysteryBoard(server: FakeSupabaseServer, opts: { pollMs?: nu
 }
 
 /** Server seeds whose first card, played by the seeded Bot, ends 'finished' (stealthy) / 'dnf' (careless). */
+// FINISH_SEED finishes (case solved) with the stealthy bot in EVERY case. The careless DNF is case dependent: push
+// MYSTERY_DNF_CASE onto server.nextMysteryCases together with MYSTERY_DNF_SEED.
 export const MYSTERY_FINISH_SEED = '2'.repeat(32);
-export const MYSTERY_DNF_SEED = '1'.repeat(32);
+export const MYSTERY_DNF_SEED = 'a'.repeat(32);
+export const MYSTERY_DNF_CASE: CaseId = 'poisoned_archive';
 
 /** Deterministic timers for the uploader / heartbeat / finalize back-off (advance() fires what is due, in order). */
 export class ManualTimers implements Timers {
@@ -1303,16 +1406,19 @@ export class ManualTimers implements Timers {
  *  controller's hooks exactly as useMysteryLoop does. Every 2 s of sim time the timers advance and I/O settles. */
 export async function driveRun(
   controller: LiveController,
-  session: { sessionId: string; seed: string; selected: Duo | null; offer: { cards: readonly Duo[] } },
+  session: { sessionId: string; seed: string; caseId: CaseId; selected: Duo | null; offer: { cards: readonly Duo[] } },
   opts: {
     stationId: StationId; timers: ManualTimers; profile?: 'stealthy' | 'careless'; maxS?: number;
+    /** Replace the bot's accusation (the run still sanitizes it, exactly like the app). */
+    accusation?: (run: MysteryRun, bot: Accusation) => Accusation;
     /** Called every 2 s of sim time (after I/O settled). */
     onChunk?: (run: MysteryRun) => void | Promise<void>;
     /** Wraps the analytics batch source (tampering tests). */
     source?: (a: MysteryAnalytics) => MysteryAnalytics;
   },
 ): Promise<{ run: MysteryRun; analytics: MysteryAnalytics }> {
-  const run = new MysteryRun({ duo: session.selected!, seed: session.seed, tutorial: false });
+  // the kiosk plays the case the SERVER assigned (LiveSessionData.caseId)
+  const run = new MysteryRun({ duo: session.selected!, seed: session.seed, tutorial: false, caseDef: caseById(session.caseId) });
   const real = createMysteryAnalytics(run, {
     sessionId: session.sessionId, stationId: opts.stationId, offered: session.offer.cards.map((c) => ({ characterId: c.characterId, pokemonId: c.pokemonId })),
   });
@@ -1334,7 +1440,9 @@ export async function driveRun(
   }
   if (run.status === 'accusing') {
     controller.hooks.flushNow('deposit');
-    real.frame(run, run.accuse(bot.accusation()));
+    // the app loads the answer key only now (loadCaseSolution after the visitor committed)
+    const accusation = opts.accusation ? opts.accusation(run, bot.accusation()) : bot.accusation();
+    real.frame(run, run.accuse(accusation, CASE_SOLUTIONS[run.caseDef.id]));
   }
   controller.hooks.runEnded(run, analytics);
   return { run, analytics };

@@ -8,7 +8,7 @@ Game-designer document. Sources: `docs/v3.1/GAME_PLAN_v3_1.md` (source of truth)
 | `tuning.ts` | `MYSTERY_TUNING`, `hearingRadiusM(loudness)` |
 | `nightshades.ts` | `NIGHTSHADES`, `DUO_NAME_ADJECTIVE` |
 | `partners.ts` | `PARTNERS`, `DUO_NAME_NOUN` |
-| `case.ts` | `SILENT_EVIDENCE`, `CLUE_INTERACT_LABELS`, `CLUE_LOCATION_LABELS`, `CLUE_LINK`, `ROOM_LABELS`, `CASE_DISCLAIMER` |
+| `cases.ts` | `CASES` (three cases, public), `isCaseId`, `caseById`, `ROOM_LABELS`, `CASE_DISCLAIMER` — answers in `solutions.ts` (`CASE_SOLUTIONS`) |
 | `thing.ts` | `THING`, `THING_STAY_SILENT`, `formatThingLine`, `ThingPose`, `ThingLine`, `TutorialLine` |
 | `island.ts` | `buildIsland()`, `PRACTICE_CRATE`, `SHORTCUT_GATE_WALL_ID` |
 
@@ -196,7 +196,7 @@ one farthest from the Hyde.
 
 ---
 
-## 4. The case: truth table
+## 4. The case: truth table (RETIRED — the single "Silent Evidence" case; see §4b for the three live cases)
 
 Culprit: **thornhill** (fixed). Each clue adds one chain link against the same person and clears at most one other
 suspect:
@@ -230,6 +230,92 @@ the killer. Suspect `alibiOrContext` is neutral. Exonerating facts only appear i
 
 Wrong accusations and "Leave the case unsolved" both give `egg_secured_mystery_unsolved` / `not_accused`. The results
 screen never reveals the culprit on a wrong verdict.
+
+---
+
+## 4b. Three cases (case system v1)
+
+§4 above and the `case.ts` row of the file table describe the retired single case (`SILENT_EVIDENCE`, clue ids
+`transfer_note` / `master_key` / `greenhouse_trace`). Since the three-case feature the public case data lives in
+`src/mystery/data/cases.ts` (`CASES`) and the answer keys only in `src/mystery/data/solutions.ts` (`CASE_SOLUTIONS`,
+never imported statically by browser code — `tests/unit/mystery/caseSecrecy.test.ts`). Integration contract:
+`docs/MYSTERY_CASES.md`. The three cases are alternate scenarios of the same night on the same island: walls, cover,
+hiding spots and the Hyde patrol are identical; a case moves its three clues and the egg and renames rooms.
+
+**One rule for every case.** Three clues, each proving one link against the SAME person: METHOD, OPPORTUNITY and a
+BROKEN ALIBI. The culprit is named in all three clues; each innocent is named in exactly one clue, and that clue is the
+one that clears them. So no single clue settles anything, one clue (the one naming only the culprit) clears nobody, and
+the remaining pair clears both innocents *by elimination* while one link of the chain is still missing. `case_solved`
+needs all three clues found ∧ the culprit accused ∧ exactly the three clues cited (`caseLogic.verdictFor`). Two
+case-file notes are held from the start: tempting, they name nobody and support nobody; citing one makes the
+deduction incorrect. `deductionCorrect` reports the cited evidence only (an innocent accused with the right three
+clues still has `deductionCorrect = true`, `correct = false`, verdict unsolved).
+
+Enforced by tests: `cases.test.ts` (structure, names, links, wording and length budgets), `rules.test.ts` (8 clue
+subsets × 3 suspects × 6 evidence sets per case), `caseIslands.test.ts` (rooms, clearance, reachability),
+`caseRuns.test.ts` (21 duos per case solved by the bot, accusation rules, F powers per case, determinism).
+
+### Case 01 — The Poisoned Archive (culprit: Marilyn Thornhill)
+
+| Clue (room, spot, search) | Proves | Names | Clears | Why |
+|---|---|---|---|---|
+| `falsified_transfer` — Research Archive (`research_room`, 38, −6, 2.5 s) | opportunity | Thornhill | — | the false transfer was filed with her archive credentials from an archive terminal at 11:31 pm |
+| `botanical_residue` — Greenhouse Annex (`path`, 1, −26, 3 s) | method | Thornhill, Isaac | Isaac | the teacup poison is the tincture signed out under Thornhill at 10:58 pm; Isaac returned the only other key at 9:05 pm |
+| `access_ledger` — Records Crypt (`crypt`, −22, 21, 2.5 s) | alibi | Thornhill, Barry | Barry | her badge opened the annex (10:55) and the archive (11:29) while she claims the reading room; Barry's card stays on the east wall all night |
+
+Egg: Egg Chamber shrine (−28, −20). Notes: *Muddy Boots in the Hall* (hints at the groundskeeper; his logged drain
+work), *Keys Heard at Midnight* (hints at Barry's key ring; his rounds). Innocents: Isaac (key back at 9:05, never
+retaken), Barry (east-wall gate checks every ten minutes). Elimination pair: residue + ledger (opportunity missing).
+
+### Case 02 — The Crypt's Last Witness (culprit: Isaac Night)
+
+| Clue (room, spot, search) | Proves | Names | Clears | Why |
+|---|---|---|---|---|
+| `sabotaged_gate` — Collapsed Crypt (`crypt`, −22, 21, 2.5 s) | method | Isaac | — | pin drawn, chain filed; the mechanism is assigned to Isaac alone |
+| `tunnel_access_record` — Maintenance Tunnel (`shortcut`, 31, −22, 2.5 s) | opportunity | Isaac, Thornhill | Thornhill | Isaac signed into the tunnel at 11:12 pm, minutes before the fall; Thornhill signed out at 8:55 pm |
+| `equipment_match` — Egg Chamber by the cage (`egg_chamber`, −40, −31, 3 s) | alibi | Isaac, Barry | Barry | his "I.N." tool roll holds the filings, the brass pin and fresh tunnel clay (he says he never went into the tunnels); the harbour master logs Barry at the pier at 11:15 pm |
+
+Egg: the crypt's burial vault (−38, 18), west of the inner wall. Notes: *Archive Boxes in the Tunnel* (hints at
+Thornhill; her 8:40 pm visit), *The Crypt Bell* (nobody). Elimination pair: tunnel + tool roll (method missing).
+
+### Case 03 — The Midnight Signal (culprit: Barry Dort)
+
+| Clue (room, spot, search) | Proves | Names | Clears | Why |
+|---|---|---|---|---|
+| `falsified_patrol_log` — Guard Post Passage (`shortcut`, 30, −28, 2.5 s) | alibi | Barry | — | his own "north wall — all clear" entry is rewritten in fresh ink; the north-wall lamps were never lit |
+| `alarm_override` — Security Control Room (`research_room`, 40, 8, 2.5 s) | method | Barry, Thornhill | Thornhill | alarms off and the false lockdown sent with security card #3 (Barry's); archive cards have no clearance here |
+| `watchtower_signal` — Watchtower Yard (`courtyard`, 18, −48, 3 s) | opportunity | Barry (as "the guard"), Isaac | Isaac | the guard's all-clear code was flashed from beside the egg path at 11:22 pm; Isaac's vent crank turned every five minutes 11:00–11:45 |
+
+Egg: greenhouse potting shed (5, −27), beside planter 1 (0.4 m clear of it). Notes: *Light in the Greenhouse* (hints
+at Isaac), *Archive Door Ajar* (hints at Thornhill). Elimination pair: override + watchtower (alibi missing).
+Content note: `watchtower_signal` refers to Barry only by role ("the guard's"); `mentions` counts it and the tests
+accept role words. Writing "B. Dort's" into that text would make the name count plain to every reader.
+
+### Board states (same shape in every case)
+
+| Clues found | Innocents still unexplained | Chain against the culprit | Fair conclusion | Verdict if culprit accused |
+|---|---|---|---|---|
+| none / any one | 1–2 | at most 1 link | nothing certain | unsolved |
+| the two clues that each name an innocent | 0 | 2 links | culprit by elimination, chain incomplete | unsolved |
+| any other pair | 1 | 2 links | strong suspicion, one alternative open | unsolved |
+| all three | 0 | method + opportunity + alibi | proven | **case_solved** (if exactly the 3 clues are cited) |
+
+### Routes and pacing (computed on the nav grid, player radius, shortcut gate closed)
+
+| Case | Nearest-first tour (what the bot walks), metres | Shortest order | Search total | Human estimate (active) | Bot median, 21 duos (126 duos) | Bot runs caught / 126 |
+|---|---|---|---|---|---|---|
+| 01 | ledger 42 → residue 54 → transfer 79 → egg 83 → tower 51 = **308 m** | ledger → transfer → residue, 282 m | 8 s | ~185–230 s | 171 s (161 s) | 7 |
+| 02 | gate 42 → tool roll 56 → tunnel 106 → egg 95 → tower 90 = **389 m** | tunnel → gate → tool roll, 365 m | 8 s | ~225–270 s | 196 s (191 s) | 12 |
+| 03 | console 62 → patrol log 39 → watchtower 122 → egg 25 → tower 27 = **275 m** | the same, 275 m | 8 s | ~180–215 s | 172 s (174 s) | 20 |
+
+Human estimate = route × 1.3 at ~2.7 m/s mixed movement + ~10 s of searching / pickup / deposit + 25–45 s hiding +
+15–25 s orientation (the same model as §8). Add ~90–120 s for menus, case-file reveal, prologue, tutorial and
+accusation, which gives a **5–7 min visit** in every case. Case 02 is the longest walk: the tunnel clue sits in the
+dead-end alley in the far east, and the egg is back in the far-west crypt. Case 03 is the shortest walk but the most
+dangerous. The watchtower clue, the egg and the tower all sit on the Hyde's courtyard/terrace loop (P9–P14), so bot
+catches are about 3× Case 01 and the spread is the widest (bot max 351 s over 126 duos). In the bot sweep all 126 duos
+solved every case (stealthy profile, abilities on for every other duo, 0 DNF, 0 timeouts). Powers help but are never
+required. These are bot numbers, not playtest measurements.
 
 ---
 
@@ -395,4 +481,4 @@ Common egg at 200 s scores −100. Negative scores are allowed by the rules.
    `hazards?: { id; x; z; radius; hpLoss; noise }[]`.
 8. **Thing line types:** `ThingLine` and `ThingPose` live in `thing.ts`. Move them into `types.ts` if the frontend
    prefers to import from there.
-9. **Clue labels:** `ClueDef` has no `interactLabel`. The labels are exported as `CLUE_INTERACT_LABELS` from `case.ts`.
+9. **Clue labels:** each `ClueDef` carries its own `interactLabel` (case system v1; `CLUE_INTERACT_LABELS` is retired).

@@ -5,9 +5,10 @@ import type { StationId } from '../../game/index.ts';
 import { eventFromRow } from '../../mystery/analytics/telemetry.ts';
 import type { SessionRecord } from '../../mystery/analytics/types.ts';
 import type {
-  ClueId, DnfReason, Duo, DuoCard, DuoOffer, EggState, NightshadeId, RunResult, SuspectId, Verdict,
+  CaseId, ClueId, DnfReason, Duo, DuoCard, DuoOffer, EggState, NightshadeId, RunResult, SuspectId, Verdict,
 } from '../../mystery/types.ts';
-import { NIGHTSHADE_IDS } from '../../mystery/types.ts';
+import { CASE_IDS, NIGHTSHADE_IDS, SUSPECT_IDS } from '../../mystery/types.ts';
+import { isCaseId } from '../../mystery/data/cases.ts';
 import type { PokemonId } from '../../game/types.ts';
 import { BackendError } from '../backend.ts';
 
@@ -35,6 +36,9 @@ export interface MysterySessionView {
   seed: string;
   nickname: string;
   isTest: boolean;
+  /** The case assigned by the server at creation (per-station bag). Never changes for this session. */
+  caseId: CaseId;
+  caseVersion: number;
   selected: { characterId: NightshadeId; pokemonId: PokemonId; slot: number } | null;
   lastSeq: number;
   lastT: number;
@@ -45,15 +49,24 @@ export interface MysterySessionView {
   finalizedAt: string | null;
 }
 
-/** Server-recomputed, immutable result (mystery_results row as returned by the functions). */
+/**
+ * Server-recomputed, immutable result (mystery_results row as returned by the functions to the OWNING station; the
+ * public board never sees `accused` / `evidence`).
+ */
 export interface MysteryResultView {
   sessionId: string;
   rulesVersion: 'mystery-v3.1';
+  caseId: CaseId;
+  caseVersion: number;
   outcome: 'finished' | 'dnf';
   dnfReason: DnfReason | null;
   verdict: Verdict;
   accused: SuspectId | null;
   correct: boolean;
+  /** Evidence ids cited with the accusation, as sanitized by the server (found clues + case-file notes). */
+  evidence: string[];
+  /** The cited evidence is exactly the case's supporting evidence (server-recomputed). */
+  deductionCorrect: boolean;
   cluesFound: string[];
   eggTier: LiveEggTier | null;
   eggPoints: number;
@@ -91,11 +104,19 @@ export interface MysteryAppendAck {
   recommendationsUpserted: number;
 }
 
+/** The case's answer, released by mystery-finalize only after the run (and its accusation) is stored. */
+export interface MysteryReveal {
+  culprit: SuspectId;
+  resolution: string;
+}
+
 export interface MysteryFinalizeResponse {
   sessionId: string;
   result: MysteryResultView;
   /** Rank on the verified board (null for DNF / test runs). */
   rank: number | null;
+  /** Culprit + resolution of the session's case for a finished run; null for a DNF (nobody was accused). */
+  reveal: MysteryReveal | null;
 }
 
 export interface MysteryAdminResetResponse {
@@ -133,6 +154,26 @@ function isNightshade(x: unknown): x is NightshadeId {
   return typeof x === 'string' && (NIGHTSHADE_IDS as readonly string[]).includes(x);
 }
 
+function isSuspect(x: unknown): x is SuspectId {
+  return typeof x === 'string' && (SUSPECT_IDS as readonly string[]).includes(x);
+}
+
+/** A case id the app knows; anything else (unknown / missing) means the server and this build are out of step. */
+function caseIdOf(x: unknown, what: string): CaseId {
+  if (!isCaseId(x)) bad(what);
+  return x;
+}
+
+function caseVersionOf(x: unknown, what: string): number {
+  const v = num(x, what);
+  if (!Number.isInteger(v) || v < 1) bad(what);
+  return v;
+}
+
+function strings(x: unknown): string[] {
+  return Array.isArray(x) ? x.filter((c): c is string => typeof c === 'string') : [];
+}
+
 function parseCard(raw: unknown, i: number): DuoCard {
   const c = obj(raw, `offer.cards[${i}]`);
   if (!isNightshade(c.characterId) || typeof c.pokemonId !== 'string') bad(`offer.cards[${i}] ids`);
@@ -155,15 +196,20 @@ export function parseResult(raw: unknown): MysteryResultView {
   const duo = obj(r.duo, 'result.duo');
   if (!isNightshade(duo.characterId) || typeof duo.pokemonId !== 'string') bad('result.duo');
   if (!isStationId(r.stationId)) bad('result.stationId');
+  if (r.accused !== null && r.accused !== undefined && !isSuspect(r.accused)) bad('result.accused');
   return {
     sessionId: str(r.sessionId, 'result.sessionId'),
     rulesVersion: 'mystery-v3.1',
+    caseId: caseIdOf(r.caseId, 'result.caseId'),
+    caseVersion: caseVersionOf(r.caseVersion, 'result.caseVersion'),
     outcome,
     dnfReason: (r.dnfReason ?? null) as DnfReason | null,
     verdict: str(r.verdict, 'result.verdict') as Verdict,
     accused: (r.accused ?? null) as SuspectId | null,
     correct: r.correct === true,
-    cluesFound: Array.isArray(r.cluesFound) ? r.cluesFound.filter((c): c is string => typeof c === 'string') : [],
+    evidence: strings(r.evidence),
+    deductionCorrect: r.deductionCorrect === true,
+    cluesFound: strings(r.cluesFound),
     eggTier: (r.eggTier ?? null) as LiveEggTier | null,
     eggPoints: num(r.eggPoints, 'result.eggPoints'),
     eggSecurity: num(r.eggSecurity, 'result.eggSecurity'),
@@ -203,6 +249,8 @@ export function parseSessionView(raw: unknown): MysterySessionView {
     seed,
     nickname: typeof s.nickname === 'string' ? s.nickname : '',
     isTest: s.isTest === true,
+    caseId: caseIdOf(s.caseId, 'session.caseId'),
+    caseVersion: caseVersionOf(s.caseVersion, 'session.caseVersion'),
     selected,
     lastSeq: num(s.lastSeq ?? -1, 'session.lastSeq'),
     lastT: num(s.lastT ?? 0, 'session.lastT'),
@@ -252,10 +300,20 @@ export function parseAppendAck(raw: unknown): MysteryAppendAck {
   };
 }
 
+export function parseReveal(raw: unknown): MysteryReveal | null {
+  if (raw === null || raw === undefined) return null;
+  const r = obj(raw, 'finalize.reveal');
+  if (!isSuspect(r.culprit)) bad('finalize.reveal.culprit');
+  return { culprit: r.culprit, resolution: typeof r.resolution === 'string' ? r.resolution : '' };
+}
+
 export function parseFinalize(raw: unknown): MysteryFinalizeResponse {
   const f = obj(raw, 'finalize');
   const rank = f.rank === null || f.rank === undefined ? null : num(f.rank, 'finalize.rank');
-  return { sessionId: str(f.sessionId, 'finalize.sessionId'), result: parseResult(f.result), rank };
+  const result = parseResult(f.result);
+  // a reveal only ever accompanies a finished (post-accusation) result
+  const reveal = result.outcome === 'finished' ? parseReveal(f.reveal) : null;
+  return { sessionId: str(f.sessionId, 'finalize.sessionId'), result, rank, reveal };
 }
 
 /**
@@ -265,11 +323,15 @@ export function parseFinalize(raw: unknown): MysteryFinalizeResponse {
 export function serverRunResult(server: MysteryResultView, local: RunResult | null): RunResult {
   return {
     rulesVersion: 'mystery-v3.1',
+    caseId: server.caseId,
+    caseVersion: server.caseVersion,
     outcome: server.outcome,
     dnfReason: server.dnfReason,
     verdict: server.verdict,
     accused: server.accused,
     correct: server.correct,
+    evidence: [...server.evidence],
+    deductionCorrect: server.deductionCorrect,
     cluesFound: server.cluesFound as ClueId[],
     eggTier: server.eggTier ?? local?.eggTier ?? 'common',
     eggPoints: server.eggPoints,
@@ -291,6 +353,8 @@ export interface MysteryStationRow {
   nickname: string | null;
   character_id: string | null;
   pokemon_id: string | null;
+  /** The case the terminal is playing (null when idle / rows written before the three cases). */
+  case_id?: CaseId | null;
   status: 'idle' | 'offered' | 'playing' | 'finished' | 'dnf';
   clues_found: number | null;
   catches: number | null;
@@ -306,15 +370,21 @@ export interface MysteryStationRow {
 }
 
 export const MYSTERY_STATION_COLUMNS =
-  'station_id,label,session_id,nickname,character_id,pokemon_id,status,clues_found,catches,sightings,egg_state,active_time_s,verdict,score,is_test,notice,revision,updated_at';
+  'station_id,label,session_id,nickname,character_id,pokemon_id,case_id,status,clues_found,catches,sightings,egg_state,active_time_s,verdict,score,is_test,notice,revision,updated_at';
 
-/** Row of `public.mystery_standings` (finishers above DNFs; DNF rank null). */
+/**
+ * Row of `public.mystery_standings` (finishers above DNFs; DNF rank null). `rank` is over all cases, `case_rank` within
+ * the row's `case_id` (use standingsForCase for a per-case board). Never carries who was accused.
+ */
 export interface MysteryStandingRow {
   standing_group: 0 | 1;
   rank: number | null;
+  case_rank: number | null;
   session_id: string;
   nickname: string;
   station_id: string;
+  case_id: CaseId;
+  case_version: number;
   character_id: string;
   pokemon_id: string;
   outcome: 'finished' | 'dnf';
@@ -323,25 +393,32 @@ export interface MysteryStandingRow {
   active_time_s: number | string;
   verdict: string;
   correct: boolean;
+  deduction_correct: boolean;
   clue_count: number;
   catches: number;
   finalized_at: string;
 }
 
 export const MYSTERY_STANDING_COLUMNS =
-  'standing_group,rank,session_id,nickname,station_id,character_id,pokemon_id,outcome,dnf_reason,score,active_time_s,verdict,correct,clue_count,catches,finalized_at';
+  'standing_group,rank,case_rank,session_id,nickname,station_id,case_id,case_version,character_id,pokemon_id,outcome,dnf_reason,score,active_time_s,verdict,correct,deduction_correct,clue_count,catches,finalized_at';
 
-/** Public columns of `public.mystery_results` the dashboard needs (no client claim). */
+/**
+ * Public columns of `public.mystery_results` the dashboard needs. `accused`, `evidence` and `client_claim` are NOT
+ * selectable for anon / station roles (column privileges) and are never read by public feeds.
+ */
 export interface MysteryResultRow {
   session_id: string;
   station_id: string;
   nickname: string;
   character_id: string;
   pokemon_id: string;
+  case_id: CaseId;
+  case_version: number;
   outcome: 'finished' | 'dnf';
   dnf_reason: string | null;
   verdict: Verdict;
   correct: boolean;
+  deduction_correct: boolean;
   clues_found: string[];
   egg_tier: string | null;
   egg_points: number;
@@ -355,7 +432,26 @@ export interface MysteryResultRow {
 }
 
 export const MYSTERY_RESULT_COLUMNS =
-  'session_id,station_id,nickname,character_id,pokemon_id,outcome,dnf_reason,verdict,correct,clues_found,egg_tier,egg_points,active_time_s,score,catches,sightings,hints_used,is_test,finalized_at';
+  'session_id,station_id,nickname,character_id,pokemon_id,case_id,case_version,outcome,dnf_reason,verdict,correct,deduction_correct,clues_found,egg_tier,egg_points,active_time_s,score,catches,sightings,hints_used,is_test,finalized_at';
+
+const RESULT_KEYS = MYSTERY_RESULT_COLUMNS.split(',') as (keyof MysteryResultRow)[];
+
+/**
+ * Keeps ONLY the public result columns of a REST / Realtime row (defence in depth: even if a payload carried
+ * `accused`, `evidence` or `client_claim`, the public board never stores them). Rows without a known case are dropped.
+ */
+export function publicResultRow(raw: unknown): MysteryResultRow | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.session_id !== 'string' || !isCaseId(r.case_id)) return null;
+  const out: Record<string, unknown> = {};
+  for (const k of RESULT_KEYS) out[k] = r[k] ?? null;
+  out.clues_found = strings(r.clues_found);
+  out.deduction_correct = r.deduction_correct === true;
+  out.correct = r.correct === true;
+  out.is_test = r.is_test === true;
+  return out as unknown as MysteryResultRow;
+}
 
 export const toNum = (v: number | string | null | undefined): number | null => {
   if (v === null || v === undefined || v === '') return null;
@@ -387,25 +483,43 @@ export function orderStandings(rows: readonly MysteryStandingRow[]): MysteryStan
     || epoch(a.finalized_at) - epoch(b.finalized_at) || a.session_id.localeCompare(b.session_id));
   dnf.sort((a, b) => (toNum(b.active_time_s) ?? 0) - (toNum(a.active_time_s) ?? 0)
     || epoch(a.finalized_at) - epoch(b.finalized_at) || a.session_id.localeCompare(b.session_id));
+  const same = (a: MysteryStandingRow, b: MysteryStandingRow) => toNum(a.score) === toNum(b.score)
+    && toNum(a.active_time_s) === toNum(b.active_time_s) && epoch(a.finalized_at) === epoch(b.finalized_at);
   let rank = 0;
   let prev: MysteryStandingRow | null = null;
+  const perCase = new Map<string, { n: number; rank: number; prev: MysteryStandingRow | null }>();
   const ranked = fin.map((r, i) => {
-    const tie = prev && toNum(prev.score) === toNum(r.score) && toNum(prev.active_time_s) === toNum(r.active_time_s)
-      && epoch(prev.finalized_at) === epoch(r.finalized_at);
-    if (!tie) rank = i + 1;
+    if (!prev || !same(prev, r)) rank = i + 1;
     prev = r;
-    return { ...r, standing_group: 0 as const, rank };
+    const c = perCase.get(r.case_id) ?? { n: 0, rank: 0, prev: null };
+    c.n++;
+    if (!c.prev || !same(c.prev, r)) c.rank = c.n;
+    c.prev = r;
+    perCase.set(r.case_id, c);
+    return { ...r, standing_group: 0 as const, rank, case_rank: c.rank };
   });
-  return [...ranked, ...dnf.map((r) => ({ ...r, standing_group: 1 as const, rank: null }))];
+  return [...ranked, ...dnf.map((r) => ({ ...r, standing_group: 1 as const, rank: null, case_rank: null }))];
+}
+
+/** The standings of ONE case (finishers ranked by `case_rank`, then that case's DNFs), same order as the view. */
+export function standingsForCase(rows: readonly MysteryStandingRow[], caseId: CaseId): MysteryStandingRow[] {
+  return orderStandings(rows.filter((r) => r.case_id === caseId)).map((r) => ({ ...r, rank: r.case_rank }));
+}
+
+/** Per-case standings for every case (empty arrays for cases nobody played yet). */
+export function standingsByCase(rows: readonly MysteryStandingRow[]): Record<CaseId, MysteryStandingRow[]> {
+  const out = {} as Record<CaseId, MysteryStandingRow[]>;
+  for (const id of CASE_IDS) out[id] = standingsForCase(rows, id);
+  return out;
 }
 
 /** A standings row from a results row (Realtime INSERT arrives before the next standings refetch). */
 export function standingFromResult(r: MysteryResultRow): MysteryStandingRow {
   return {
-    standing_group: r.outcome === 'finished' ? 0 : 1, rank: null, session_id: r.session_id, nickname: r.nickname,
-    station_id: r.station_id, character_id: r.character_id, pokemon_id: r.pokemon_id, outcome: r.outcome,
-    dnf_reason: r.dnf_reason, score: r.score, active_time_s: r.active_time_s, verdict: r.verdict, correct: r.correct,
-    clue_count: r.clues_found?.length ?? 0, catches: r.catches, finalized_at: r.finalized_at,
+    standing_group: r.outcome === 'finished' ? 0 : 1, rank: null, case_rank: null, session_id: r.session_id, nickname: r.nickname,
+    station_id: r.station_id, case_id: r.case_id, case_version: r.case_version, character_id: r.character_id, pokemon_id: r.pokemon_id,
+    outcome: r.outcome, dnf_reason: r.dnf_reason, score: r.score, active_time_s: r.active_time_s, verdict: r.verdict, correct: r.correct,
+    deduction_correct: r.deduction_correct === true, clue_count: r.clues_found?.length ?? 0, catches: r.catches, finalized_at: r.finalized_at,
   };
 }
 
@@ -498,8 +612,11 @@ export interface SessionDetail {
  */
 export function recordFromRows(r: MysteryResultRow, detail: SessionDetail | null): SessionRecord {
   const duo: Duo = { characterId: r.character_id as NightshadeId, pokemonId: r.pokemon_id as PokemonId };
+  const caseId = isCaseId(r.case_id) ? r.case_id : null;
   const record: SessionRecord = {
     sessionId: r.session_id,
+    caseId,
+    caseVersion: caseId ? toNum(r.case_version) : null,
     duo,
     events: detail
       ? detail.events.map((e) => eventFromRow({ seq: e.seq, t: Number(e.t), type: e.type, payload: e.payload ?? {} })).sort((a, b) => a.seq - b.seq)
@@ -511,6 +628,10 @@ export function recordFromRows(r: MysteryResultRow, detail: SessionDetail | null
       score: toNum(r.score),
       cluesFound: (r.clues_found ?? []) as ClueId[],
       catches: r.catches,
+      ...(caseId ? { caseId, caseVersion: toNum(r.case_version) ?? 1 } : {}),
+      correct: r.correct === true,
+      deductionCorrect: r.deduction_correct === true,
+      eggPoints: r.egg_points,
     },
   };
   if (detail) {

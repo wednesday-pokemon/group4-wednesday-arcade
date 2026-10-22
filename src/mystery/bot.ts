@@ -5,7 +5,7 @@
 // the seed draws.
 //
 // ── Phase 4 usage ────────────────────────────────────────────────────────────────────────────────────────────────────
-//   import { playEpisode, type BotOptions, type BotEpisode } from '../bot.ts';
+//   import { playEpisode, type BotEpisode } from '../episode.ts';   (episode.ts holds the driver + the answer keys)
 //   const ep: BotEpisode = playEpisode({ characterId: 'enid', pokemonId: 'gengar' }, 'sim-000123', { profile: 'careless',
 //     sprintProb: 0.3, useAbilities: true });
 //   ep.events     StampedEvent[]  the run log (seq 1…n, t = active seconds) — exactly what a live session records
@@ -18,16 +18,18 @@
 // Vary episodes with: profile, sprintProb, crouchNearHydeM, crouchAtSuspicion, hide, useAbilities, fleeSprint,
 // accuse ('deduce' | 'guess' | 'none'), clueOrder ('nearest' | 'shuffle'), startDelayMaxS (patrol phase), skipClues
 // (partial-success episodes), decisionHz, maxTimeS. `runOptions` (4th arg) may override map / caseDef / tuning /
-// registries. Cost ≈ 0.2–0.4 s per episode in Node.
+// registries. Cost ≈ 0.2–0.4 s per episode in Node. This module never imports the answer keys (the app loads the Bot
+// for its test autopilot): the accusation is deduced from what the found clues say.
 //
 // Profiles (defaults; every knob can be overridden):
 //   stealthy — walks, crouches when the Hyde is within 14 m or suspicious, ducks out of its sight line, hides from
 //              investigations, sprints only to flee a chase.
 //   careless — walks or sprints (sprintProb 0.5), never crouches or hides, still sprints away from a chase.
-import { MysteryRun, type MysteryRunOptions } from './run.ts';
+import type { MysteryRun } from './run.ts';
+import { mentionCounts } from './caseLogic.ts';
 import { Rng } from './rng.ts';
 import { wrapAngle, yawTo } from './geometry.ts';
-import type { ClueId, Duo, MysteryInput, RunResult, StampedEvent, StateSnapshot, SuspectId, Vec2 } from './types.ts';
+import type { Accusation, ClueId, MysteryInput, Vec2 } from './types.ts';
 
 export type BotProfile = 'stealthy' | 'careless';
 
@@ -344,72 +346,24 @@ export class Bot {
     return best;
   }
 
-  accusation(): SuspectId | null {
+  /**
+   * The bot's one-shot accusation. 'deduce' (all clues found) names the suspect the found clues mention most — by case
+   * design the culprit is named in every clue and each innocent in one — and cites the found clues. It never reads the
+   * answer key. 'guess' names a seeded random suspect and cites whatever it found.
+   */
+  accusation(): Accusation {
     const run = this.run;
-    if (this.o.accuse === 'none') return null;
+    if (this.o.accuse === 'none') return { suspectId: null, evidence: [] };
     const suspects = run.caseDef.suspects.map((s) => s.id);
+    const evidence = run.caseDef.clues.filter((c) => run.cluesFound.includes(c.id)).map((c) => c.id);
     if (this.o.accuse === 'deduce' && run.cluesFound.length === run.caseDef.clues.length) {
-      // deduce from the clue links: the suspect implicated by the most found clues
-      let best = suspects[0];
-      let bestN = -1;
-      for (const s of suspects) {
-        const n = run.caseDef.clues.filter((c) => run.cluesFound.includes(c.id) && c.implicates.includes(s)).length;
-        if (n > bestN) {
-          bestN = n;
-          best = s;
-        }
-      }
-      return best;
+      const counts = mentionCounts(run.caseDef, run.cluesFound);
+      let best = suspects[0]!;
+      for (const s of suspects) if (counts[s] > counts[best]) best = s;
+      return { suspectId: best, evidence };
     }
-    return this.rng.pick(suspects);
+    return { suspectId: this.rng.pick(suspects), evidence };
   }
-}
-
-export interface BotEpisode {
-  duo: Duo;
-  seed: string;
-  profile: BotProfile;
-  result: RunResult | null;
-  timedOut: boolean;
-  activeTimeS: number;
-  events: StampedEvent[];
-  snapshots: StateSnapshot[];
-  run: MysteryRun;
-}
-
-/** Plays one full episode headless. `runOptions` may override map / case / tuning / registries. */
-export function playEpisode(
-  duo: Duo, seed: string, options: BotOptions, runOptions: Partial<MysteryRunOptions> = {},
-): BotEpisode {
-  const run = new MysteryRun({ ...runOptions, duo, seed, tutorial: false });
-  const bot = new Bot(run, options, seed);
-  const dt = run.tuning.fixedStepS;
-  const decideEvery = Math.max(1, Math.round(1 / (bot.o.decisionHz * dt)));
-  const snapshots: StateSnapshot[] = [];
-  let nextSnap = 0;
-  let step = 0;
-  let input = bot.decide();
-  while (run.status === 'playing' && run.t < bot.o.maxTimeS) {
-    if (step % decideEvery === 0) {
-      input = bot.decide();
-      run.applyLook(input);
-      run.setInput(input);
-    }
-    if (run.t >= nextSnap) {
-      snapshots.push(run.snapshot());
-      nextSnap += 1;
-    }
-    run.step(dt);
-    // edges are consumed by the step; keep held inputs only
-    input = { ...input, interact: false, power: false, move: false, hint: false };
-    run.setInput(input);
-    step++;
-  }
-  if (run.status === 'accusing') run.accuse(bot.accusation());
-  return {
-    duo, seed, profile: options.profile, result: run.result(), timedOut: run.status === 'playing', activeTimeS: run.activeTimeS(),
-    events: run.log, snapshots, run,
-  };
 }
 
 function stripUndefined<T extends object>(o: T): Partial<T> {

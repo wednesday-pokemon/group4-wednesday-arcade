@@ -36,6 +36,7 @@ function deps(storage: MemStorage | null, extra: Partial<SessionDeps> = {}): Ses
       return { offer: previewOffer(seed), source: 'preview' };
     },
     realDraft: false,
+    drawCase: () => 'crypt_last_witness',
     offers,
     ...extra,
   };

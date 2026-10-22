@@ -6,7 +6,7 @@
 import { useContext, useEffect, useRef, useState } from 'react';
 import { createMysteryAnalytics, type Advice, type MysteryAnalytics } from '../../mystery/analytics/index.ts';
 import type { MysteryRun } from '../../mystery/run.ts';
-import type { Duo, StampedEvent, SuspectId } from '../../mystery/types.ts';
+import type { Accusation, CaseDef, Duo, StampedEvent } from '../../mystery/types.ts';
 import { announce } from '../announce.tsx';
 import { audio } from '../audio.ts';
 import { getSettings, useSettings } from '../settings.ts';
@@ -15,7 +15,7 @@ import {
   type AbilityMeta, type MysteryHudModel, type ThingLineState, type Toast,
 } from './hudModel.ts';
 import { IDLE_INPUT, MysteryInputController, type MysteryFrameInput } from './input.ts';
-import { integrationStatus, loadRunCtor, loadSceneCtor, nightshadeDef, partnerDef } from './integration.ts';
+import { integrationStatus, loadCaseSolution, loadRunCtor, loadSceneCtor, nightshadeDef, partnerDef } from './integration.ts';
 import { LiveRunContext } from './liveContext.ts';
 import { ctrlCrouchEnabled } from './kiosk.ts';
 import { browserStorage, writeLive, type LivePhase } from './records.ts';
@@ -33,6 +33,10 @@ export type AutopilotProfile = 'stealthy' | 'careless';
 export interface MysteryLoopOptions {
   duo: Duo;
   seed: string;
+  /** The session's assigned case (public definition; the answer key is loaded only at the accusation). */
+  caseDef: CaseDef;
+  /** LIVE station: never echo the seed into debug output. */
+  hideSeed?: boolean;
   tutorial: boolean;
   /** Sim clock stopped (pause / board overlay). */
   paused: boolean;
@@ -60,7 +64,8 @@ export interface MysteryLoopHandle {
   input: () => MysteryInputController | null;
   endTutorial: () => void;
   /** null = leave the case unsolved. */
-  accuse: (s: SuspectId | null) => boolean;
+  /** The one-shot accusation (loads the case's answer key first); resolves false when it was not accepted. */
+  accuse: (a: Accusation) => Promise<boolean>;
   /** Board may open now (blocked during CHASE); shows the 1.2 s "Board locked" toast when not. */
   tryOpenBoard: () => boolean;
   setAutopilot: (p: AutopilotProfile | null) => Promise<boolean>;
@@ -92,6 +97,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
   const inputRef = useRef<MysteryInputController | null>(null);
   const sceneRef = useRef<MysterySceneLike | null>(null);
   const analyticsRef = useRef<MysteryAnalytics | null>(null);
+  const accusingRef = useRef(false);
   const api = useRef<{
     handle: (events: StampedEvent[], advice: Advice | null) => void;
     boardLocked: () => void;
@@ -141,7 +147,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         return;
       }
       try {
-        const run = new Run({ duo: opts.current.duo, seed: opts.current.seed, tutorial: opts.current.tutorial });
+        const run = new Run({ duo: opts.current.duo, seed: opts.current.seed, caseDef: opts.current.caseDef, tutorial: opts.current.tutorial });
         const s = getSettings();
         cleanup = start(run, new Scene(container, run.map, opts.current.duo, { reducedMotion: s.reducedMotion, lowGraphics: s.lowGraphics }));
         setPhase('ready');
@@ -263,9 +269,9 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
               audio.play('chime');
               const title = clueTitle(run, e.clueId);
               evidenceToast = { t: { id: ++toastSeq, tone: 'lantern', icon: CLUE_ICON[e.clueId], headline: title, sub: 'Tab to read' }, until: realT + 3.5 };
-              thing.say(script.clueFound(e.clueId), realT, { priority: 3 });
+              thing.say(script.clueFound(run.caseDef, e.clueId), realT, { priority: 3 });
               pendingCount = e.cluesFound;
-              announce(`Clue found: ${title}. ${e.cluesFound} of 3.`);
+              announce(`Clue found: ${title}. ${e.cluesFound} of ${run.caseDef.clues.length}.`);
               break;
             }
             case 'egg_pickup':
@@ -307,7 +313,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
                 const ob = run.objective();
                 if (hintObjective !== ob) hintK = 0;
                 hintObjective = ob;
-                thing.say(script.hint(ob, hintK++), realT, { priority: 4, key: 'hint_' + realT });
+                thing.say(script.hint(ob, hintK++, run.caseDef), realT, { priority: 4, key: 'hint_' + realT });
               }
               break;
             }
@@ -331,10 +337,11 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         if (run.status === lastStatus) return;
         const prev = lastStatus;
         lastStatus = run.status;
-        if (prev === 'tutorial' && run.status === 'playing') thing.say(script.objective(run.objective()), realT, { priority: 2, once: true, key: 'case_open' });
+        if (prev === 'tutorial' && run.status === 'playing') thing.say(script.objective(run.objective(), run.caseDef), realT, { priority: 2, once: true, key: 'case_open' });
         if (run.status === 'accusing') {
           const n = run.cluesFound.length;
-          thing.say(n < 3 ? script.towerFewClues(n) : script.towerDeposit(), realT, { priority: 4 });
+          const total = run.caseDef.clues.length;
+          thing.say(n < total ? script.towerFewClues(n, total) : script.towerDeposit(), realT, { priority: 4 });
           liveRef.current?.flushNow('deposit');
           opts.current.onDeposited();
         }
@@ -443,7 +450,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
           : run.status === 'finished' ? 'results' : run.egg.state === 'carried' ? 'carrying' : 'investigating';
         const cr = analytics.currentRisk();
         return {
-          stationId: opts.current.stationId, phase, nickname: opts.current.nickname, duo: run.duo, clues: run.cluesFound.length,
+          stationId: opts.current.stationId, phase, nickname: opts.current.nickname, duo: run.duo, caseId: run.caseDef.id, clues: run.cluesFound.length,
           egg: { state: run.egg.state, tier: run.egg.state === 'resting' ? null : run.egg.tier, security: Math.round(run.egg.security) },
           hp: Math.round(run.player.hp), catches: run.player.catches, hydeMode: run.status === 'playing' ? run.hyde.mode : null,
           risk: cr ? { p: Math.round(cr.p * 100) / 100, label: cr.label } : null,
@@ -502,7 +509,8 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         return {
           coords: 'metres, XZ ground plane; yaw 0 faces -Z, positive yaw turns left',
           duo: run.duo,
-          seed: run.seed,
+          caseId: run.caseDef.id,
+          seed: opts.current.hideSeed ? null : run.seed,
           status: run.status,
           t: r(run.t),
           objective: run.objective(),
@@ -566,10 +574,14 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       const run = runRef.current;
       if (run?.status === 'tutorial') run.endTutorial();
     },
-    accuse: (suspect) => {
+    accuse: async (accusation) => {
       const run = runRef.current;
-      if (!run || run.status !== 'accusing') return false;
-      const events = run.accuse(suspect);
+      if (!run || run.status !== 'accusing' || accusingRef.current) return false;
+      // One shot: a second click while the answer key loads does nothing.
+      accusingRef.current = true;
+      const solution = await loadCaseSolution(run.caseDef.id);
+      if (runRef.current !== run || run.status !== 'accusing') return false;
+      const events = run.accuse(accusation, solution);
       const out = analyticsRef.current?.frame(run as unknown as MysteryRun, events);
       api.current?.handle(events, out?.advice ?? null);
       return true;

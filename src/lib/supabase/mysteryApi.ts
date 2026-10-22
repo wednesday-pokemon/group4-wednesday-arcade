@@ -48,6 +48,7 @@ export function classifyFailure(err: unknown): MysteryFailure {
       return 'conflict';
     case 'EVENT_REJECTED':
     case 'TOO_MANY_EVENTS':
+    case 'CASE_OUTDATED': // the session was created for another version of its case: it cannot be verified
     case 'INVALID_INPUT':
     case 'MALFORMED_JSON':
     case 'PAYLOAD_TOO_LARGE':

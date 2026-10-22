@@ -199,7 +199,10 @@ describe('routing', () => {
 
   it('mystery dev shortcut: only a valid Nightshade + Pokémon pair, seed sanitised', () => {
     expect(parseRoute('?mode=mystery&character=ajax&pokemon=gholdengo&seed=abc123&tutorial=0'))
-      .toEqual({ kind: 'mystery', characterId: 'ajax', pokemonId: 'gholdengo', seed: 'abc123', skipTutorial: true });
+      .toEqual({ kind: 'mystery', characterId: 'ajax', pokemonId: 'gholdengo', seed: 'abc123', skipTutorial: true, skipPrologue: false, caseId: null });
+    expect(parseRoute('?mode=mystery&case=midnight_signal')).toMatchObject({ caseId: 'midnight_signal' });
+    expect(parseRoute('?mode=mystery&case=nope')).toMatchObject({ caseId: null });
+    expect(parseRoute('?mode=mystery&prologue=0')).toMatchObject({ skipTutorial: false, skipPrologue: true });
     // xavier is a legacy character, not a selectable Nightshade
     expect(parseRoute('?mode=mystery&character=xavier&pokemon=gengar')).toMatchObject({ characterId: null, pokemonId: null });
     expect(parseRoute('?mode=mystery&seed=<script>')).toMatchObject({ seed: null });

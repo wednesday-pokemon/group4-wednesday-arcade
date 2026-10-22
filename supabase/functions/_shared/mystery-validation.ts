@@ -4,7 +4,8 @@
 import { isPokemonId, sanitizeNickname } from './game/index.ts';
 import type { PokemonId } from './game/index.ts';
 import { NIGHTSHADE_IDS } from './mystery/types.ts';
-import type { NightshadeId } from './mystery/types.ts';
+import type { CaseId, NightshadeId } from './mystery/types.ts';
+import { isCaseId } from './mystery/data/cases.ts';
 import { HttpError } from './errors.ts';
 import { asObject, isActionId, isUuid, sanitizeNote } from './validation.ts';
 import { MAX_T, parseEventBatch, type ParsedEvent } from './mystery-events.ts';
@@ -49,11 +50,12 @@ export interface MysteryCreateBody {
   actionId: string;
   nickname: string; // sanitized
   testSeed?: string; // only when MYSTERY_ALLOW_TEST_SEEDS=true; the session is then is_test (never ranked)
+  testCase?: CaseId; // only together with testSeed (same flag): forces the session's case instead of the station bag
 }
 
 export function parseMysteryCreate(raw: unknown, allowTestSeeds: boolean): MysteryCreateBody {
   const body = asObject(raw);
-  onlyKeys(body, ['actionId', 'nickname', 'testSeed']);
+  onlyKeys(body, ['actionId', 'nickname', 'testSeed', 'testCase']);
   if (!isActionId(body.actionId)) invalid('actionId', 'actionId must be 8-64 characters of [A-Za-z0-9_-] (use crypto.randomUUID())');
   if (typeof body.nickname !== 'string' || body.nickname.length > 64) invalid('nickname', 'nickname must be a string');
   const nick = sanitizeNickname(body.nickname);
@@ -63,6 +65,12 @@ export function parseMysteryCreate(raw: unknown, allowTestSeeds: boolean): Myste
     if (!allowTestSeeds) throw new HttpError('TEST_SEED_FORBIDDEN', 'Seed reuse is disabled on this deployment', { field: 'testSeed' });
     if (typeof body.testSeed !== 'string' || !SEED_RE.test(body.testSeed)) invalid('testSeed', 'testSeed must be 32 lowercase hex characters');
     out.testSeed = body.testSeed;
+  }
+  if (body.testCase !== undefined && body.testCase !== null) {
+    if (!allowTestSeeds) throw new HttpError('TEST_SEED_FORBIDDEN', 'Forcing a case is disabled on this deployment', { field: 'testCase' });
+    if (!isCaseId(body.testCase)) invalid('testCase', 'testCase must be one of the three case ids');
+    if (out.testSeed === undefined) invalid('testCase', 'testCase is only accepted together with testSeed (an unranked test session)');
+    out.testCase = body.testCase;
   }
   return out;
 }
@@ -213,7 +221,9 @@ export interface MysteryFinalizeBody {
 }
 
 const CLAIM_KEYS = ['outcome', 'dnfReason', 'verdict', 'accused', 'correct', 'cluesFound', 'eggTier', 'eggPoints', 'eggSecurity',
-  'activeTimeS', 'score', 'catches', 'hp'];
+  'activeTimeS', 'score', 'catches', 'hp', 'caseId', 'caseVersion', 'evidence', 'deductionCorrect'];
+/** Array-valued claim keys and their maximum length. */
+const CLAIM_LISTS: Record<string, number> = { cluesFound: 3, evidence: 5 };
 
 /** Keeps only known RunResult fields with primitive values (the claim is audit data, never trusted). */
 export function sanitizeClientResult(raw: unknown): Record<string, unknown> | undefined {
@@ -224,7 +234,7 @@ export function sanitizeClientResult(raw: unknown): Record<string, unknown> | un
     const v = (raw as Json)[k];
     if (v === undefined) continue;
     if (v === null || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.length <= 40)) out[k] = v;
-    else if (k === 'cluesFound' && Array.isArray(v) && v.length <= 3 && v.every((c) => typeof c === 'string' && c.length <= 40)) out[k] = v;
+    else if (k in CLAIM_LISTS && Array.isArray(v) && v.length <= CLAIM_LISTS[k]! && v.every((c) => typeof c === 'string' && c.length <= 40)) out[k] = v;
   }
   return out;
 }

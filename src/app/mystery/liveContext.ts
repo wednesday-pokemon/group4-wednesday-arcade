@@ -2,10 +2,10 @@
 // Types + a React context only: nothing here imports supabase-js, so the LOCAL DEMO bundle stays free of it.
 import { createContext } from 'react';
 import type { MysteryAnalytics } from '../../mystery/analytics/index.ts';
-import type { Duo, DuoOffer } from '../../mystery/types.ts';
+import type { CaseId, Duo, DuoOffer } from '../../mystery/types.ts';
 import type { StationId } from '../../game/index.ts';
 import type { ConnectionState } from '../../lib/backend.ts';
-import type { MysteryResultView } from '../../lib/supabase/mysteryWire.ts';
+import type { MysteryResultView, MysteryReveal } from '../../lib/supabase/mysteryWire.ts';
 import type { LiveStatus } from './records.ts';
 import type { MysteryRunLike } from './runTypes.ts';
 
@@ -27,6 +27,13 @@ export const LiveRunContext = createContext<LiveRunHooks | null>(null);
 export interface LiveSessionData {
   sessionId: string;
   seed: string;
+  /**
+   * The case the SERVER assigned at create (per-station bag; never derived from the seed). Identical on every restore /
+   * refresh of this session; only a new session draws the next case. Play `caseById(caseId)`.
+   */
+  caseId: CaseId;
+  /** CaseDef.version the session was created with (the server refuses to verify against another version). */
+  caseVersion: number;
   offer: DuoOffer;
   selected: Duo | null;
   nickname: string;
@@ -45,7 +52,8 @@ export type LiveRestore =
 export type LiveFinal =
   | { kind: 'none' }
   | { kind: 'verifying'; offline: boolean }
-  | { kind: 'verified'; result: MysteryResultView; rank: number | null }
+  /** `reveal` = the server's culprit + resolution of this session's case (finished runs; null for a DNF). */
+  | { kind: 'verified'; result: MysteryResultView; rank: number | null; reveal: MysteryReveal | null }
   | { kind: 'unverified'; reason: string };
 
 export type LiveSync = 'idle' | 'live' | 'offline' | 'unverified' | 'closed' | 'reset';

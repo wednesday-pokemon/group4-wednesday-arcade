@@ -5,11 +5,12 @@ import { describe, expect, it } from 'vitest';
 import { hydeTargetable } from '../../../src/mystery/abilities.ts';
 import { Bot } from '../../../src/mystery/bot.ts';
 import { simulateEpisode } from '../../../src/mystery/analytics/episodes.ts';
-import { evaluateFollow, evaluateOutcome, MAX_REASON, MAX_TEXT, PrescriptiveService, summariseAdvice } from '../../../src/mystery/analytics/prescriptive.ts';
+import { eggAdvice, evaluateFollow, evaluateOutcome, MAX_REASON, MAX_TEXT, PrescriptiveService, summariseAdvice } from '../../../src/mystery/analytics/prescriptive.ts';
+import { CASES } from '../../../src/mystery/data/cases.ts';
 import type { Advice, AdviceRecord } from '../../../src/mystery/analytics/types.ts';
 import { REGISTRIES } from '../../../src/mystery/draft.ts';
 import { MysteryRun } from '../../../src/mystery/run.ts';
-import type { Duo } from '../../../src/mystery/types.ts';
+import { CASE_IDS, type Duo } from '../../../src/mystery/types.ts';
 import { stamp } from './helpers.ts';
 
 const svc = new PrescriptiveService();
@@ -115,13 +116,15 @@ describe('PrescriptiveService', () => {
         while (run.status === 'playing' && run.t < 240) {
           const input = bot.decide();
           let press: 'F' | 'Q' | null = null;
+          // the visitor turns first, THEN reads Thing's advice and presses at once (a facing-cone power such as a gaze
+          // that was valid before the turn may not be after it)
+          run.applyLook(input);
           if (run.t >= nextAdvice) {
             nextAdvice = run.t + 0.5;
             const a = svc.recommend(run);
             if (a && (a.action === 'use_power' || a.action === 'use_move')) press = a.ability!.key;
           }
           const before = run.log.length;
-          run.applyLook(input);
           run.setInput({ ...input, power: press === 'F', move: press === 'Q' });
           for (let s = 0; s < 6 && run.status === 'playing'; s++) {
             run.step(dt);
@@ -138,6 +141,60 @@ describe('PrescriptiveService', () => {
     });
     expect(pressed).toBeGreaterThan(3);
   }, 120_000);
+
+  it('property holds on every case (case-specific clue / egg placements and room names)', () => {
+    const duos: Duo[] = [
+      { characterId: 'ajax', pokemonId: 'gengar' },
+      { characterId: 'morticia', pokemonId: 'chandelure' },
+    ];
+    let checked = 0;
+    const roomTexts = new Set<string>();
+    for (const [ci, caseId] of CASE_IDS.entries()) {
+      duos.forEach((duo, i) => {
+        simulateEpisode(duo, `presc-case-${ci}-${i}`, { profile: i ? 'stealthy' : 'careless', sprintProb: 0.5, useAbilities: true, maxTimeS: 300 }, {
+          onSample(run, sample) {
+            expect(run.caseDef.id).toBe(caseId);
+            if (Math.round(sample.snapshot.t) % 3 !== 0) return;
+            const a = svc.recommend(run);
+            expect(a).not.toBeNull();
+            checkAdvice(run, a!);
+            checked++;
+            const names = run.map.rooms.map((r) => r.name);
+            for (const o of [a!, ...a!.alternatives]) {
+              const m = /^(?:Search the|Go around via the) (.+?)(?: for evidence)?$/.exec(o.text);
+              if (m && !o.text.endsWith('…')) {
+                expect([...names, 'open ground']).toContain(m[1]);
+                roomTexts.add(`${caseId}:${m[1]}`);
+              }
+              if (o.action === 'get_egg') expect(o.text).toBe(eggAdvice(run));
+            }
+          },
+        }, { caseDef: CASES[caseId] });
+      });
+    }
+    expect(checked).toBeGreaterThan(150);
+  }, 120_000);
+
+  it('egg advice comes from the case being played (its egg objective), never a fixed room', () => {
+    const texts = new Set<string>();
+    for (const caseId of CASE_IDS) {
+      const run = new MysteryRun({ duo: { characterId: 'enid', pokemonId: 'gengar' }, seed: `egg-${caseId}`, tutorial: false, caseDef: CASES[caseId] });
+      for (const c of run.caseDef.clues) run.cluesFound.push(c.id);
+      expect(run.objective()).toBe('find_egg');
+      const expected = CASES[caseId].egg.objective.replace(/\.$/, '');
+      expect(eggAdvice(run)).toBe(expected);
+      const get = svc.candidates(run).find((o) => o.action === 'get_egg');
+      expect(get, caseId).toBeDefined();
+      expect(get!.text).toBe(expected);
+      expect(get!.target).toEqual({ x: run.egg.x, z: run.egg.z });
+      texts.add(get!.text);
+      // a run without a case egg objective falls back to the (case-renamed) room the egg lies in
+      const fallback = eggAdvice({ ...run, caseDef: { ...run.caseDef, egg: { ...run.caseDef.egg, objective: '' } }, roomAt: run.roomAt.bind(run), egg: run.egg } as unknown as MysteryRun);
+      expect(fallback).toBe(`Fetch the egg from the ${run.roomAt(run.egg.x, run.egg.z)?.name ?? 'open ground'}`);
+    }
+    expect(texts.size).toBe(3);
+    expect([...texts].join(' ')).not.toMatch(/Egg Chamber.*Egg Chamber.*Egg Chamber/);
+  });
 
   it('after the deposit it only suggests reviewing the board (never accusing); nothing after the run ends', () => {
     const run = new MysteryRun({ duo: { characterId: 'enid', pokemonId: 'gengar' }, seed: 'acc-1', tutorial: false });

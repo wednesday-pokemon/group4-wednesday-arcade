@@ -1,9 +1,12 @@
 // Visitor session persistence (MYSTERY_CONTRACT "App"): localStorage['raven.mystery.session'] holds
-// { sessionId, seed, offer, selected?, nickname, createdAt }. A session (crypto seed → draftOffer(seed)) is created only
-// when none is open; a refresh / re-render restores the SAME offer; "Play again" clears it. Pure functions over an
-// injected Storage + entropy so they are unit-testable in Node.
+// { sessionId, seed, offer, caseId, caseVersion, selected?, closed?, nickname, createdAt }. A session (crypto seed →
+// draftOffer(seed); case dealt from the shuffled case bag, independent of the seed) is created only when none is open;
+// a refresh / re-render restores the SAME offer and the SAME case; a session whose run ended is CLOSED, so a refresh
+// never re-opens a finished case (no second accusation). "Play again" clears it. Pure functions over an injected
+// Storage + entropy so they are unit-testable in Node.
+import { CASES, isCaseId } from '../../mystery/data/cases.ts';
 import { MYSTERY_RULES_VERSION, NIGHTSHADE_IDS } from '../../mystery/types.ts';
-import type { Duo, DuoCard, DuoOffer, MysteryRulesVersion } from '../../mystery/types.ts';
+import type { CaseId, Duo, DuoCard, DuoOffer, MysteryRulesVersion } from '../../mystery/types.ts';
 import type { OfferSource } from './integration.ts';
 
 export const SESSION_KEY = 'raven.mystery.session';
@@ -15,7 +18,12 @@ export interface MysterySession {
   offer: DuoOffer;
   /** 'preview' while src/mystery/draft.ts is missing; such offers are rebuilt from the same seed once it lands. */
   offerSource: OfferSource;
+  /** The case assigned when the session was created (never chosen, never re-drawn for this session). */
+  caseId: CaseId;
+  caseVersion: number;
   selected?: Duo;
+  /** The run ended (results reached): the session can no longer be resumed. */
+  closed?: boolean;
   nickname: string;
   createdAt: string;
 }
@@ -27,6 +35,8 @@ export interface SessionDeps {
   makeOffer: (seed: string) => { offer: DuoOffer; source: OfferSource };
   /** True when the real draftOffer() is available (preview offers then get rebuilt). */
   realDraft: boolean;
+  /** Deals the case for a NEW session (src/app/mystery/caseBag.ts drawCase). */
+  drawCase: () => CaseId;
 }
 
 export function browserRandomBytes(n: number): Uint8Array {
@@ -79,12 +89,17 @@ export function readSession(storage: SessionDeps['storage']): MysterySession | n
     if (typeof s.sessionId !== 'string' || typeof s.seed !== 'string' || typeof s.nickname !== 'string') return null;
     if (!isOffer(s.offer) || s.offer.seed !== s.seed) return null;
     if (s.selected !== undefined && !isDuo(s.selected)) return null;
+    // A session from before the case system, for an unknown case, or for an older version of its case is stale.
+    if (!isCaseId(s.caseId) || s.caseVersion !== CASES[s.caseId].version) return null;
+    if (s.closed === true) return null;
     return {
       rulesVersion: MYSTERY_RULES_VERSION,
       sessionId: s.sessionId,
       seed: s.seed,
       offer: s.offer,
       offerSource: s.offerSource === 'draft' ? 'draft' : 'preview',
+      caseId: s.caseId,
+      caseVersion: s.caseVersion,
       ...(s.selected ? { selected: s.selected } : {}),
       nickname: s.nickname,
       createdAt: typeof s.createdAt === 'string' ? s.createdAt : new Date(0).toISOString(),
@@ -111,15 +126,18 @@ export function clearSession(storage: SessionDeps['storage']): void {
 }
 
 /** A brand-new session: fresh crypto seed + its offer. Not persisted until `openSession`/`writeSession`. */
-export function createSession(deps: SessionDeps, opts: { seed?: string; nickname?: string } = {}): MysterySession {
+export function createSession(deps: SessionDeps, opts: { seed?: string; nickname?: string; caseId?: CaseId } = {}): MysterySession {
   const seed = opts.seed ?? newSeed(deps.randomBytes);
   const { offer, source } = deps.makeOffer(seed);
+  const caseId = opts.caseId ?? deps.drawCase();
   return {
     rulesVersion: MYSTERY_RULES_VERSION,
     sessionId: newSessionId(deps.randomBytes),
     seed,
     offer,
     offerSource: source,
+    caseId,
+    caseVersion: CASES[caseId].version,
     nickname: opts.nickname ?? '',
     createdAt: deps.now().toISOString(),
   };
@@ -137,7 +155,7 @@ export function openSession(deps: SessionDeps): { session: MysterySession; resto
       // A selection made from preview cards is dropped: the visitor picks again from the real cards.
       const upgraded: MysterySession = {
         rulesVersion: existing.rulesVersion, sessionId: existing.sessionId, seed: existing.seed, offer, offerSource: source,
-        nickname: existing.nickname, createdAt: existing.createdAt,
+        caseId: existing.caseId, caseVersion: existing.caseVersion, nickname: existing.nickname, createdAt: existing.createdAt,
       };
       writeSession(deps.storage, upgraded);
       return { session: upgraded, restored: true };
@@ -172,4 +190,9 @@ export function withSelected(s: MysterySession, duo: Duo): MysterySession {
 
 export function withNickname(s: MysterySession, nickname: string): MysterySession {
   return { ...s, nickname };
+}
+
+/** The run ended: mark the session closed so a refresh starts a new session (and a new case). */
+export function withClosed(s: MysterySession): MysterySession {
+  return { ...s, closed: true };
 }

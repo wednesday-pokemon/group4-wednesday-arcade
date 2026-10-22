@@ -1,10 +1,14 @@
 // Laptop 1 aggregates: one distinct, testable panel per analytics layer, computed from session records (rows rebuilt
-// from Supabase — see eventFromRow — or local MysteryAnalytics.sessionRecord()). Works for any mix of duos.
-import { aggregateSessions, type DescriptiveAggregate } from './descriptive.ts';
+// from Supabase — see eventFromRow — or local MysteryAnalytics.sessionRecord()). Works for any mix of duos and cases:
+// `scope` picks one case or all cases; the descriptive layer always carries the per-case summary table as well.
+// Legacy records (no case id) are excluded unless `legacy: 'include'` (combined-only boards).
+import { aggregateSessions, scopeRecords, type AggregateOptions, type DescriptiveAggregate } from './descriptive.ts';
 import { aggregateDiagnostics, type DiagnosticAggregate } from './diagnostic.ts';
 import { anyWithin, detectionTimes, DETECTION_HORIZON_S } from './labels.ts';
 import type { ModelCard, PredictiveService } from './predictive.ts';
 import type { SessionRecord } from './types.ts';
+import type { CaseId } from '../types.ts';
+import { recordCaseId } from './caseInfo.ts';
 
 export interface LiveForecastCheck {
   /** Detection forecasts whose 15 s window has been observed. Observational, live sessions only. */
@@ -25,7 +29,24 @@ export interface PrescriptiveAggregate {
   note: string;
 }
 
+export type DashboardOptions = AggregateOptions;
+
+/**
+ * The boards' scope policy (LOCAL DEMO and LIVE):
+ *   • as soon as ANY record carries a case id the board is case-aware: the requested scope applies and legacy
+ *     (case-less) records are excluded everywhere (counted in `descriptive.legacyExcluded`);
+ *   • a board whose records carry no case id at all (old localStorage rows, or a live feed that does not map
+ *     `case_id` yet) degrades to "combined only": every record, scope forced to 'all', no case filter.
+ */
+export function boardOptions(records: readonly SessionRecord[], requested: CaseId | 'all'): { options: DashboardOptions; caseAware: boolean } {
+  const caseAware = records.some((r) => recordCaseId(r) !== null);
+  return caseAware
+    ? { options: { caseId: requested, legacy: 'exclude' }, caseAware }
+    : { options: { caseId: 'all', legacy: 'include' }, caseAware };
+}
+
 export interface DashboardAggregates {
+  scope: DescriptiveAggregate['scope'];
   descriptive: DescriptiveAggregate;
   diagnostic: DiagnosticAggregate;
   predictive: { card: ModelCard; live: LiveForecastCheck };
@@ -110,11 +131,21 @@ export function aggregatePrescriptive(records: readonly SessionRecord[]): Prescr
   };
 }
 
-export function dashboardAggregates(records: readonly SessionRecord[], predictive: PredictiveService, clueIds: readonly string[] = []): DashboardAggregates {
+/**
+ * All four panels for one scope. The third argument may also be a clue-id list (pre-case API), which means
+ * `{ legacy: 'include' }` (every record, combined only).
+ */
+export function dashboardAggregates(
+  records: readonly SessionRecord[], predictive: PredictiveService, options: DashboardOptions | readonly string[] = {},
+): DashboardAggregates {
+  const o: DashboardOptions = Array.isArray(options) ? { legacy: 'include' } : (options as DashboardOptions);
+  const scoped = scopeRecords(records, o).records;
+  const descriptive = aggregateSessions(records, o);
   return {
-    descriptive: aggregateSessions(records, clueIds),
-    diagnostic: aggregateDiagnostics(records),
-    predictive: { card: predictive.modelCard(), live: liveForecastCheck(records) },
-    prescriptive: aggregatePrescriptive(records),
+    scope: descriptive.scope,
+    descriptive,
+    diagnostic: aggregateDiagnostics(scoped),
+    predictive: { card: predictive.modelCard(), live: liveForecastCheck(scoped) },
+    prescriptive: aggregatePrescriptive(scoped),
   };
 }

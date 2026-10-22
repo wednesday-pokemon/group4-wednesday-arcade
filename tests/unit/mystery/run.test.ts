@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { playEpisode } from '../../../src/mystery/bot.ts';
+import { playEpisode } from '../../../src/mystery/episode.ts';
 import { MysteryRun } from '../../../src/mystery/run.ts';
 import { input } from './helpers.ts';
 
@@ -7,7 +7,8 @@ describe('MysteryRun API on buildIsland()', () => {
   it('constructs with only { duo, seed } (default island, case, registries, tuning)', () => {
     const run = new MysteryRun({ duo: { characterId: 'enid', pokemonId: 'gengar' }, seed: 's1' });
     expect(run.status).toBe('playing');
-    expect(run.map.id).toBe('raven_island_v31');
+    expect(run.map.id).toBe('raven_island_v31:poisoned_archive');
+    expect(run.caseDef.id).toBe('poisoned_archive');
     expect(run.card.characterId).toBe('enid');
     expect(run.objective()).toBe('find_clues');
     expect(run.player.roomId).toBe('pier');

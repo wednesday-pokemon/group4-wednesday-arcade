@@ -42,6 +42,7 @@ describe('error-code mapping table (every server ApiErrorCode)', () => {
     RUN_NOT_FINISHED: ['WRONG_PHASE', false],
     TOO_MANY_EVENTS: ['INVALID_INPUT', false],
     TEST_SEED_FORBIDDEN: ['UNAUTHORIZED', false],
+    CASE_OUTDATED: ['WRONG_PHASE', false],
   };
 
   for (const code of Object.keys(HTTP_STATUS) as ApiErrorCode[]) {

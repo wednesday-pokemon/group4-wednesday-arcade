@@ -10,6 +10,7 @@ import {
 } from './common.ts';
 import type { PierRect } from './terrain.ts';
 import { buildGateGeometry } from './walls.ts';
+import { buildCaseDressing } from './caseDressing.ts';
 
 // ------------------------------------------------------------------------------------------------ small model helpers
 function lampPost(b: Bld, x: number, z: number, h = 3.3, color: string = PAL.lantern): void {
@@ -263,7 +264,8 @@ function thingPlinth(b: Bld, x: number, z: number): void {
   b.lit.add(BOX, PAL.stoneLight, [x, 0.8, z], [0, 0.2, 0], [1.05, 0.1, 1.05], { gradient: 0 });
 }
 
-function greenhouse(b: Bld): void {
+/** `keepClear`: points (greenhouse-local metres) where no planter slot may stand (clue spots / the egg nest). */
+function greenhouse(b: Bld, keepClear: Vec2[] = []): void {
   const L = 9, W = 5.2;
   const ribs = 7;
   for (let i = 0; i < ribs; i++) {
@@ -283,14 +285,17 @@ function greenhouse(b: Bld): void {
     const z = -L / 2 + ((i + 0.5) / (ribs - 1)) * L;
     for (const s of [-1, 1]) if (b.rand() < 0.75) b.glass.add(BOX, '#7ad8c0', [s * W / 4, 2.65, z], [0, 0, s * -0.62], [W * 0.46, 0.03, L / (ribs - 1) - 0.12], { gradient: 0, jitter: 0.05 });
   }
-  // planters with glowing plants
+  // planters with glowing plants, built as one slot per plant so a slot can be left out around a clue spot or the egg nest
   for (const s of [-1, 1]) {
-    b.lit.add(BOX, PAL.woodDark, [s * 1.7, 0.3, 0], [0, 0, 0], [0.9, 0.6, L - 1.2], { gradient: 0.3 });
-    b.lit.add(BOX, '#1d2a22', [s * 1.7, 0.62, 0], [0, 0, 0], [0.8, 0.06, L - 1.3], { gradient: 0 });
     for (let i = 0; i < 6; i++) {
       const z = -L / 2 + 1.2 + i * 1.35;
       const hh = 0.7 + b.rand() * 0.9;
-      b.lit.add(CONE6, ['#2f6b4a', '#3b7a52', '#25563f'][i % 3], [s * 1.7, 0.6 + hh / 2, z], [0, b.rand() * 6, 0], [0.32, hh, 0.32], { gradient: 0.2 });
+      const rot = b.rand() * 6;
+      const col = ['#2f6b4a', '#3b7a52', '#25563f'][i % 3];
+      if (keepClear.some((k) => Math.hypot(k.x - s * 1.7, k.z - z) < 1.6)) continue;
+      b.lit.add(BOX, PAL.woodDark, [s * 1.7, 0.3, z], [0, 0, 0], [0.9, 0.6, 1.36], { gradient: 0.3 });
+      b.lit.add(BOX, '#1d2a22', [s * 1.7, 0.62, z], [0, 0, 0], [0.8, 0.06, 1.28], { gradient: 0 });
+      b.lit.add(CONE6, col, [s * 1.7, 0.6 + hh / 2, z], [0, rot, 0], [0.32, hh, 0.32], { gradient: 0.2 });
       b.em.add(ICO0, i % 2 ? '#c8a2ff' : '#7bffd0', [s * 1.7, 0.6 + hh, z], [0, 0, 0], 0.09, { jitter: 0, gradient: 0 });
       if (i % 2 === 0) b.glows.push({ x: s * 1.7, y: 0.6 + hh, z, size: 1.1, color: i % 4 === 0 ? '#c8a2ff' : '#7bffd0', alpha: 0.6, flicker: 0.4, fogFloor: 0.1 });
     }
@@ -461,7 +466,12 @@ export function buildDressing(map: MapDef, low: boolean): DressingBuild {
         thingSet = true;
         break;
       }
-      case 'greenhouse': greenhouse(b); break;
+      case 'greenhouse': {
+        const gs = Math.sin(lm.yaw), gc = Math.cos(lm.yaw);
+        const toLocal = (p: Vec2): Vec2 => ({ x: ((p.x - lm.x) * gc - (p.z - lm.z) * gs) / sc, z: ((p.x - lm.x) * gs + (p.z - lm.z) * gc) / sc });
+        greenhouse(b, [...map.clues.map((c) => ({ x: c.x, z: c.z })), map.eggSpawn].map(toLocal));
+        break;
+      }
       case 'lamp':
         lampPost(b, 0, 0, 3.4);
         disc(poolTb, lm.x, lm.z, 3.6 * sc, 0.1, warm, 14);
@@ -539,6 +549,13 @@ export function buildDressing(map: MapDef, low: boolean): DressingBuild {
       lampPost(b, x, z, 3.1);
       disc(poolTb, x, z, 3.6, 0.1, warm, 12);
     }
+    col.add(b.finish(0, 0, 0, 1));
+  }
+
+  // ---- per-case set dressing (decoration only; keyed off the clue ids in the map)
+  {
+    const b = new Bld(seeded('case:' + map.id));
+    buildCaseDressing(map, b, low);
     col.add(b.finish(0, 0, 0, 1));
   }
 

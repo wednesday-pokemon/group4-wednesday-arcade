@@ -1,15 +1,20 @@
-// `/?mode=dashboard` — Laptop 1 LIVE board for "The Silent Evidence" (mystery-v3.1).
-//   Row A: Station A + Station B live cards (Realtime status rows + heartbeat; "Signal lost" after 15 s) · Standings
-//          (verified results: every finisher ranked above every DNF)
-//   Row B/C: clue solve rate, Hyde detections, pick rates and the four analytics layers, computed by
-//          dashboard(records, clueIds) from server rows (event-level panels need an operator sign-in: RLS).
+// `/?mode=dashboard` — Laptop 1 LIVE board for the three cases (mystery-v3.1).
+//   Row A: Station A + Station B live cards (Realtime status rows + heartbeat; "Signal lost" after 15 s; clue pips sized
+//          to the station's case) · Standings (verified results: every finisher ranked above every DNF; per case when
+//          a case is selected, using the server's per-case ranks)
+//   Row K: case filter (All / Case 01 / 02 / 03) + per-case summary table (runs, mystery-solving accuracy, median time,
+//          extraction rate)
+//   Row B/C: clue find rates (within each case), Hyde detections, pick rates and the four analytics layers, computed by
+//          dashboard(records, { caseId }) from server rows (event-level panels need an operator sign-in: RLS).
+//   Records without a case id degrade the board to "combined only" (boardOptions); legacy rows are otherwise excluded.
 // Operator drawer (shared component): operator sign-in → "Reset Station A/B" with confirmation → admin-reset.
 // Never shows seeds, the culprit or who anyone accused. `/?mode=dashboard&demo=1` stays the LOCAL DEMO board,
 // `/?mode=dashboard&legacy=1` the v2.5 board.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { bundledPredictiveService, dashboard } from '../../mystery/analytics/index.ts';
-import { SILENT_EVIDENCE } from '../../mystery/data/case.ts';
+import { boardOptions, bundledPredictiveService, caseLabel, dashboard } from '../../mystery/analytics/index.ts';
+import { CASES } from '../../mystery/data/cases.ts';
 import { NIGHTSHADES } from '../../mystery/data/nightshades.ts';
+import { CASE_IDS, type CaseId } from '../../mystery/types.ts';
 import { PARTNERS } from '../../mystery/data/partners.ts';
 import type { BoardStation, MysteryBoardSnapshot } from '../../lib/supabase/mysteryDashboardFeed.ts';
 import type { MysteryBoardServices } from '../../lib/supabase/mysteryLive.ts';
@@ -19,7 +24,8 @@ import { Button } from '../../ui/components/Button.tsx';
 import { OperatorDrawer } from '../../ui/dashboard/OperatorDrawer.tsx';
 import { Icon } from '../../ui/Icon.tsx';
 import {
-  ClueSolve, DescriptiveLayer, DetectionTrend, DiagnosticLayer, DuoPopularity, PredictiveLayer, PrescriptiveLayer,
+  CaseBoard, CaseTag, ClueSolve, CluePips, DescriptiveLayer, DetectionTrend, DiagnosticLayer, DuoPopularity, PredictiveLayer, PrescriptiveLayer,
+  type CaseScope,
 } from '../../ui/mystery/MysteryDashboard.tsx';
 import '../../ui/styles/mystery.css';
 import { useHotkeys } from '../keyboard.ts';
@@ -58,7 +64,7 @@ function BoardProblem({ message, onRetry }: { message: string; onRetry: () => vo
   return (
     <main className="mdash" data-testid="screen-dashboard" data-board="mystery-live">
       <header className="mdash__head">
-        <h1 className="display mdash__title">Raven Island · Control Center</h1>
+        <h1 className="display mdash__title">Nevermore · Control Center</h1>
         <span className="mdash__chip">mystery-v3.1</span>
       </header>
       <div className="dash-problem" role="alert" data-testid="live-problem">
@@ -86,6 +92,7 @@ const STATUS_PHASE: Record<string, HeartbeatPhase> = { idle: 'idle', offered: 'd
 function LiveBoard({ services }: { services: MysteryBoardServices }) {
   const [snap, setSnap] = useState<MysteryBoardSnapshot | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [scope, setScope] = useState<CaseScope>('all');
   useEffect(() => services.feed.subscribe(setSnap), [services]);
   useHotkeys((key) => {
     if (key === 'escape' && drawerOpen) {
@@ -94,11 +101,12 @@ function LiveBoard({ services }: { services: MysteryBoardServices }) {
     }
   });
 
-  const clueIds = useMemo(() => SILENT_EVIDENCE.clues.map((c) => c.id), []);
-  const clues = useMemo(() => SILENT_EVIDENCE.clues.map((c) => ({ id: c.id, title: c.title })), []);
   const version = snap?.recordsVersion ?? -1;
   const records = snap?.records;
-  const agg = useMemo(() => dashboard(records ?? [], clueIds), [version, clueIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const board = useMemo(() => boardOptions(records ?? [], scope), [version, scope]); // eslint-disable-line react-hooks/exhaustive-deps
+  const agg = useMemo(() => dashboard(records ?? [], board.options), [version, board]); // eslint-disable-line react-hooks/exhaustive-deps
+  const caseScope = board.caseAware ? agg.scope : 'all';
+  const standingRows = caseScope === 'all' ? (snap?.standings ?? []) : (snap?.standingsByCase?.[caseScope] ?? (snap?.standings ?? []).filter((r) => r.case_id === caseScope));
   const card = bundledPredictiveService().modelCard();
   const now = snap?.updatedAt ?? Date.now();
 
@@ -112,7 +120,11 @@ function LiveBoard({ services }: { services: MysteryBoardServices }) {
       detailed: snap?.detailed ?? false,
       records: snap?.records.length ?? 0,
       stations: snap?.stations.map((s) => ({ id: s.stationId, status: s.row?.status ?? null, phase: s.heartbeat?.phase ?? null, signalLost: s.signalLost })) ?? [],
-      standings: snap?.standings.slice(0, 10).map((r) => ({ nickname: r.nickname, outcome: r.outcome, rank: r.rank, score: toNum(r.score) })) ?? [],
+      standings: standingRows.slice(0, 10).map((r) => ({ nickname: r.nickname, outcome: r.outcome, rank: r.rank, score: toNum(r.score), caseId: r.case_id ?? null })),
+      scope: agg.scope,
+      caseAware: board.caseAware,
+      legacyExcluded: agg.descriptive.legacyExcluded,
+      cases: agg.descriptive.cases.map((c) => ({ id: c.caseId, runs: c.runs, solvedPct: c.solvedPctOfFinished, medianTimeS: c.medianTimeS, extractionPct: c.extractionPct })),
       descriptive: { runs: agg.descriptive.runs, finished: agg.descriptive.finished, dnf: agg.descriptive.dnf, solvedPct: agg.descriptive.caseSolvedPctOfFinished },
       model: { source: card.source, label: card.label },
       operatorDrawer: drawerOpen,
@@ -123,7 +135,7 @@ function LiveBoard({ services }: { services: MysteryBoardServices }) {
   return (
     <main className="mdash" data-testid="screen-dashboard" data-board="mystery-live">
       <header className="mdash__head">
-        <h1 className="display mdash__title">Raven Island · Control Center</h1>
+        <h1 className="display mdash__title">Nevermore · Control Center</h1>
         <span className="mdash__chip">mystery-v3.1</span>
         <span className="badge badge--live" data-testid="badge-mode"><span className="badge__dot" aria-hidden="true" />Live · verified results</span>
         <ConnectionBadge state={snap?.connection ?? 'connecting'} />
@@ -139,12 +151,14 @@ function LiveBoard({ services }: { services: MysteryBoardServices }) {
         </p>
       )}
 
-      <div className="mdash__grid">
+      <div className="mdash__grid mdash__grid--cases" data-scope={agg.scope}>
         {(snap?.stations ?? []).map((s, i) => <LiveStationCard key={s.stationId} station={s} now={now} area={i === 0 ? 'mdash-a1' : 'mdash-a2'} />)}
         {!snap && <section className="mdash-card mdash-a1"><p className="text-2">Connecting…</p></section>}
-        <Standings rows={snap?.standings ?? []} loaded={snap?.loaded ?? false} />
+        <Standings rows={standingRows} loaded={snap?.loaded ?? false} scope={caseScope} />
 
-        <ClueSolve agg={agg} clues={clues} />
+        <CaseBoard agg={agg} scope={scope} onScope={setScope} caseAware={board.caseAware} />
+
+        <ClueSolve agg={agg} />
         <DetectionTrend agg={agg} />
         <DuoPopularity agg={agg} />
 
@@ -167,6 +181,7 @@ function LiveStationCard({ station, now, area }: { station: BoardStation; now: n
   const age = station.lastSeenAt === null ? null : Math.max(0, Math.round((now - station.lastSeenAt) / 1000));
   const clues = row?.clues_found ?? beat?.clues ?? 0;
   const time = beat?.activeTimeS ?? toNum(row?.active_time_s);
+  const caseId = active ? (row?.case_id ?? null) : null;
   return (
     <section className={`mdash-card ${area}`} data-testid={`station-live-${station.stationId}`} data-phase={station.signalLost ? 'lost' : phase} aria-label={station.label}>
       <div className="mdash-row">
@@ -181,8 +196,9 @@ function LiveStationCard({ station, now, area }: { station: BoardStation; now: n
       ) : (
         <p className="text-2">{row?.notice === 'operator_reset' ? 'Reset by the operator.' : 'No visitor yet.'}</p>
       )}
+      {caseId && (CASE_IDS as readonly string[]).includes(caseId) && <p className="mdash-small" data-testid={`station-case-${station.stationId}`}>{caseLabel(caseId as CaseId)}</p>}
       <dl className="mdash-kv">
-        <div><dt>Clues</dt><dd>{[0, 1, 2].map((i) => <span key={i} className={`mdash-pip${i < clues ? ' is-on' : ''}`} />)}</dd></div>
+        <div><dt>Clues</dt><dd><CluePips found={clues} caseId={caseId} /></dd></div>
         <div><dt>Egg</dt><dd>{beat?.eggTier ? `${beat.eggTier} · ${beat.eggSecurity ?? '—'}` : row?.egg_state ?? '—'}</dd></div>
         <div><dt>HP · caught</dt><dd className="num">{beat?.hp ?? '—'} · {row?.catches ?? beat?.catches ?? '—'}/2</dd></div>
         <div><dt>Hyde</dt><dd>{beat?.hydeMode ?? '—'}</dd></div>
@@ -197,19 +213,20 @@ function LiveStationCard({ station, now, area }: { station: BoardStation; now: n
   );
 }
 
-function Standings({ rows, loaded }: { rows: MysteryStandingRow[]; loaded: boolean }) {
+function Standings({ rows, loaded, scope }: { rows: MysteryStandingRow[]; loaded: boolean; scope: CaseScope }) {
   const finished = rows.filter((r) => r.outcome === 'finished');
   const dnf = rows.filter((r) => r.outcome === 'dnf');
   return (
-    <section className="mdash-card mdash-a3" aria-label="Standings" data-testid="standings">
-      <p className="caps">Standings · verified · mystery-v3.1</p>
+    <section className="mdash-card mdash-a3" aria-label="Standings" data-testid="standings" data-scope={scope}>
+      <p className="caps">Standings · {scope === 'all' ? 'all cases' : `Case ${CASES[scope].number}`} · verified · mystery-v3.1</p>
       {!loaded ? <p className="text-2">Loading…</p> : finished.length === 0 ? <p className="text-2">No finishers yet.</p> : (
-        <ol className="mdash-standings">
-          {finished.slice(0, 7).map((r) => (
-            <li key={r.session_id} data-testid="standing-row" data-group="finished">
+        <ol className="mdash-standings mdash-standings--cases">
+          {finished.slice(0, 6).map((r) => (
+            <li key={r.session_id} data-testid="standing-row" data-group="finished" data-case={r.case_id ?? undefined}>
               <span className="num mdash-rank">{r.rank ?? '—'}</span>
               <span className="mdash-name">{r.nickname}</span>
               <span className="text-2 mdash-duo">{nameOfChar(r.character_id)} &amp; {nameOfMon(r.pokemon_id)}</span>
+              <CaseTag caseId={r.case_id} />
               <span className="num mdash-score">{(toNum(r.score) ?? 0).toFixed(1)}</span>
             </li>
           ))}

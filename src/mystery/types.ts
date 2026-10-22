@@ -126,7 +126,16 @@ export interface CoverDef { id: string; x: number; z: number; radius: number; he
 /** Crouch inside → unseen unless the Hyde is within `revealM` (it still hears noise). */
 export interface HidingSpotDef { id: string; x: number; z: number; radius: number; revealM: number; kind: 'alcove' | 'wardrobe' | 'hedge' | 'sarcophagus' }
 export interface RoomDef { id: RoomId; name: string; polygon: Vec2[]; fog?: boolean; wet?: boolean }
-export type ClueId = 'transfer_note' | 'master_key' | 'greenhouse_trace';
+/** The clues of all three cases (each case uses exactly three of them). */
+export type ClueId =
+  | 'falsified_transfer' | 'botanical_residue' | 'access_ledger' // Case 01 — The Poisoned Archive
+  | 'sabotaged_gate' | 'tunnel_access_record' | 'equipment_match' // Case 02 — The Crypt's Last Witness
+  | 'falsified_patrol_log' | 'alarm_override' | 'watchtower_signal'; // Case 03 — The Midnight Signal
+export const CLUE_IDS: readonly ClueId[] = [
+  'falsified_transfer', 'botanical_residue', 'access_ledger',
+  'sabotaged_gate', 'tunnel_access_record', 'equipment_match',
+  'falsified_patrol_log', 'alarm_override', 'watchtower_signal',
+];
 export interface CluePlacement { clueId: ClueId; roomId: RoomId; x: number; z: number; searchS: number }
 /** Gomez's powered switch: opens `gateWallId` (removes it from collision/LOS) while powered, for `openS` seconds (0 = permanently). */
 export interface PowerSwitchDef { id: string; x: number; z: number; gateWallId: string; openS: number }
@@ -153,17 +162,85 @@ export interface MapDef {
 // ----------------------------------------------------------------------------------------------------- case
 
 export type SuspectId = 'thornhill' | 'isaac' | 'barry';
+export const SUSPECT_IDS: readonly SuspectId[] = ['thornhill', 'isaac', 'barry'];
+/** `alibiOrContext` = the suspect's own statement in THIS case (a claim, never a verdict). */
 export interface SuspectDef { id: SuspectId; name: string; role: string; alibiOrContext: string }
+
+/** Three alternate scenarios of the same night (not three murders). Assigned once per session, never chosen. */
+export type CaseId = 'poisoned_archive' | 'crypt_last_witness' | 'midnight_signal';
+export const CASE_IDS: readonly CaseId[] = ['poisoned_archive', 'crypt_last_witness', 'midnight_signal'];
+
+/**
+ * PUBLIC clue data (ships to the browser). Deliberately carries no guilt links: who a clue implicates or clears
+ * lives only in the case solution (data/solutions.ts), which the client loads after the accusation is committed.
+ */
 export interface ClueDef {
   id: ClueId;
   title: string;
   roomId: RoomId;
-  text: string; // what the player reads (≤ 280 chars)
-  implicates: SuspectId[]; // suspects this clue points to
-  exonerates: SuspectId[]; // suspects this clue gives fair context for
-  deduction: string; // one-line board deduction (≤ 120 chars), no culprit spoiler on its own
+  /** Where it lies, as the locked card shows it ("Greenhouse Annex"). */
+  location: string;
+  /** E prompt ("Search the desk"). */
+  interactLabel: string;
+  /** Evidence-board glyph. */
+  icon: 'fileText' | 'key' | 'sprout' | 'lock' | 'flame' | 'link' | 'signpost' | 'hourglass' | 'eye';
+  text: string; // what the player reads (≤ 300 chars)
+  /** Suspects NAMED in the text (neutral: a named suspect may be implicated or cleared). */
+  mentions: SuspectId[];
+  deduction: string; // one neutral board takeaway (≤ 120 chars), never "X did it"
+  /** Thing's line when the clue is found / when a reveal power shows it. */
+  thing: { found: string; vision: string };
 }
-export interface CaseDef { id: string; title: string; victim: string; culprit: SuspectId; suspects: SuspectDef[]; clues: ClueDef[] }
+
+/** A case-file note the visitor holds from the start (offered at the deduction; it does NOT support the culprit). */
+export interface CaseNoteDef { id: string; title: string; text: string }
+
+export interface CaseDef {
+  id: CaseId;
+  /** Bumped whenever the case's content or answer changes; stored with the session. */
+  version: number;
+  number: '01' | '02' | '03';
+  title: string;
+  /** Short mystery description for the case-file reveal (never names a culprit). */
+  tagline: string;
+  setting: string;
+  victim: string;
+  suspects: SuspectDef[];
+  clues: ClueDef[];
+  notes: CaseNoteDef[];
+  /** Where this case's three clues lie on the shared island (searchS = seconds of searching). */
+  placements: CluePlacement[];
+  egg: { x: number; z: number; roomId: RoomId; objective: string };
+  /** Case-specific display names for rooms of the shared island ("Research Archive"). */
+  roomNames: Partial<Record<RoomId, string>>;
+  /** Thing's case-specific lines (prologue panels 2–3 + in-run objective/hint copy). */
+  thing: { welcome: string; findEgg: string; whereHint: string };
+  prologue: {
+    scene: 'archive' | 'crypt' | 'signal';
+    death: { title: string; narration: string };
+    egg: { title: string; narration: string };
+  };
+}
+
+/**
+ * ANSWER KEY (server + post-accusation only). Never imported statically by browser code: the app loads it with a
+ * dynamic import after the visitor commits the accusation; LIVE the server recomputes everything from its own copy.
+ */
+export interface CaseSolution {
+  caseId: CaseId;
+  version: number;
+  culprit: SuspectId;
+  /** The evidence that must be cited for a solved case (all three clues: method, opportunity, broken alibi). */
+  supportingEvidence: ClueId[];
+  /** Per clue: which link of the chain it proves and whom it clears. */
+  links: Record<string, { proves: 'method' | 'opportunity' | 'alibi'; clears: SuspectId[] }>;
+  /** Why each innocent is excluded (results screen). */
+  innocents: Partial<Record<SuspectId, string>>;
+  resolution: string;
+}
+
+/** The visitor's one-shot accusation: a suspect (or null = leave unsolved) and the evidence ids they cite. */
+export interface Accusation { suspectId: SuspectId | null; evidence: string[] }
 
 export type Verdict = 'case_solved' | 'egg_secured_mystery_unsolved' | 'not_accused';
 
@@ -257,7 +334,7 @@ export type GameEvent =
   | { type: 'ability_used'; key: 'F' | 'Q'; abilityId: string; kinds: AbilityEffectKind[]; success: boolean; detail: string }
   | { type: 'ability_denied'; key: 'F' | 'Q'; reason: 'cooldown' | 'no_target' }
   | { type: 'hint_requested' }
-  | { type: 'accusation'; suspectId: SuspectId | null; correct: boolean; cluesFound: number }
+  | { type: 'accusation'; suspectId: SuspectId | null; correct: boolean; cluesFound: number; evidence: string[]; deductionCorrect: boolean }
   | { type: 'finish'; verdict: Verdict; score: number }
   | { type: 'dnf'; reason: DnfReason };
 
@@ -290,11 +367,17 @@ export type Objective = 'find_clues' | 'find_egg' | 'retrieve_egg' | 'deliver_eg
 
 export interface RunResult {
   rulesVersion: MysteryRulesVersion;
+  caseId: CaseId;
+  caseVersion: number;
   outcome: 'finished' | 'dnf';
   dnfReason: DnfReason | null;
   verdict: Verdict;
   accused: SuspectId | null;
   correct: boolean;
+  /** Evidence ids cited with the accusation (clues and/or case-file notes). */
+  evidence: string[];
+  /** The cited evidence is exactly the case's supporting evidence. */
+  deductionCorrect: boolean;
   cluesFound: ClueId[];
   eggTier: Exclude<EggTier, 'none'>;
   eggPoints: number; // delivered whole points (0 when not delivered)

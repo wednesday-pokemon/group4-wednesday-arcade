@@ -17,7 +17,7 @@ interface SplashProps {
   steps?: { title: string; body: string }[];
   footnote?: string;
   startLabel?: string;
-  /** Mystery v3.1: subtitle under the title (default: the legacy "The Hyde’s Regatta"). */
+  /** Mystery v3.1: subtitle under the title (default: "A Nevermore Mystery"). */
   subtitle?: string;
   /** Mystery v3.1: one-line tagline under the subtitle. */
   tagline?: string;
@@ -72,10 +72,10 @@ export function Splash({
           {emblem}
           {kicker && <p className="caps splash__kicker">{kicker}</p>}
           <h1 ref={h1} tabIndex={-1} className="title splash__title">
-            Escape from <span className="splash__title-2">Raven Island</span>
+            Nevermore: <span className="splash__title-2">Deadly Secrets</span>
           </h1>
         </div>
-        <p className="splash__subtitle">{subtitle ?? 'The Hyde’s Regatta'}</p>
+        <p className="splash__subtitle">{subtitle ?? 'A Nevermore Mystery'}</p>
         {tagline && <p className="splash__tagline" data-testid="splash-tagline">{tagline}</p>}
         <ol className="splash__steps" aria-label={stepsLabel}>
           {steps.map((step, i) => (

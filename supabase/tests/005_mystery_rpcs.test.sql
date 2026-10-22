@@ -3,7 +3,7 @@
 -- v2.5 rows are untouched by all of it. Rolled back at the end.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(60);
+select plan(64);
 
 do $$
 begin
@@ -23,13 +23,16 @@ create function pg_temp.offer(p_seed text) returns jsonb language sql as $$
   select jsonb_build_object('seed', p_seed, 'cards', jsonb_build_array(
     pg_temp.card('wednesday', 'gengar'), pg_temp.card('enid', 'drifblim'), pg_temp.card('gomez', 'aegislash')))
 $$;
+create function pg_temp.versions() returns jsonb language sql as $$
+  select '{"poisoned_archive":1,"crypt_last_witness":1,"midnight_signal":1}'::jsonb
+$$;
 create function pg_temp.req(p_body jsonb) returns jsonb language sql as $$
   select jsonb_build_object('body', p_body, 'actor', jsonb_build_object('userId', 'aaaaaaaa-0000-4000-8000-0000000000a1'))
 $$;
 create function pg_temp.mk(p_id uuid, p_station text, p_action text, p_seed text, p_nick text, p_test boolean default false)
 returns jsonb language sql as $$
   select public.mystery_create_session(p_id, p_station, p_action, p_seed, p_nick, pg_temp.offer(p_seed), p_test,
-    pg_temp.req(jsonb_build_object('actionId', p_action, 'nickname', p_nick)))
+    pg_temp.req(jsonb_build_object('actionId', p_action, 'nickname', p_nick)), pg_temp.versions())
 $$;
 -- Same, then age the row so the per-station rate limit (6/min) does not interfere with later fixtures.
 create function pg_temp.mk_old(p_id uuid, p_station text, p_nick text, p_test boolean default false) returns jsonb
@@ -57,7 +60,9 @@ begin
   return public.mystery_finalize_session(p_id, p_station, 3, jsonb_build_object(
     'outcome', 'finished', 'dnfReason', null, 'verdict', p_verdict, 'accused', p_accused, 'correct', p_verdict = 'case_solved',
     'cluesFound', to_jsonb(p_clues), 'eggTier', p_tier, 'eggPoints', p_points, 'eggSecurity', 90, 'activeTimeS', v_time,
-    'score', p_points * 100 - v_time, 'catches', 0), pg_temp.req('{}'));
+    'score', p_points * 100 - v_time, 'catches', 0,
+    'evidence', case when p_accused is null then '[]'::jsonb else to_jsonb(p_clues) end,
+    'deductionCorrect', p_verdict = 'case_solved'), pg_temp.req('{}'));
 end $$;
 create function pg_temp.dnf_run(p_id uuid, p_station text, p_t float8) returns jsonb language plpgsql as $$
 begin
@@ -95,8 +100,9 @@ select is((select count(*)::int from public.mystery_offered_duos where session_i
   'create: exactly three cards stored');
 select is((select status from public.mystery_station_status where station_id = 'station_a'), 'offered', 'create: station A shows offered');
 select is(pg_temp.mk('10000000-0000-4000-8000-0000000000ff', 'station_a', 'm_act_a_0001', '22222222222222222222222222222222', 'Annie'),
-  jsonb_build_object('ok', true, 'replay', true, 'sessionId', '10000000-0000-4000-8000-000000000001'),
-  'create: same actionId replays the ORIGINAL session (new seed/offer ignored)');
+  jsonb_build_object('ok', true, 'replay', true, 'sessionId', '10000000-0000-4000-8000-000000000001',
+    'caseId', (select case_id from public.mystery_sessions where id = '10000000-0000-4000-8000-000000000001'), 'caseVersion', 1),
+  'create: same actionId replays the ORIGINAL session and its case (new seed/offer ignored, nothing drawn)');
 select is((select count(*)::int from public.mystery_sessions where station_id = 'station_a'), 1, 'create: replay inserted nothing');
 select is((select seed from public.mystery_sessions where id = '10000000-0000-4000-8000-000000000001'), '11111111111111111111111111111111',
   'create: the stored seed is unchanged by the replay');
@@ -104,12 +110,17 @@ select is(pg_temp.mk('10000000-0000-4000-8000-0000000000fe', 'station_a', 'm_act
   'ACTION_ID_CONFLICT', 'create: same actionId with a different body is a conflict');
 select is(public.mystery_create_session('10000000-0000-4000-8000-0000000000fd', 'station_a', 'm_act_a_bad1', '33333333333333333333333333333333',
   'Annie', jsonb_build_object('seed', '33333333333333333333333333333333', 'cards', jsonb_build_array(pg_temp.card('enid', 'gengar'))), false,
-  pg_temp.req('{}')) ->> 'error', 'INVALID_INPUT', 'create: an offer that is not exactly three cards is refused');
+  pg_temp.req('{}'), pg_temp.versions()) ->> 'error', 'INVALID_INPUT', 'create: an offer that is not exactly three cards is refused');
 select is(public.mystery_create_session('10000000-0000-4000-8000-0000000000fc', 'station_a', 'm_act_a_bad2', '33333333333333333333333333333333',
-  'Annie', pg_temp.offer('44444444444444444444444444444444'), false, pg_temp.req('{}')) ->> 'error', 'INVALID_INPUT',
+  'Annie', pg_temp.offer('44444444444444444444444444444444'), false, pg_temp.req('{}'), pg_temp.versions()) ->> 'error', 'INVALID_INPUT',
   'create: an offer drawn from another seed is refused');
 select is(public.mystery_create_session('10000000-0000-4000-8000-0000000000fb', 'station_z', 'm_act_z_0001', '33333333333333333333333333333333',
-  'Annie', pg_temp.offer('33333333333333333333333333333333'), false, pg_temp.req('{}')) ->> 'error', 'STATION_NOT_FOUND', 'create: unknown station');
+  'Annie', pg_temp.offer('33333333333333333333333333333333'), false, pg_temp.req('{}'), pg_temp.versions()) ->> 'error', 'STATION_NOT_FOUND', 'create: unknown station');
+select is(public.mystery_create_session('10000000-0000-4000-8000-0000000000fa', 'station_a', 'm_act_a_bad3', '33333333333333333333333333333333',
+  'Annie', pg_temp.offer('33333333333333333333333333333333'), false, pg_temp.req('{}'), '{"poisoned_archive":1}') ->> 'error', 'INVALID_INPUT',
+  'create: case versions must cover all three cases');
+select ok((select case_id in ('poisoned_archive', 'crypt_last_witness', 'midnight_signal') and case_version = 1
+  from public.mystery_sessions where id = '10000000-0000-4000-8000-000000000001'), 'create: the session was assigned a case (+ deployed version)');
 
 -- ---------------------------------------------------------------- select -----------------------
 select is(public.mystery_append_events('10000000-0000-4000-8000-000000000001', 'station_a', -1, jsonb_build_array(pg_temp.ev(0, 1, 'egg_pickup')),
@@ -131,9 +142,9 @@ select results_eq($$select status, character_id, pokemon_id, selected_slot::int 
 
 -- ---------------------------------------------------------------- append -----------------------
 select is(public.mystery_append_events('10000000-0000-4000-8000-000000000001', 'station_a', -1, jsonb_build_array(
-    pg_temp.ev(0, 0.25, 'stance', '{"stance":"crouch"}'), pg_temp.ev(1, 4.5, 'clue_found', '{"clueId":"transfer_note","cluesFound":1}'),
+    pg_temp.ev(0, 0.25, 'stance', '{"stance":"crouch"}'), pg_temp.ev(1, 4.5, 'clue_found', '{"clueId":"falsified_transfer","cluesFound":1}'),
     pg_temp.ev(3, 9.125, 'hyde_sighted', '{"distanceM":11.2}')),
-  '{"v":1,"egg":"resting","cluesFound":["transfer_note"]}', null, null) ->> 'lastSeq', '3', 'append: batch with a seq gap accepted');
+  '{"v":1,"egg":"resting","cluesFound":["falsified_transfer"]}', null, null) ->> 'lastSeq', '3', 'append: batch with a seq gap accepted');
 select is(public.mystery_append_events('10000000-0000-4000-8000-000000000001', 'station_a', -1, jsonb_build_array(pg_temp.ev(4, 10, 'egg_pickup')),
   '{"v":1}', null, null) ->> 'error', 'STALE_EVENTS', 'append: stale expected last_seq -> STALE_EVENTS');
 select is(public.mystery_append_events('10000000-0000-4000-8000-000000000001', 'station_a', 3, jsonb_build_array(pg_temp.ev(3, 10, 'egg_pickup')),
@@ -144,7 +155,7 @@ select is(public.mystery_append_events('10000000-0000-4000-8000-000000000001', '
     pg_temp.ev(4, 12, 'stance', '{"stance":"walk"}'), pg_temp.ev(4, 12, 'stance', '{"stance":"idle"}')),
   '{"v":1}', null, null) ->> 'error', 'EVENT_REJECTED', 'append: a duplicate seq inside one batch is refused');
 select throws_ok($$select public.mystery_append_events('10000000-0000-4000-8000-000000000001', 'station_a', 3, jsonb_build_array(
-    pg_temp.ev(4, 12, 'clue_found', '{"clueId":"transfer_note","cluesFound":2}')), '{"v":1}', null, null)$$,
+    pg_temp.ev(4, 12, 'clue_found', '{"clueId":"falsified_transfer","cluesFound":2}')), '{"v":1}', null, null)$$,
   '23505', null, 'append: a clue found twice violates the clue uniqueness backstop');
 select results_eq($$select last_seq, event_count, clues_found::int, sightings from public.mystery_sessions where id = '10000000-0000-4000-8000-000000000001'$$,
   $$values (3, 3, 1, 1)$$, 'append: projections (last_seq, count, clues, sightings) consistent after rejected batches');
@@ -172,19 +183,28 @@ select is(public.mystery_append_events('10000000-0000-4000-8000-000000000001', '
 select is(public.mystery_append_events('10000000-0000-4000-8000-000000000001', 'station_a', 3, jsonb_build_array(
     pg_temp.ev(4, 20, 'egg_pickup'),
     pg_temp.ev(5, 123.45, 'egg_delivered', '{"tier":"rare","points":3,"security":72.5}'),
-    pg_temp.ev(6, 123.45, 'accusation', '{"suspectId":"isaac","correct":false,"cluesFound":1}'),
+    pg_temp.ev(6, 123.45, 'accusation', '{"suspectId":"isaac","correct":false,"cluesFound":1,"evidence":["falsified_transfer"],"deductionCorrect":false}'),
     pg_temp.ev(7, 123.45, 'finish', '{"verdict":"egg_secured_mystery_unsolved","score":176.5}')),
   '{"v":1,"egg":"delivered"}', null, null) ->> 'terminal', 'finish', 'append: terminal finish event recorded');
 select is(public.mystery_finalize_session('10000000-0000-4000-8000-000000000001', 'station_a', 7, '{"outcome":"dnf"}', pg_temp.req('{}')) ->> 'error',
   'INVALID_TRANSITION', 'finalize: outcome must match the recorded terminal event');
 select is(public.mystery_finalize_session('10000000-0000-4000-8000-000000000001', 'station_a', 6, '{"outcome":"finished"}', pg_temp.req('{}')) ->> 'error',
   'STALE_EVENTS', 'finalize: computed from a stale event set -> STALE_EVENTS');
+select is(public.mystery_finalize_session('10000000-0000-4000-8000-000000000001', 'station_a', 7, jsonb_build_object('outcome', 'finished',
+  'caseId', 'not_' || (select case_id from public.mystery_sessions where id = '10000000-0000-4000-8000-000000000001')), pg_temp.req('{}')) ->> 'error',
+  'INVALID_TRANSITION', 'finalize: a result computed for another case is refused');
 create temp table fin1 as select public.mystery_finalize_session('10000000-0000-4000-8000-000000000001', 'station_a', 7, jsonb_build_object(
   'outcome', 'finished', 'dnfReason', null, 'verdict', 'egg_secured_mystery_unsolved', 'accused', 'isaac', 'correct', false,
-  'cluesFound', '["transfer_note"]'::jsonb, 'eggTier', 'rare', 'eggPoints', 3, 'eggSecurity', 72.5, 'activeTimeS', 123.5, 'score', 176.5,
-  'catches', 0, 'sightings', 1, 'hintsUsed', 0, 'clientClaim', '{"finishScore":176.5}'::jsonb, 'claimMatches', true), pg_temp.req('{}')) as r;
+  'cluesFound', '["falsified_transfer"]'::jsonb, 'eggTier', 'rare', 'eggPoints', 3, 'eggSecurity', 72.5, 'activeTimeS', 123.5, 'score', 176.5,
+  'catches', 0, 'sightings', 1, 'hintsUsed', 0, 'clientClaim', '{"finishScore":176.5}'::jsonb, 'claimMatches', true,
+  'evidence', '["falsified_transfer"]'::jsonb, 'deductionCorrect', false), pg_temp.req('{}')) as r;
 select is((select r ->> 'replay' from fin1), 'false', 'finalize: first call publishes');
 select is((select (r #>> '{result,score}')::numeric from fin1), 176.5, 'finalize: score = 3 x 100 - 123.5');
+select results_eq($$select r.case_id, r.case_version::int, r.evidence, r.deduction_correct from public.mystery_results r
+  join public.mystery_sessions s on s.id = r.session_id and s.case_id = r.case_id
+  where r.session_id = '10000000-0000-4000-8000-000000000001'$$,
+  $$values ((select case_id from public.mystery_sessions where id = '10000000-0000-4000-8000-000000000001'), 1, array['falsified_transfer'], false)$$,
+  'finalize: result stores the SESSION''s case, the cited evidence and the deduction flag');
 create temp table fin2 as select public.mystery_finalize_session('10000000-0000-4000-8000-000000000001', 'station_a', 0,
   '{"outcome":"finished","score":600}', pg_temp.req('{}')) as r;
 select is((select r ->> 'replay' from fin2), 'true', 'finalize: second call is a replay (whatever the body)');
@@ -206,8 +226,8 @@ select results_eq($$select status, abandoned_reason from public.mystery_sessions
   $$values ('abandoned'::text, 'superseded'::text)$$, 'supersede: old session abandoned, unranked');
 select is((select count(*)::int from public.mystery_sessions where station_id = 'station_a' and status in ('offered', 'playing')), 1,
   'supersede: still exactly one open session per station');
-select throws_ok($$insert into public.mystery_sessions (id, station_id, create_action_id, seed, nickname)
-  values (gen_random_uuid(), 'station_a', 'm_direct_0001', '77777777777777777777777777777777', 'Dora')$$, '23505', null,
+select throws_ok($$insert into public.mystery_sessions (id, station_id, create_action_id, seed, nickname, case_id, case_version)
+  values (gen_random_uuid(), 'station_a', 'm_direct_0001', '77777777777777777777777777777777', 'Dora', 'midnight_signal', 1)$$, '23505', null,
   'the database itself refuses a second open session on a station');
 do $$ begin
   perform pg_temp.mk(gen_random_uuid(), 'station_a', 'm_rl_000' || i, lpad(i::text, 32, '0'), 'Rate') from generate_series(1, 3) i;
@@ -230,10 +250,10 @@ do $$ begin
   delete from public.mystery_sessions where id <> '10000000-0000-4000-8000-000000000001';
   perform pg_temp.mk_old('20000000-0000-4000-8000-000000000001', 'station_b', 'High');
   perform pg_temp.finish_run('20000000-0000-4000-8000-000000000001', 'station_b', 6, 'legendary', 300.04, 'thornhill', 'case_solved',
-    array['transfer_note', 'master_key', 'greenhouse_trace']);                                     -- 300.0
+    array['falsified_transfer', 'botanical_residue', 'access_ledger']);                            -- 300.0
   perform pg_temp.mk_old('20000000-0000-4000-8000-000000000002', 'station_b', 'Neg');
   perform pg_temp.finish_run('20000000-0000-4000-8000-000000000002', 'station_b', 1, 'common', 345.66, 'barry', 'egg_secured_mystery_unsolved',
-    array['master_key']);                                                                          -- -245.7
+    array['access_ledger']);                                                                       -- -245.7
   perform pg_temp.mk_old('20000000-0000-4000-8000-000000000003', 'station_b', 'Quit');
   perform pg_temp.finish_run('20000000-0000-4000-8000-000000000003', 'station_b', 1, 'common', 100, null, 'not_accused', array[]::text[]); -- 0.0
   perform pg_temp.mk_old('20000000-0000-4000-8000-000000000004', 'station_b', 'Doom');
@@ -241,7 +261,7 @@ do $$ begin
   perform pg_temp.mk_old('20000000-0000-4000-8000-000000000005', 'station_b', 'Doom2');
   perform pg_temp.dnf_run('20000000-0000-4000-8000-000000000005', 'station_b', 500);
   perform pg_temp.mk_old('20000000-0000-4000-8000-000000000006', 'station_b', 'Test', true);
-  perform pg_temp.finish_run('20000000-0000-4000-8000-000000000006', 'station_b', 6, 'legendary', 10, 'thornhill', 'egg_secured_mystery_unsolved', array['master_key']);
+  perform pg_temp.finish_run('20000000-0000-4000-8000-000000000006', 'station_b', 6, 'legendary', 10, 'thornhill', 'egg_secured_mystery_unsolved', array['access_ledger']);
 end $$;
 select results_eq($$select nickname, rank, score from public.mystery_leaderboard$$,
   $$values ('High'::text, 1, 300.0::numeric(9,1)), ('Annie', 2, 176.5), ('Quit', 3, 0.0), ('Neg', 4, -245.7)$$,

@@ -1,0 +1,171 @@
+/* Thing's prologue (story script v3.2): full-bleed scene, cinematic letterbox, Thing's translated message below. */
+.prologue {
+  position: fixed; inset: 0; z-index: var(--z-overlay); overflow: hidden;
+  display: grid; grid-template-rows: auto 1fr auto; background: #000; color: var(--c-text);
+}
+
+/* ---------- Scene ---------- */
+.prologue__stage { position: absolute; inset: 0; animation: prologue-fade 800ms var(--ease-out) both; }
+.prologue__stage--dim .pscene__art { filter: brightness(0.42) saturate(0.8); }
+.prologue__stage--dim .pscene__duo { display: none; }
+@keyframes prologue-fade { from { opacity: 0; } to { opacity: 1; } }
+.pscene { position: absolute; inset: 0; }
+.pscene__art { display: block; width: 100%; height: 100%; transform-origin: 58% 42%; animation: prologue-drift var(--panel-s, 5s) linear both; }
+@keyframes prologue-drift { from { transform: scale(1); } to { transform: scale(1.07) translateX(-1%); } }
+
+.pscene__stars circle { animation: prologue-twinkle 2.7s ease-in-out infinite alternate; }
+@keyframes prologue-twinkle { to { opacity: 0.35; } }
+.pscene__shimmer rect { animation: prologue-shimmer 3.2s ease-in-out infinite alternate; }
+@keyframes prologue-shimmer { to { transform: translateX(14px); opacity: 0.15; } }
+.pscene__mist { animation: prologue-mist 9s ease-in-out infinite alternate; }
+@keyframes prologue-mist { to { transform: translateX(-60px); } }
+.pscene__flicker { animation: prologue-flicker 1.9s steps(6) infinite; }
+@keyframes prologue-flicker { 50% { opacity: 0.75; } 80% { opacity: 0.9; } }
+.pscene__pulse, .pscene__ghost-egg { animation: prologue-pulse 2.4s ease-in-out infinite alternate; }
+@keyframes prologue-pulse { from { opacity: 0.45; } to { opacity: 1; } }
+.pscene__sparkles path { opacity: 0; transform-box: fill-box; transform-origin: center; animation: prologue-sparkle 2.5s ease-in-out infinite; }
+@keyframes prologue-sparkle { 30% { opacity: 1; transform: scale(1.2); } 60%, 100% { opacity: 0; transform: scale(0.6); } }
+.pscene__seal { transform-box: fill-box; transform-origin: center; animation: prologue-stamp 700ms 300ms var(--ease-out) both; }
+@keyframes prologue-stamp { from { opacity: 0; transform: scale(1.6); } to { opacity: 1; transform: none; } }
+.pscene__eyes { animation: prologue-blink 3.4s 0.8s infinite; opacity: 0; }
+@keyframes prologue-blink { 0% { opacity: 0; } 12%, 58% { opacity: 1; } 60%, 62% { opacity: 0; } 64%, 100% { opacity: 1; } }
+.pscene__ripples ellipse { opacity: 0; transform-box: fill-box; transform-origin: center; animation: prologue-ripple 1.8s ease-out infinite; stroke-width: 3; }
+@keyframes prologue-ripple { from { opacity: 0.7; transform: scale(0.4); } to { opacity: 0; transform: scale(4.5); } }
+/* Heartbeat vignette in sync with the 0.9 s audio heartbeat. */
+.pscene--hyde::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 45%, rgba(122, 31, 43, 0.55) 100%);
+  animation: prologue-heartbeat 0.9s ease-out infinite;
+}
+@keyframes prologue-heartbeat { 0%, 100% { opacity: 0.35; } 12% { opacity: 1; } 30% { opacity: 0.5; } 42% { opacity: 0.85; } }
+
+/* Panel 4: three identical suspect cards. */
+.pscene__suspects {
+  position: absolute; inset: 15% 0 auto; display: flex; justify-content: center; gap: clamp(1rem, 3vw, 2.5rem);
+  margin: 0; padding: 0 var(--page-pad); list-style: none;
+}
+.suspect-card {
+  width: min(15rem, 28vw); display: grid; justify-items: center; gap: var(--sp-2); padding: var(--sp-4) var(--sp-3) var(--sp-5);
+  background: rgba(22, 26, 58, 0.88); border: 1px solid var(--c-border-strong); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2); text-align: center; animation: prologue-card-in 600ms var(--ease-out) both;
+}
+.suspect-card:nth-child(1) { animation-delay: 0.2s; }
+.suspect-card:nth-child(2) { animation-delay: 0.55s; }
+.suspect-card:nth-child(3) { animation-delay: 0.9s; }
+@keyframes prologue-card-in { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+.suspect-card__silhouette { width: 6.5rem; height: 6.5rem; fill: #2e3366; }
+.suspect-card__silhouette text { fill: var(--c-text-muted); font: 700 28px var(--font-display); }
+.suspect-card__name { font-size: var(--fs-md); color: var(--c-text); line-height: 1.15; }
+.suspect-card__role { font-size: var(--fs-sm); color: var(--c-text-2); }
+
+/* Panel 6: the chosen duo in the foreground. */
+.pscene__duo { position: absolute; left: 12%; bottom: 36%; display: flex; animation: prologue-card-in 700ms 300ms var(--ease-out) both; }
+.pscene__duo img {
+  width: 8.5rem; height: 8.5rem; border-radius: 50%; object-fit: cover; object-position: 50% 20%;
+  border: 3px solid var(--c-lantern); background: var(--c-surface-2); box-shadow: var(--glow-lantern);
+}
+.pscene__duo img + img { margin-left: -1.75rem; }
+
+/* ---------- Letterbox: top ---------- */
+.prologue__top {
+  position: relative; z-index: 2; display: flex; align-items: center; gap: var(--sp-4);
+  padding: var(--sp-3) var(--page-pad) var(--sp-6); background: linear-gradient(rgba(0, 0, 0, 0.85), transparent);
+}
+.prologue__guide { display: inline-flex; align-items: center; gap: var(--sp-2); font: var(--fw-semi) var(--fs-sm) var(--font-display); color: var(--c-text-2); }
+.prologue__progress { flex: 1; display: flex; gap: 6px; max-width: 30rem; margin: 0 auto; padding: 0; list-style: none; }
+.prologue__seg { flex: 1; height: 4px; border-radius: var(--r-pill); background: rgba(243, 236, 220, 0.2); overflow: hidden; }
+.prologue__seg > span { display: block; height: 100%; background: var(--c-lantern); transform-origin: left; transition: transform 100ms linear; }
+
+/* ---------- Stay Silent warning (panel 5) ---------- */
+.prologue__warning {
+  position: absolute; z-index: 2; top: 16%; left: 50%; transform: translateX(-50%); width: min(46rem, calc(100% - 2 * var(--page-pad)));
+  margin: 0; padding: var(--sp-4) var(--sp-5); background: rgba(11, 16, 32, 0.88); border-left: 4px solid var(--c-lantern);
+  border-radius: var(--r-md); font: var(--fw-bold) var(--fs-lg) / 1.25 var(--font-body); color: var(--c-lantern);
+  animation: prologue-warn 600ms 0.4s var(--ease-out) both;
+}
+@keyframes prologue-warn { from { opacity: 0; transform: translate(-50%, -10px); } to { opacity: 1; transform: translateX(-50%); } }
+
+/* ---------- Letterbox: bottom (Thing's dialogue) ---------- */
+.prologue__bar {
+  grid-row: 3; position: relative; z-index: 2; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end;
+  gap: var(--sp-5); padding: var(--sp-7) var(--page-pad) var(--sp-5);
+  background: linear-gradient(transparent, rgba(4, 6, 13, 0.94) 28%);
+}
+.prologue__portrait { margin: 0; animation: prologue-rise 600ms var(--ease-out) both; }
+@keyframes prologue-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+.prologue__dialogue { display: grid; gap: var(--sp-2); max-width: 46rem; }
+.prologue__title {
+  margin: 0; font-size: var(--fs-2xl); line-height: 1.05; color: var(--c-lantern); letter-spacing: 0.03em;
+  animation: prologue-title 900ms var(--ease-out) both;
+}
+@keyframes prologue-title { from { opacity: 0; letter-spacing: 0.22em; } to { opacity: 1; letter-spacing: 0.03em; } }
+.prologue__who { display: inline-flex; align-items: center; gap: var(--sp-2); margin: 0; font-size: var(--fs-sm); font-style: italic; color: var(--c-accent-text); }
+.prologue__text { margin: 0; font: 500 var(--fs-lg) / 1.35 var(--font-body); color: var(--c-text); min-height: 2.7em; }
+.prologue__text span { opacity: 0; animation: prologue-word 420ms var(--ease-out) both; animation-delay: calc(350ms + var(--i) * 70ms); }
+@keyframes prologue-word { from { opacity: 0; filter: blur(4px); } to { opacity: 1; filter: none; } }
+.captions-large .prologue__text { font-size: var(--fs-xl); }
+.prologue__controls { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-2); flex-wrap: wrap; max-width: 26rem; }
+
+/* ---------- Mission card ---------- */
+.prologue__mission {
+  grid-row: 2; position: relative; z-index: 2; align-self: center; justify-self: center; display: grid; justify-items: center;
+  gap: var(--sp-4); padding: var(--page-pad); text-align: center;
+}
+.prologue__mission-lines { display: grid; gap: var(--sp-1); margin: 0; font-size: var(--fs-3xl); line-height: 1.05; color: var(--c-text); }
+.prologue__mission-lines span { animation: prologue-title 900ms var(--ease-out) both; animation-delay: calc(var(--i) * 450ms); }
+.prologue__mission-lines span:last-child { color: var(--c-lantern); }
+.prologue__mission-duo { margin: 0; font-size: var(--fs-md); color: var(--c-text-2); }
+.prologue__mission .button-row { justify-content: center; }
+
+/* ---------- Thing portrait (supplied image or line-art sigil) ---------- */
+.thing-portrait { display: inline-grid; place-items: center; flex: none; border-radius: 50%; }
+.thing-portrait[data-art='image'] { overflow: hidden; background: radial-gradient(circle, var(--c-surface-2), var(--c-surface-1)); border: 2px solid var(--c-lantern); box-shadow: var(--glow-lantern); }
+.thing-portrait img { width: 100%; height: 100%; object-fit: contain; }
+.thing-portrait--xs { width: 1.5rem; height: 1.5rem; }
+.thing-portrait--sm { width: 2rem; height: 2rem; }
+.thing-portrait--lg { width: 7.5rem; height: 7.5rem; }
+.thing-portrait--lg .thing-sigil { width: 7.5rem !important; height: 7.5rem !important; }
+.thing-portrait--xs[data-art='image'], .thing-portrait--sm[data-art='image'] { border-width: 1px; box-shadow: none; }
+
+/* Gestures: the portrait itself moves (works for the image and the sigil alike). */
+.prologue__portrait > .thing-portrait, .prologue__mission > .thing-portrait { animation: 2.4s ease-in-out infinite; transform-origin: 50% 85%; }
+.prologue__portrait[data-pose='point'] > .thing-portrait { animation-name: thing-point; }
+.prologue__portrait[data-pose='stand'] > .thing-portrait { animation-name: thing-breathe; }
+.prologue__portrait[data-pose='tap'] > .thing-portrait { animation-name: thing-tap-bounce; animation-duration: 1.2s; }
+.prologue__portrait[data-pose='count3'] > .thing-portrait { animation-name: thing-count; animation-duration: 3.3s; }
+.prologue__portrait[data-pose='shush'] > .thing-portrait { animation-name: thing-shush; animation-duration: 3s; }
+.prologue__mission > .thing-portrait { animation-name: thing-pop; animation-duration: 900ms; animation-iteration-count: 1; }
+@keyframes thing-point { 0%, 100% { transform: none; } 40%, 70% { transform: translateX(10px) rotate(-8deg); } }
+@keyframes thing-breathe { 50% { transform: scale(1.04); } }
+@keyframes thing-tap-bounce { 0%, 60%, 100% { transform: none; } 30% { transform: translateY(-8px); } }
+@keyframes thing-count { 0%, 30%, 63%, 100% { transform: none; } 12%, 45%, 78% { transform: translateY(-7px) rotate(4deg); } }
+@keyframes thing-shush { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(-10deg) scale(0.97); } }
+@keyframes thing-pop { from { transform: scale(0.6); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } to { transform: none; } }
+
+/* ---------- Reduced motion: still panels, text shown at once, pose swaps only ---------- */
+.reduced-motion .prologue *, .reduced-motion .prologue *::after { animation: none !important; }
+.reduced-motion .prologue__text span, .reduced-motion .pscene__eyes { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .prologue *, .prologue *::after { animation: none !important; }
+  .prologue__text span, .pscene__eyes { opacity: 1; }
+}
+.low-graphics .pscene__mist { display: none; }
+.high-contrast .prologue__bar { background: #000; }
+.high-contrast .prologue__warning { background: #000; border: 2px solid var(--c-lantern); }
+
+/* ---------- Narrow windows ---------- */
+@media (max-width: 900px) {
+  .prologue__bar { grid-template-columns: auto minmax(0, 1fr); }
+  .prologue__controls { grid-column: 1 / -1; justify-content: flex-start; max-width: none; }
+  .thing-portrait--lg, .thing-portrait--lg .thing-sigil { width: 4.5rem !important; height: 4.5rem !important; }
+  .prologue__title { font-size: var(--fs-xl); }
+  .prologue__text { font-size: var(--fs-md); }
+  .prologue__guide > span:last-child { display: none; }
+  .pscene__suspects { gap: var(--sp-2); }
+  .suspect-card__silhouette { width: 4rem; height: 4rem; }
+  .prologue__mission-lines { font-size: var(--fs-2xl); }
+}
+
+/* Case 03 watchtower beam sweep */
+.pscene__beam { transform-origin: 430px 250px; animation: prologue-beam 4s ease-in-out infinite alternate; }
+@keyframes prologue-beam { from { transform: rotate(-6deg); } to { transform: rotate(8deg); } }

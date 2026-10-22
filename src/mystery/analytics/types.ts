@@ -2,7 +2,7 @@
 // standard state, events and 1 Hz snapshots for whatever duo is playing. Nothing in this folder branches on a character
 // or Pokémon id — duo differences enter only through the numbers in PlayMods / DuoStats / AbilityDef.effects.
 import type {
-  AbilityDef, AbilityEffectKind, Duo, DuoStats, HydeMode, NoiseSource, Objective, PlayMods, RunResult, Stance,
+  AbilityDef, AbilityEffectKind, CaseId, Duo, DuoStats, HydeMode, NoiseSource, Objective, PlayMods, RunResult, Stance,
   StampedEvent, StateSnapshot, Verdict,
 } from '../types.ts';
 
@@ -81,7 +81,22 @@ export interface SupabaseBatch {
 
 export interface StanceTimes { idle: number; walk: number; crouch: number; sprint: number }
 
+/**
+ * How the one-shot accusation ended (post-accusation information only; never who was accused):
+ *   solved                       — the culprit AND exactly the supporting evidence (verdict case_solved)
+ *   right_suspect_wrong_evidence — the culprit, but missing / extra evidence (verdict egg_secured_mystery_unsolved)
+ *   wrong_suspect                — an innocent was accused
+ *   not_accused                  — the visitor left the case unsolved (suspect null)
+ *   unsolved                     — accused and unsolved, but the record does not say which of the two above (legacy rows)
+ *   dnf                          — the run ended (second catch / HP) before any accusation
+ *   pending                      — the run has not ended yet
+ */
+export type AccusationKind = 'solved' | 'right_suspect_wrong_evidence' | 'wrong_suspect' | 'not_accused' | 'unsolved' | 'dnf' | 'pending';
+
 export interface SessionReport {
+  /** The case this run played (null = a legacy record from before the three cases). */
+  caseId: CaseId | null;
+  caseVersion: number | null;
   duo: Duo;
   status: 'finished' | 'dnf' | 'in_progress';
   activeTimeS: number;
@@ -100,7 +115,8 @@ export interface SessionReport {
     hpLost: number;
     firstAlertT: number | null; // first transition into INVESTIGATE_SOUND / SEARCH / CHASE
   };
-  clues: { found: { clueId: string; t: number }[]; count: number; total: number };
+  /** `total` = the case's clue count; `missing` = the case's clues never found (titles from the case file). */
+  clues: { found: { clueId: string; t: number }[]; count: number; total: number; missing: { clueId: string; title: string }[] };
   egg: {
     pickupT: number | null; // time to egg
     drops: { t: number; reason: 'manual' | 'impact' | 'grab' }[];
@@ -113,6 +129,7 @@ export interface SessionReport {
   abilities: { F: AbilityUse; Q: AbilityUse };
   hints: number;
   verdict: Verdict | null;
+  accusation: { kind: AccusationKind; evidenceCount: number | null };
   extraction: boolean;
   score: number | null;
   hp: number | null;
@@ -125,11 +142,19 @@ export interface AbilityUse { uses: number; successes: number; denied: number; n
 
 export interface DiagnosticItem {
   t: number;
-  kind: 'cause' | 'pattern';
+  /**
+   * cause   — a stealth chain asserted from an explicit sim rule transition (cites the events);
+   * pattern — a labelled correlation;
+   * case    — why the MYSTERY was not solved, from the case rules (missed clue, wrong suspect, weak evidence, no
+   *           accusation, DNF before the accusation); cites the accusation / finish / dnf event.
+   */
+  kind: 'cause' | 'pattern' | 'case';
   /** Machine-readable category (dashboard aggregation key). */
   code: string;
   text: string;
   evidenceSeq: number[];
+  /** For case items about one clue: its id. */
+  ref?: string;
 }
 
 export interface TimelineMark {
@@ -142,6 +167,8 @@ export interface DiagnosticReport {
   timeline: TimelineMark[];
   causes: DiagnosticItem[];
   patterns: DiagnosticItem[];
+  /** Case-rule reasons the mystery was not solved (empty when solved or still in progress). */
+  caseReasons: DiagnosticItem[];
 }
 
 // ----------------------------------------------------------------------------------------------------- predictive
@@ -226,13 +253,21 @@ export interface AdviceRecord {
 
 // ----------------------------------------------------------------------------------------------------- dashboard
 
-/** One session as the dashboard sees it (rebuilt from Supabase rows or from a local collector). */
+/**
+ * One session as the dashboard sees it (rebuilt from Supabase rows or from a local collector).
+ * `caseId` (or `result.caseId`) says which case the run played; a record with neither is a LEGACY record (played
+ * before the three cases, e.g. old localStorage rows): it is excluded from every case-aware view unless the caller
+ * explicitly asks for `legacy: 'include'` (see descriptive.ts `scopeRecords`).
+ */
 export interface SessionRecord {
   sessionId: string;
+  caseId?: CaseId | null;
+  caseVersion?: number | null;
   duo: Duo | null;
   offered?: Duo[];
   events: readonly StampedEvent[];
-  result?: Pick<RunResult, 'outcome' | 'verdict' | 'activeTimeS' | 'score' | 'cluesFound' | 'catches'> | null;
+  result?: (Pick<RunResult, 'outcome' | 'verdict' | 'activeTimeS' | 'score' | 'cluesFound' | 'catches'>
+    & Partial<Pick<RunResult, 'caseId' | 'caseVersion' | 'correct' | 'deductionCorrect' | 'eggPoints'>>) | null;
   recommendations?: Pick<RecommendationRecord, 'action' | 'accepted' | 'outcome'>[];
   forecasts?: Pick<ForecastRecord, 't' | 'target' | 'value' | 'modelLabel'>[];
 }

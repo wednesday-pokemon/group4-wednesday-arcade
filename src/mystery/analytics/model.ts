@@ -54,6 +54,8 @@ export interface ModelArtifact {
     generator: string;
     episodes: number;
     duos: number;
+    /** Episodes per case id in the training data (absent in pre-case artifacts). */
+    cases?: Record<string, number>;
     sessionsTrain: number;
     sessionsTest: number;
     rowsTrain: number;
@@ -62,6 +64,9 @@ export interface ModelArtifact {
     seedPrefix: string;
     profiles: Record<string, number>;
     l2: number;
+    /** L2 of the extraction head when it differs (selected on an inner validation split of the training sessions). */
+    l2Extraction?: number;
+    l2ExtractionSelection?: string;
   };
   metrics: {
     evaluatedAt: string;
@@ -69,6 +74,8 @@ export interface ModelArtifact {
     detectionNotChased?: ClassifierMetrics;
     extraction: ClassifierMetrics | null;
     eta: RegressionMetrics | null;
+    /** The same held-out metrics per case (holdout sessions of that case only). */
+    byCase?: Partial<Record<string, { detection: ClassifierMetrics; extraction: ClassifierMetrics | null; eta: RegressionMetrics | null }>>;
   } | null;
 }
 

@@ -8,7 +8,7 @@
 // recommendation records are kept here too, shaped exactly like the `mystery_forecasts` / `mystery_recommendations`
 // rows the `mystery-append-events` Edge Function accepts, and handed out in batches with an explicit ack so a failed
 // upload is simply retried (the server ignores exact duplicates).
-import type { Duo, RunResult, Stance, StampedEvent } from '../types.ts';
+import type { CaseId, Duo, RunResult, Stance, StampedEvent } from '../types.ts';
 import type { DuoFactors, ForecastRecord, RecommendationRecord, SupabaseBatch, TelemetrySample } from './types.ts';
 
 export const MAX_BATCH_EVENTS = 500;
@@ -19,6 +19,9 @@ export const MAX_STEP_JUMP_M = 6;
 export interface TelemetryMeta {
   sessionId: string | null;
   stationId: string | null;
+  /** The case this session plays (from run.caseDef); null / absent = unknown (legacy). */
+  caseId?: CaseId | null;
+  caseVersion?: number | null;
   duo: Duo;
   factors: DuoFactors;
 }
@@ -103,7 +106,7 @@ export class TelemetryCollector {
   }
 
   setResult(result: RunResult | null): void {
-    if (result) this.runResult = Object.freeze({ ...result, cluesFound: [...result.cluesFound], duo: { ...result.duo } });
+    if (result) this.runResult = Object.freeze({ ...result, cluesFound: [...result.cluesFound], evidence: [...(result.evidence ?? [])], duo: { ...result.duo } });
   }
 
   // ------------------------------------------------------------------------------------------------- reads

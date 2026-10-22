@@ -8,7 +8,12 @@
 //             → `egg_drop reason 'impact'` (security threshold rule); `ability_used` → `hyde_mode reason 'stunned' |
 //             'lured'`; the second catch → `dnf`.
 //   pattern — co-occurrence counts, always worded as correlation ("… a pattern, not proof.").
-import type { HydeMode, NoiseSource, Stance, StampedEvent } from '../types.ts';
+//   case    — why the MYSTERY was not solved, from the case rules (caseLogic.verdictFor): a clue of THIS case never
+//             found (named by its case-file title), the wrong suspect, the right suspect with evidence that is not the
+//             full chain, no accusation, or a DNF before the accusation. Read from what the run recorded after the
+//             accusation (verdict, `correct`, `deductionCorrect`) — never from the answer key, and never naming anyone.
+import type { CaseId, HydeMode, NoiseSource, Stance, StampedEvent } from '../types.ts';
+import { accusationKind, caseInfo, isCaseId, lastAccusation, recordCaseId } from './caseInfo.ts';
 import { ALERT_MODES, stanceAt, stanceSeconds } from './descriptive.ts';
 import type { DiagnosticItem, DiagnosticReport, DuoFactors, SessionRecord, TimelineMark } from './types.ts';
 
@@ -20,6 +25,10 @@ export interface DiagnoseOptions {
   factors?: DuoFactors | null;
   /** Room id → display name (defaults to a title-cased id). */
   roomName?: (id: string) => string;
+  /** The case played (clue titles for "missed clue"); null / absent = legacy (no clue names). */
+  caseId?: CaseId | null;
+  /** The run's result when known (verdict / clues / correct) — enough for case reasons without events. */
+  result?: SessionRecord['result'];
 }
 
 export function fmtT(t: number): string {
@@ -311,8 +320,81 @@ export function buildTimeline(events: readonly StampedEvent[]): TimelineMark[] {
   return out;
 }
 
+// ----------------------------------------------------------------------------------------------------- case reasons
+
+/** Short aggregate labels for the case-reason codes (dashboard). */
+export const CASE_REASON_TEXT: Record<string, string> = {
+  missed_clue: 'Missed a clue',
+  wrong_suspect: 'Accused the wrong suspect',
+  weak_evidence: 'Right suspect, evidence not the full chain',
+  not_accused: 'Left the case without an accusation',
+  unsolved: 'Accusation did not solve the case (detail unknown)',
+  dnf_before_accusation: 'Run ended before the accusation',
+};
+
+/**
+ * Why the case was not solved (empty when it was solved or the run is still going). Works from events alone, from
+ * the result alone (anonymous live rows) or both. Items are ordered: the accusation outcome first, then each clue of
+ * the case that was never found.
+ */
+export function diagnoseCaseReasons(events: readonly StampedEvent[], o: DiagnoseOptions = {}): DiagnosticItem[] {
+  const kind = accusationKind({ events, result: o.result ?? undefined });
+  if (kind === 'solved' || kind === 'pending') return [];
+  const caseId = o.caseId && isCaseId(o.caseId) ? o.caseId : null;
+  const info = caseId ? caseInfo(caseId) : null;
+  const acc = lastAccusation(events);
+  let terminal: StampedEvent | null = null;
+  for (const e of events) if (e.type === 'finish' || e.type === 'dnf') terminal = e;
+  const t = acc?.t ?? terminal?.t ?? o.result?.activeTimeS ?? 0;
+  const evidence = [acc?.seq, terminal?.seq].filter((x): x is number => typeof x === 'number');
+  const name = info ? `Case ${info.number} · ${info.title}` : 'the case';
+  const at = `${fmtT(t)} · `;
+  const out: DiagnosticItem[] = [];
+  const push = (code: string, text: string, extra: Partial<DiagnosticItem> = {}) => out.push({ t, kind: 'case', code, text, evidenceSeq: evidence, ...extra });
+  switch (kind) {
+    case 'dnf':
+      push('dnf_before_accusation', `${at}The run ended before the accusation, so ${name} stayed open.`);
+      break;
+    case 'not_accused':
+      push('not_accused', `${at}No suspect was accused, so ${name} was left unsolved.`);
+      break;
+    case 'wrong_suspect':
+      push('wrong_suspect', `${at}The accused suspect was not the culprit of ${name}.`);
+      break;
+    case 'right_suspect_wrong_evidence':
+      push('weak_evidence', `${at}Right suspect, but the cited evidence was not the full chain (method, opportunity, broken alibi).`);
+      break;
+    case 'unsolved':
+      push('unsolved', `${at}The accusation did not solve ${name}.`);
+      break;
+  }
+  if (info) {
+    const found = new Set<string>(o.result?.cluesFound ?? events.filter((e) => e.type === 'clue_found').map((e) => (e as Extract<StampedEvent, { type: 'clue_found' }>).clueId));
+    for (const c of info.clues) {
+      if (found.has(c.id)) continue;
+      push('missed_clue', `${at}Missed clue: “${c.title}” (${c.location}). A solved case needs all ${info.clues.length}.`, { ref: c.id });
+    }
+  }
+  return out;
+}
+
 export function diagnoseSession(events: readonly StampedEvent[], o: DiagnoseOptions = {}): DiagnosticReport {
-  return { timeline: buildTimeline(events), causes: diagnoseCauses(events, o), patterns: diagnosePatterns(events, o) };
+  return {
+    timeline: buildTimeline(events), causes: diagnoseCauses(events, o), patterns: diagnosePatterns(events, o),
+    caseReasons: diagnoseCaseReasons(events, o),
+  };
+}
+
+/** Stealth causes that count as mistakes (they led to an alert, a catch, an egg drop or the DNF). */
+const MISTAKE = /^(heard_|seen_|glimpse$|catch$|catch_blocked$|grab_drop$|impact_drop$|impact_damage$|dnf_)/;
+
+/**
+ * Reasons this run fell short, for the results panel: the case-rule reasons (incorrect deduction, missed clues) plus
+ * the most important stealth mistakes (rule-verified causes). Empty for a clean solved run.
+ */
+export function failureReasons(rep: DiagnosticReport, nStealth = 2): DiagnosticItem[] {
+  const stealth = topCauses(rep.causes.filter((c) => MISTAKE.test(c.code)), nStealth);
+  return [...rep.caseReasons, ...stealth];
 }
 
 /** The `n` most important causes, in time order (for the ≤ 3 rows of the results panel). */
@@ -328,9 +410,18 @@ export function topCauses(items: readonly DiagnosticItem[], n = 3): DiagnosticIt
 
 export interface FailureCause { code: string; text: string; count: number; sessions: number }
 
+export interface CaseFailure { code: string; text: string; count: number; caseId: CaseId | null; ref?: string }
+
 export interface DiagnosticAggregate {
   /** Rule-verified chains behind catches / DNFs across sessions, most frequent first. */
   failureCauses: FailureCause[];
+  /**
+   * Why cases were not solved (case rules), most frequent first: the accusation outcome codes (wrong suspect, weak
+   * evidence, not accused, DNF before accusing) and every missed clue by its case-file title. Never names anyone.
+   */
+  caseFailures: CaseFailure[];
+  /** Ended runs whose case was not solved (denominator for caseFailures). */
+  unsolvedRuns: number;
   dnfReasons: Record<string, number>;
   /** Pooled correlations, each labelled as such. */
   patterns: { code: string; text: string; numerator: number; denominator: number }[];
@@ -387,6 +478,22 @@ export function catchChains(events: readonly StampedEvent[], o: DiagnoseOptions 
 
 export function aggregateDiagnostics(records: readonly SessionRecord[]): DiagnosticAggregate {
   const counts = new Map<string, FailureCause>();
+  const caseCounts = new Map<string, CaseFailure>();
+  let unsolvedRuns = 0;
+  for (const r of records) {
+    const caseId = recordCaseId(r);
+    const reasons = diagnoseCaseReasons(r.events, { caseId, result: r.result });
+    if (reasons.length > 0) unsolvedRuns++;
+    for (const it of reasons) {
+      const key = it.code === 'missed_clue' ? `missed_clue:${it.ref}` : it.code;
+      const info = caseId ? caseInfo(caseId) : null;
+      const clue = it.ref && info ? info.clues.find((c) => c.id === it.ref) : undefined;
+      const text = clue && info ? `Missed “${clue.title}” (Case ${info.number})` : (CASE_REASON_TEXT[it.code] ?? it.code);
+      const c = caseCounts.get(key) ?? { code: it.code, text, count: 0, caseId: it.code === 'missed_clue' ? caseId : null, ...(it.ref ? { ref: it.ref } : {}) };
+      c.count++;
+      caseCounts.set(key, c);
+    }
+  }
   const dnfReasons: Record<string, number> = {};
   let sightings = 0;
   let sightingsAfterSprint = 0;
@@ -443,6 +550,8 @@ export function aggregateDiagnostics(records: readonly SessionRecord[]): Diagnos
   }
   return {
     failureCauses: [...counts.values()].sort((a, b) => b.count - a.count || a.code.localeCompare(b.code)),
+    caseFailures: [...caseCounts.values()].sort((a, b) => b.count - a.count || a.text.localeCompare(b.text)),
+    unsolvedRuns,
     dnfReasons,
     patterns,
   };

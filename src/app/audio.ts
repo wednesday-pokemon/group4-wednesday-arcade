@@ -3,12 +3,17 @@
 export type Sfx =
   | 'tick' | 'chime' | 'thud' | 'growl' | 'sting' | 'fanfare' | 'toll' | 'splash' | 'scrape'
   // v3 real-time cues
-  | 'heartbeat' | 'whoosh' | 'rescue' | 'horn' | 'denied' | 'ready' | 'clean' | 'bump';
+  | 'heartbeat' | 'whoosh' | 'rescue' | 'horn' | 'denied' | 'ready' | 'clean' | 'bump'
+  // case-file reveal: a paper slide, a riffle of shuffled files, the ASSIGNED stamp
+  | 'paper' | 'shuffle' | 'stamp';
 
 const AMBIENT_LEVEL = 0.05;
 const SFX_LEVEL = 0.5;
 const MUSIC_LEVEL = 0.35;
 const MUSIC_DUCK = 0.65; // at full threat the music drops to 35 % of its level so the Hyde's cues read
+const PAD_LEVEL = 0.06;
+const PAD_FADE_TC = 0.8; // setTargetAtTime constant: ~2.5 s to silence, so the prologue pad melts into the island
+const VOICE_DUCK = 0.45; // music level while a narration clip plays
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -23,6 +28,9 @@ class AudioEngine {
   private musicSrc: string | null = null;
   private musicEl: HTMLAudioElement | null = null;
   private musicGain: GainNode | null = null;
+  private padGain: GainNode | null = null;
+  private padOscs: OscillatorNode[] = [];
+  private padStopTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Call from a user-gesture handler; safe to call repeatedly. */
   unlock(): void {
@@ -106,6 +114,12 @@ class AudioEngine {
       case 'ready': return [784, 1175].forEach((f, i) => this.tone(f, 'sine', t + i * 0.08, 0.5, 0.12));
       case 'clean': return [659.25, 987.8, 1318.5].forEach((f, i) => this.tone(f, 'triangle', t + i * 0.09, 0.6, 0.22));
       case 'bump': return this.noiseBurst(t, 'lowpass', 500, 0.2, 0.5);
+      case 'paper': return this.noiseBurst(t, 'bandpass', 3200 + Math.random() * 900, 0.16, 0.22);
+      case 'shuffle': return [0, 0.06, 0.13, 0.19, 0.27].forEach((d) => this.noiseBurst(t + d, 'bandpass', 2600 + Math.random() * 1400, 0.09, 0.16));
+      case 'stamp': {
+        this.thud(t);
+        return this.noiseBurst(t, 'highpass', 1800, 0.08, 0.3);
+      }
     }
   }
 
@@ -126,6 +140,106 @@ class AudioEngine {
       this.heartbeat(t + 0.01);
       this.nextBeatAt = t + (level === 2 ? 0.5 : 1.0);
     }
+  }
+
+  /**
+   * Prologue mood: a low gothic organ pad swells in under the (uninterrupted) theme; turning it off fades the pad out
+   * over ~2.5 s while the island loads, so the music carries straight into the investigation.
+   */
+  setPrologueMood(on: boolean): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.master) return;
+    const t = ctx.currentTime;
+    if (on) {
+      if (this.padStopTimer) clearTimeout(this.padStopTimer);
+      this.padStopTimer = null;
+      if (!this.padGain) this.startPad();
+      this.padGain!.gain.cancelScheduledValues(t);
+      this.padGain!.gain.setTargetAtTime(PAD_LEVEL, t, PAD_FADE_TC);
+      return;
+    }
+    if (!this.padGain) return;
+    this.padGain.gain.cancelScheduledValues(t);
+    this.padGain.gain.setTargetAtTime(0, t, PAD_FADE_TC);
+    if (this.padStopTimer) clearTimeout(this.padStopTimer);
+    this.padStopTimer = setTimeout(() => this.stopPad(), 4000);
+  }
+
+  /**
+   * Optional narration clip, routed through the master gain (mute covers it) with the music ducked while it plays.
+   * `done` resolves when the clip ends, fails, or is stopped.
+   */
+  playVoice(src: string): { done: Promise<void>; stop: () => void } {
+    const ctx = this.ctx;
+    if (!ctx || !this.master) return { done: Promise.resolve(), stop: () => undefined };
+    const el = new Audio(src);
+    let finish: () => void = () => undefined;
+    const done = new Promise<void>((resolve) => {
+      finish = () => {
+        this.musicGain?.gain.setTargetAtTime(MUSIC_LEVEL, ctx.currentTime, 0.4);
+        resolve();
+      };
+    });
+    try {
+      ctx.createMediaElementSource(el).connect(this.master);
+    } catch {
+      finish();
+      return { done, stop: () => undefined };
+    }
+    el.addEventListener('ended', finish, { once: true });
+    el.addEventListener('error', finish, { once: true });
+    this.musicGain?.gain.setTargetAtTime(MUSIC_LEVEL * VOICE_DUCK, ctx.currentTime, 0.3);
+    void el.play().catch(finish);
+    return {
+      done,
+      stop: () => {
+        el.pause();
+        finish();
+      },
+    };
+  }
+
+  private startPad(): void {
+    const ctx = this.ctx!;
+    this.padGain = ctx.createGain();
+    this.padGain.gain.value = 0;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 900;
+    filter.connect(this.padGain).connect(this.master!);
+    // D minor organ: root + fifth in the bass, minor third on top, each with a soft octave partial.
+    const tremolo = ctx.createOscillator();
+    tremolo.frequency.value = 0.18;
+    const depth = ctx.createGain();
+    depth.gain.value = 0.25;
+    tremolo.connect(depth);
+    for (const [f, type, level] of [[73.42, 'sine', 1], [110, 'triangle', 0.55], [146.83, 'sine', 0.5], [174.61, 'triangle', 0.35], [293.66, 'sine', 0.12]] as const) {
+      const osc = ctx.createOscillator();
+      osc.type = type;
+      osc.frequency.value = f;
+      const g = ctx.createGain();
+      g.gain.value = level;
+      depth.connect(g.gain);
+      osc.connect(g).connect(filter);
+      osc.start();
+      this.padOscs.push(osc);
+    }
+    tremolo.start();
+    this.padOscs.push(tremolo);
+  }
+
+  private stopPad(): void {
+    this.padStopTimer = null;
+    for (const o of this.padOscs) {
+      try {
+        o.stop();
+      } catch {
+        // already stopped
+      }
+    }
+    this.padOscs = [];
+    this.padGain?.disconnect();
+    this.padGain = null;
   }
 
   /** Silences the threat layer (pause, menus, run end). */

@@ -761,8 +761,11 @@ export class MysteryScene {
       prop.root.visible = !got;
       if (got) continue;
       const bob = calm ? 0 : Math.sin(this.clock * 1.8 + c.x) * 0.05;
-      prop.root.position.set(c.x, 0.42 + bob, c.z);
-      prop.inner.rotation.y = calm ? 0.5 : this.clock * 0.7 + c.z;
+      // props are grounded set pieces (desks, lecterns, rolls): fixed yaw, only the small gold marker above them bobs and turns
+      prop.root.position.set(c.x, 0, c.z);
+      prop.inner.rotation.y = prop.faceYaw(c.x, c.z);
+      prop.marker.position.y = 1.35 + bob;
+      prop.marker.rotation.y = calm ? 0.5 : this.clock * 1.6;
     }
     // egg
     const e = run.egg;

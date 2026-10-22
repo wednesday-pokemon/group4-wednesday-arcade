@@ -2,13 +2,15 @@
 // probabilities; anything missing / invalid falls back to the labelled rule-based estimate.
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { duoNumbers, featureVector, FEATURES } from '../../../src/mystery/analytics/features.ts';
+import { duoNumbers, featureLabel, featureValue, featureVector, FEATURES, type FeatureInput } from '../../../src/mystery/analytics/features.ts';
 import { anyWithin, detectionTimes } from '../../../src/mystery/analytics/labels.ts';
 import { validateArtifact } from '../../../src/mystery/analytics/model.ts';
 import { BUNDLED_MODEL } from '../../../src/mystery/analytics/model/index.ts';
 import { bandFor, ML_LABEL, PredictiveService, RULE_LABEL } from '../../../src/mystery/analytics/predictive.ts';
 import { featureInputFromRow, parseCsv } from '../../../src/mystery/analytics/dataset.ts';
 import { auc, classifierMetrics, logLoss } from '../../../src/mystery/analytics/metrics.ts';
+import { CASES } from '../../../src/mystery/data/cases.ts';
+import { CASE_IDS } from '../../../src/mystery/types.ts';
 import { episode } from './helpers.ts';
 
 const svc = new PredictiveService(BUNDLED_MODEL);
@@ -23,7 +25,7 @@ describe('PredictiveService', () => {
     expect(m.trainedOn).toMatch(/not real players/);
     expect(m.training.duos).toBe(126);
     expect(m.training.split).toMatch(/session-grouped/);
-    expect(m.detection.features.every((f) => f in FEATURES || f.startsWith('room_'))).toBe(true);
+    expect(m.detection.features.every((f) => f in FEATURES || f.startsWith('room_') || f.startsWith('case_'))).toBe(true);
     // features never encode an id
     expect(m.detection.features.some((f) => /character|pokemon/i.test(f))).toBe(false);
   });
@@ -123,6 +125,64 @@ describe('PredictiveService', () => {
       expect(y).toBe(det.some((x) => x > s.snapshot.t && x <= s.snapshot.t + 15));
     }
   });
+
+  it('was retrained on episodes of ALL THREE cases, with per-case held-out metrics and calibration in the artifact and report', () => {
+    const m = svc.model!;
+    expect(m.trainedOn).toMatch(/3 cases/);
+    for (const id of CASE_IDS) {
+      expect(m.training.cases?.[id], id).toBeGreaterThan(100);
+      expect(m.detection.features).toContain(`case_${id}`);
+      const c = m.metrics!.byCase?.[id];
+      expect(c, id).toBeDefined();
+      expect(c!.detection.rows).toBeGreaterThan(500);
+      expect(c!.detection.calibration).toHaveLength(10);
+      expect(c!.detection.calibration.reduce((a, b) => a + b.count, 0)).toBe(c!.detection.rows);
+      expect(c!.detection.brier).toBeLessThan(c!.detection.baselineBrier);
+    }
+    const perCase = CASE_IDS.reduce((a, id) => a + m.metrics!.byCase![id]!.detection.rows, 0);
+    expect(perCase).toBe(m.metrics!.detection.rows);
+    const report = readFileSync('docs/MYSTERY_MODEL_REPORT.md', 'utf8');
+    expect(report).toMatch(/### Per case \(holdout\)/);
+    for (const id of CASE_IDS) {
+      const c = m.metrics!.byCase![id]!.detection;
+      expect(report).toContain(`| Case ${CASES[id].number} · ${CASES[id].title} | ${c.sessions} | ${c.rows} | ${c.baseRate.toFixed(3)} | ${c.brier.toFixed(4)} | ${c.baselineBrier.toFixed(4)} |`);
+      expect(report).toContain(`#### Case ${CASES[id].number} · ${CASES[id].title}`);
+    }
+  });
+
+  it('features normalise the clue count by the run\'s case clue count and carry the case indicator', () => {
+    const ep = episode({ characterId: 'enid', pokemonId: 'gengar' }, 'feat-case', { profile: 'stealthy' }, undefined, 'midnight_signal');
+    const s0 = ep.collector.samples[0];
+    const base: FeatureInput = { snapshot: { ...s0.snapshot, cluesFound: 2 }, prev: null, context: s0.context, duo: duoNumbers(ep.collector.meta.factors) };
+    expect(featureValue('clues', base)).toBeCloseTo(2 / 3, 10); // default: 3 clues
+    expect(featureValue('clues', { ...base, clueTotal: 4 })).toBe(0.5);
+    expect(featureValue('clues', { ...base, clueTotal: 2 })).toBe(1);
+    expect(featureLabel('clues', { ...base, clueTotal: 4 }, true)).toBe('2 of 4 clues found');
+    expect(featureValue('case_midnight_signal', { ...base, caseId: 'midnight_signal' })).toBe(1);
+    expect(featureValue('case_poisoned_archive', { ...base, caseId: 'midnight_signal' })).toBe(0);
+    expect(featureValue('case_midnight_signal', base)).toBe(0); // unknown case: no indicator
+    // the clue normalisation follows the case's real clue count
+    for (const id of CASE_IDS) expect(featureValue('clues', { ...base, snapshot: { ...base.snapshot, cluesFound: CASES[id].clues.length }, clueTotal: CASES[id].clues.length })).toBe(1);
+  });
+
+  it('every case gets honestly labelled ML estimates (and the rule-based label without a model)', () => {
+    const rule = new PredictiveService(null);
+    for (const [i, id] of CASE_IDS.entries()) {
+      const ep = episode({ characterId: 'bianca', pokemonId: 'sableye' }, `pred-case-${i}`, { profile: 'careless', sprintProb: 0.5 }, undefined, id);
+      expect(ep.run.caseDef.id).toBe(id);
+      const duo = duoNumbers(ep.collector.meta.factors);
+      for (const smp of ep.collector.samples.slice(0, 80)) {
+        const x: FeatureInput = { snapshot: smp.snapshot, prev: null, context: smp.context, duo, caseId: id, clueTotal: CASES[id].clues.length };
+        const r = svc.detection(x);
+        expect(r.label).toBe('ML estimate');
+        expect(r.p).toBeGreaterThanOrEqual(0);
+        expect(r.p).toBeLessThanOrEqual(1);
+        expect(rule.detection(x).label).toBe('Rule-based risk estimate');
+        const eta = svc.eta(x);
+        if (eta) expect(eta.seconds).toBeGreaterThanOrEqual(0);
+      }
+    }
+  }, 60_000);
 
   it('metric helpers behave', () => {
     expect(auc([0.1, 0.2, 0.8, 0.9], [0, 0, 1, 1])).toBe(1);

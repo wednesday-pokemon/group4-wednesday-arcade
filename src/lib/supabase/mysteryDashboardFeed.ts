@@ -7,15 +7,19 @@
 //              SessionRecords with eventFromRow for dashboard(records, clueIds).
 // Tolerates duplicate / out-of-order Realtime delivery, refetches after every (re)subscribe, polls REST while Realtime
 // is down. Pure state lives in MysteryBoardState (unit-testable).
+// Cases: every row carries case_id; the snapshot offers the combined standings AND per-case standings. Public rows never
+// carry who was accused or the cited evidence (column privileges + publicResultRow); nothing here reads them.
 import type { RealtimeChannel, RealtimePostgresChangesPayload, SupabaseClient } from '@supabase/supabase-js';
 import { isStationId } from '../../game/index.ts';
 import type { StationId } from '../../game/index.ts';
 import type { SessionRecord } from '../../mystery/analytics/types.ts';
+import type { CaseId } from '../../mystery/types.ts';
 import type { ConnectionState } from '../backend.ts';
 import { openBroadcastChannel } from './mysteryStationWatch.ts';
 import {
   HEARTBEAT_EVENT, HEARTBEAT_TOPIC, MYSTERY_RESULT_COLUMNS, MYSTERY_STANDING_COLUMNS, MYSTERY_STATION_COLUMNS, SIGNAL_LOST_MS,
-  isNewerMysteryRow, orderStandings, parseHeartbeat, recordFromRows, standingFromResult, type EventRow, type MysteryHeartbeat,
+  isNewerMysteryRow, orderStandings, parseHeartbeat, publicResultRow, recordFromRows, standingFromResult, standingsByCase,
+  type EventRow, type MysteryHeartbeat,
   type MysteryResultRow, type MysteryStandingRow, type MysteryStationRow, type SessionDetail,
 } from './mysteryWire.ts';
 import {
@@ -39,8 +43,10 @@ export interface MysteryBoardSnapshot {
   mode: 'live';
   connection: ConnectionState;
   stations: BoardStation[];
-  /** Finishers (ranked) above DNFs (unranked), exactly the mystery_standings order. */
+  /** Finishers (ranked) above DNFs (unranked), exactly the mystery_standings order, all cases (`rank` = combined). */
   standings: MysteryStandingRow[];
+  /** The same rows per case (`rank` = rank within that case = `case_rank`); every case id present. */
+  standingsByCase: Record<CaseId, MysteryStandingRow[]>;
   /** Verified sessions rebuilt for dashboard(records, clueIds). */
   records: SessionRecord[];
   /** True when the records carry events / offers / forecasts / advice (operator signed in). */
@@ -88,8 +94,9 @@ export class MysteryBoardState {
   }
 
   /** Realtime INSERT (duplicates are idempotent: keyed by session_id). Test runs never reach the public board. */
-  insertResult(row: MysteryResultRow | null | undefined): boolean {
-    if (!row || typeof row.session_id !== 'string' || row.is_test) return false;
+  insertResult(raw: MysteryResultRow | null | undefined): boolean {
+    const row = publicResultRow(raw);
+    if (!row || row.is_test) return false;
     if (this.deleted.has(row.session_id)) return false;
     this.results.set(row.session_id, row);
     this.touch();
@@ -113,7 +120,7 @@ export class MysteryBoardState {
   /** A full REST snapshot replaces results + standings (rows deleted meanwhile stay deleted). */
   applyLoad(stations: MysteryStationRow[], standings: MysteryStandingRow[], results: MysteryResultRow[]): void {
     stations.forEach((r) => this.mergeStation(r));
-    const keep = results.filter((r) => !r.is_test && !this.deleted.has(r.session_id));
+    const keep = results.map(publicResultRow).filter((r): r is MysteryResultRow => r !== null && !r.is_test && !this.deleted.has(r.session_id));
     this.results.clear();
     keep.forEach((r) => this.results.set(r.session_id, r));
     const fromRest = standings.filter((s) => !this.deleted.has(s.session_id));
@@ -148,7 +155,8 @@ export class MysteryBoardState {
       };
     });
     return {
-      mode: 'live', connection, stations, standings: this.standingRows, records: this.records(), detailed: this.detailed,
+      mode: 'live', connection, stations, standings: this.standingRows, standingsByCase: standingsByCase(this.standingRows),
+      records: this.records(), detailed: this.detailed,
       recordsVersion: this.version, loaded: this.loaded, error: this.error, updatedAt: now,
     };
   }

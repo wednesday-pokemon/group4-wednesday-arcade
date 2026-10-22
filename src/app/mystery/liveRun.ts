@@ -39,7 +39,7 @@ export interface LiveControllerDeps {
 export interface LiveController extends LiveStationHandle {
   /** Diagnostics for render_game_to_text and tests. */
   debug(): {
-    sessionId: string | null; status: string | null; lastSeq: number | null; sync: SyncStatus | null; final: LiveFinal;
+    sessionId: string | null; status: string | null; caseId: string | null; lastSeq: number | null; sync: SyncStatus | null; final: LiveFinal;
     pendingUpload: number | null; requests: number;
   };
   /** The finalize of the last run (tests await it). */
@@ -51,6 +51,8 @@ function toData(env: MysterySessionEnvelope): LiveSessionData {
   return {
     sessionId: s.sessionId,
     seed: s.seed,
+    caseId: s.caseId,
+    caseVersion: s.caseVersion,
     offer: env.offer,
     selected: s.selected ? { characterId: s.selected.characterId, pokemonId: s.selected.pokemonId } : null,
     nickname: s.nickname,
@@ -174,7 +176,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       case 'verifying':
         return { kind: 'verifying', offline: s.offline };
       case 'verified':
-        return { kind: 'verified', result: s.response.result, rank: s.response.rank };
+        return { kind: 'verified', result: s.response.result, rank: s.response.rank, reveal: s.response.reveal };
       case 'reset':
         return { kind: 'unverified', reason: 'The operator reset this station before the result was saved.' };
       default:
@@ -426,6 +428,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       return {
         sessionId: current?.sessionId ?? null,
         status: current?.status ?? null,
+        caseId: current?.caseId ?? null, // the case id is public (announced to the visitor); never the culprit
         lastSeq: run ? run.uploader.status().lastSeq : current?.lastSeq ?? null,
         sync: run ? run.uploader.status() : null,
         final: ui.final,

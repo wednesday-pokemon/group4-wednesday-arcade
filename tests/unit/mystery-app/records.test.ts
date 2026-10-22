@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { RiskHold } from '../../../src/app/mystery/hudModel.ts';
 import { appendRecord, LIVE_KEY, loadRecords, readLive, RECORDS_KEY, writeLive, type StoredRecord } from '../../../src/app/mystery/records.ts';
 import { createMysteryAnalytics } from '../../../src/mystery/analytics/index.ts';
-import { playEpisode } from '../../../src/mystery/bot.ts';
+import { playEpisode } from '../../../src/mystery/episode.ts';
 import type { StampedEvent } from '../../../src/mystery/types.ts';
 
 class MemStorage {
@@ -43,8 +43,8 @@ describe('local dashboard records', () => {
     const st = new MemStorage();
     appendRecord(st, rec('x', [
       ev(1, { type: 'noise', source: 'footstep', x: 0, z: 0, loudness: 0.35, radiusM: 7 }),
-      ev(2, { type: 'clue_found', clueId: 'master_key', cluesFound: 1 }),
-      ev(3, { type: 'accusation', suspectId: 'isaac', correct: false, cluesFound: 1 }),
+      ev(2, { type: 'clue_found', clueId: 'access_ledger', cluesFound: 1 }),
+      ev(3, { type: 'accusation', suspectId: 'isaac', correct: false, cluesFound: 1, evidence: ['access_ledger'], deductionCorrect: false }),
     ]));
     const [r] = loadRecords(st);
     expect(r!.record.events.map((e) => e.type)).toEqual(['clue_found', 'accusation']);

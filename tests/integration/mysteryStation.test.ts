@@ -11,9 +11,12 @@ import { LiveStepError, type LiveSessionData } from '../../src/app/mystery/liveC
 import { readLiveSession } from '../../src/app/mystery/liveSession.ts';
 import { chipFor, bannerText } from '../../src/app/mystery/liveChrome.tsx';
 import {
-  FakeSupabaseServer, MYSTERY_DNF_SEED as DNF_SEED, MYSTERY_FINISH_SEED as FINISH_SEED, ManualTimers, OPERATOR, driveRun,
-  openMysteryBoard, openMysteryStation, settle, stationCredentials, type MysteryStationPage,
+  FakeSupabaseServer, MYSTERY_DNF_CASE as DNF_CASE, MYSTERY_DNF_SEED as DNF_SEED, MYSTERY_FINISH_SEED as FINISH_SEED, ManualTimers,
+  OPERATOR, driveRun, openMysteryBoard, openMysteryStation, settle, stationCredentials, type MysteryStationPage,
 } from './fakeSupabase.ts';
+import { CASES } from '../../src/mystery/data/cases.ts';
+import { CASE_SOLUTIONS } from '../../src/mystery/data/solutions.ts';
+import { CASE_IDS, type CaseId } from '../../src/mystery/types.ts';
 
 async function signedIn(server: FakeSupabaseServer, stationId: StationId = 'station_a', opts: Parameters<typeof openMysteryStation>[2] = {}) {
   const page = openMysteryStation(server, stationId, opts);
@@ -108,7 +111,9 @@ describe('mystery station: create → select → append → finalize', () => {
     const server = new FakeSupabaseServer();
     const page = await signedIn(server);
     const { controller, timers } = controllerFor(page);
+    server.nextMysteryCases.push(DNF_CASE); // the careless DNF of this seed is case dependent
     const { chosen } = await startVisitor(server, page, controller, DNF_SEED);
+    expect(chosen.caseId).toBe(DNF_CASE);
     const { run } = await driveRun(controller, chosen, { stationId: 'station_a', timers, profile: 'careless' });
     expect(run.status).toBe('dnf');
     const final = await controller.finalizing()!;
@@ -119,8 +124,201 @@ describe('mystery station: create → select → append → finalize', () => {
     expect(ui.final.result.outcome).toBe('dnf');
     expect(ui.final.result.score).toBeNull();
     expect(bannerText(ui.final).title).toBe('Verified · Did not finish');
+    expect(ui.final.reveal).toBeNull(); // nobody was accused: nothing to reveal
+    expect(ui.final.result).toMatchObject({ caseId: DNF_CASE, evidence: [], deductionCorrect: false, accused: null });
     controller.dispose();
   }, 60_000);
+});
+
+/** Wraps the uploaded batches: `edit` may rewrite the events of a batch (the local run is untouched). */
+function tamperUploads(edit: (events: Record<string, unknown>[]) => Record<string, unknown>[]) {
+  return (a: MysteryAnalytics): MysteryAnalytics => ({
+    pendingBatch() {
+      const b = a.pendingBatch();
+      if (!b) return b;
+      return { ...b, events: edit(b.events as unknown as Record<string, unknown>[]) } as unknown as SupabaseBatch;
+    },
+    ackBatch: (b: SupabaseBatch) => a.ackBatch(b),
+  }) as unknown as MysteryAnalytics;
+}
+
+describe('mystery station: three cases', () => {
+  it('the server assigns the case at create; restore / refresh / a replayed create keep the SAME case (no new draw)', async () => {
+    const server = new FakeSupabaseServer();
+    const page = await signedIn(server, 'station_a', { maxAttempts: 1 });
+    const first = controllerFor(page).controller;
+    server.nextMysterySeeds.push(FINISH_SEED);
+    server.faults.push({ fn: 'mystery-create-session', kind: 'network-after' }); // committed, answer lost
+    expect(await first.createSession('Case Cass').catch((e: unknown) => (e as LiveStepError).kind)).toBe('network');
+    const stored = server.mysterySessionsOf('station_a')[0]!;
+    expect(CASE_IDS).toContain(stored.case_id);
+    expect(stored.case_version).toBe(CASES[stored.case_id].version);
+    const bagAfterCreate = structuredClone(server.mysteryCaseBags.get('station_a'));
+    first.dispose();
+
+    // reload → the create is replayed with the same actionId → same session, same case, nothing drawn
+    const second = controllerFor(page).controller;
+    const restored = await second.restore();
+    if (restored.kind !== 'offered') throw new Error(`expected offered, got ${restored.kind}`);
+    expect(restored.session.caseId).toBe(stored.case_id);
+    expect(restored.session.caseVersion).toBe(stored.case_version);
+    expect(server.mysteryCaseBags.get('station_a')).toEqual(bagAfterCreate);
+    // select, then refresh again → still the same case
+    await second.selectDuo(restored.session.offer.cards[0]!);
+    second.dispose();
+    const third = controllerFor(page).controller;
+    const again = await third.restore();
+    if (again.kind !== 'selected') throw new Error(`expected selected, got ${again.kind}`);
+    expect(again.session.caseId).toBe(stored.case_id);
+    expect(server.mysterySessionsOf('station_a')).toHaveLength(1);
+    expect(server.mysteryCaseBags.get('station_a')).toEqual(bagAfterCreate);
+    expect((third.debug() as { caseId: string | null }).caseId).toBe(stored.case_id);
+    // the session envelope never carries the answer
+    const env = JSON.stringify(await page.services.api.get(stored.id));
+    expect(env).not.toMatch(/culprit|resolution|supportingEvidence/);
+    third.dispose();
+  });
+
+  it('a NEW session draws the next case: six visitors on one station see every case exactly twice, never twice in a row', async () => {
+    const server = new FakeSupabaseServer();
+    const page = await signedIn(server);
+    const { controller } = controllerFor(page);
+    const seen: CaseId[] = [];
+    for (let i = 0; i < 6; i++) {
+      server.nextMysterySeeds.push(FINISH_SEED);
+      const s = await controller.createSession(`Visitor ${i + 1}`);
+      expect(s.caseId).toBe(server.mysterySessions.get(s.sessionId)!.case_id);
+      seen.push(s.caseId);
+      controller.leave();
+    }
+    for (const id of CASE_IDS) expect(seen.filter((c) => c === id)).toHaveLength(2);
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).not.toBe(seen[i - 1]);
+    controller.dispose();
+  });
+
+  it('stations are isolated: each has its own bag, B\'s creates never change A\'s next case', async () => {
+    const server = new FakeSupabaseServer();
+    const a = await signedIn(server, 'station_a');
+    const b = await signedIn(server, 'station_b');
+    const casesA: CaseId[] = [];
+    const casesB: CaseId[] = [];
+    for (let i = 0; i < 3; i++) casesA.push((await a.services.api.create(crypto.randomUUID(), 'Alpha')).envelope.session.caseId);
+    const bagA = structuredClone(server.mysteryCaseBags.get('station_a'));
+    for (let i = 0; i < 3; i++) casesB.push((await b.services.api.create(crypto.randomUUID(), 'Bravo')).envelope.session.caseId);
+    expect(new Set(casesA).size).toBe(3); // a full bag per station
+    expect(new Set(casesB).size).toBe(3);
+    expect(server.mysteryCaseBags.get('station_a')).toEqual(bagA);
+    expect(server.mysteryCaseBags.size).toBe(2);
+  });
+
+  it('a verified run of the assigned case: result + reveal carry that case; stored evidence = exactly the 3 clues', async () => {
+    const server = new FakeSupabaseServer();
+    const page = await signedIn(server);
+    const { controller, timers } = controllerFor(page);
+    server.nextMysteryCases.push('midnight_signal');
+    const { chosen } = await startVisitor(server, page, controller, FINISH_SEED);
+    expect(chosen.caseId).toBe('midnight_signal');
+    const { run } = await driveRun(controller, chosen, { stationId: 'station_a', timers });
+    expect(run.caseDef.id).toBe('midnight_signal');
+    const final = await controller.finalizing()!;
+    if (final.kind !== 'verified') throw new Error('expected verified');
+    const r = final.response.result;
+    expect(r).toMatchObject({ caseId: 'midnight_signal', caseVersion: CASES.midnight_signal.version, verdict: 'case_solved',
+      correct: true, deductionCorrect: true, claimMatches: true, accused: CASE_SOLUTIONS.midnight_signal.culprit });
+    expect([...r.evidence].sort()).toEqual([...CASE_SOLUTIONS.midnight_signal.supportingEvidence].sort());
+    expect(final.response.reveal).toEqual({ culprit: CASE_SOLUTIONS.midnight_signal.culprit, resolution: CASE_SOLUTIONS.midnight_signal.resolution });
+    const ui = controller.getUi();
+    if (ui.final.kind !== 'verified') throw new Error('expected verified');
+    expect(ui.final.reveal?.culprit).toBe(CASE_SOLUTIONS.midnight_signal.culprit);
+    expect(server.mysteryResults.get(chosen.sessionId)).toMatchObject({ case_id: 'midnight_signal', deduction_correct: true });
+    // the second finalize returns the same result and reveal
+    expect(await page.services.api.finalize(chosen.sessionId, null)).toEqual(final.response);
+    controller.dispose();
+  }, 60_000);
+
+  it('forged evidence ids are dropped by the server; the claim is flagged; the deduction is not credited', async () => {
+    const server = new FakeSupabaseServer();
+    const page = await signedIn(server);
+    const { controller, timers } = controllerFor(page);
+    server.nextMysteryCases.push('poisoned_archive');
+    const { chosen } = await startVisitor(server, page, controller, FINISH_SEED);
+    const forged = ['sabotaged_gate', 'culprit_is_thornhill'];
+    const source = tamperUploads((events) => events.map((e) => (e.type === 'accusation'
+      ? { ...e, evidence: ['falsified_transfer', ...forged, 'note_drain_mud'] } : e)));
+    await driveRun(controller, chosen, { stationId: 'station_a', timers, source });
+    const final = await controller.finalizing()!;
+    if (final.kind !== 'verified') throw new Error(`expected verified, got ${final.kind}`);
+    const r = final.response.result;
+    expect(r.evidence).toEqual(['falsified_transfer', 'note_drain_mud']); // only citable ids survive
+    expect(r.deductionCorrect).toBe(false);
+    expect(r.verdict).toBe('egg_secured_mystery_unsolved');
+    expect(r.claimMatches).toBe(false);
+    const stored = server.mysteryResults.get(chosen.sessionId)!;
+    expect(stored.evidence).toEqual(['falsified_transfer', 'note_drain_mud']);
+    expect(JSON.stringify(stored.client_claim)).toContain('culprit_is_thornhill'); // raw claim kept for the operator audit
+    controller.dispose();
+  }, 60_000);
+
+  it('a client claiming correct / case_solved for a WRONG accusation is overruled by the server', async () => {
+    const server = new FakeSupabaseServer();
+    const page = await signedIn(server);
+    const { controller, timers } = controllerFor(page);
+    server.nextMysteryCases.push('crypt_last_witness');
+    const { chosen } = await startVisitor(server, page, controller, FINISH_SEED);
+    const culprit = CASE_SOLUTIONS.crypt_last_witness.culprit;
+    const innocent = CASES.crypt_last_witness.suspects.find((x) => x.id !== culprit)!.id;
+    // the visitor accuses an innocent; a lying client then claims it was right and solved
+    const source = tamperUploads((events) => events.map((e) => (e.type === 'accusation' ? { ...e, correct: true, deductionCorrect: true }
+      : e.type === 'finish' ? { ...e, verdict: 'case_solved' } : e)));
+    const { run } = await driveRun(controller, chosen, {
+      stationId: 'station_a', timers, source, accusation: (_run, bot) => ({ ...bot, suspectId: innocent }),
+    });
+    expect(run.result()!.correct).toBe(false);
+    const final = await controller.finalizing()!;
+    if (final.kind !== 'verified') throw new Error(`expected verified, got ${final.kind}`);
+    expect(final.response.result).toMatchObject({ accused: innocent, correct: false, verdict: 'egg_secured_mystery_unsolved', claimMatches: false });
+    // the wrong accusation is a valid recorded outcome, ranked by score like any finisher
+    expect(final.response.rank).toBe(1);
+    expect(final.response.reveal?.culprit).toBe(culprit);
+    controller.dispose();
+  }, 60_000);
+
+  it('the accusation is one shot: a second accusation is rejected (before and after finalize)', async () => {
+    const server = new FakeSupabaseServer();
+    const page = await signedIn(server);
+    const { controller, timers } = controllerFor(page);
+    const { chosen } = await startVisitor(server, page, controller, FINISH_SEED);
+    const source = tamperUploads((events) => {
+      const i = events.findIndex((e) => e.type === 'accusation');
+      if (i < 0) return events;
+      const acc = events[i]!;
+      const fin = events.slice(i + 1).map((e) => ({ ...e, seq: (e.seq as number) + 1 }));
+      return [...events.slice(0, i + 1), { ...acc, seq: (acc.seq as number) + 1, suspectId: 'barry' }, ...fin];
+    });
+    await driveRun(controller, chosen, { stationId: 'station_a', timers, source });
+    expect((await controller.finalizing()!).kind).toBe('unverified');
+    expect(controller.getUi().sync).toBe('unverified');
+    expect(server.mysteryResults.size).toBe(0);
+    expect([...server.mysteryEvents.get(chosen.sessionId)!.values()].filter((e) => e.type === 'accusation')).toHaveLength(0);
+    controller.dispose();
+
+    // a clean run, then a late second accusation after finalize: refused, the stored result is unchanged
+    const server2 = new FakeSupabaseServer();
+    const page2 = await signedIn(server2);
+    const k2 = controllerFor(page2);
+    const v2 = await startVisitor(server2, page2, k2.controller, FINISH_SEED);
+    await driveRun(k2.controller, v2.chosen, { stationId: 'station_a', timers: k2.timers });
+    const ok = await k2.controller.finalizing()!;
+    if (ok.kind !== 'verified') throw new Error('expected verified');
+    const last = server2.mysterySessions.get(v2.chosen.sessionId)!.last_seq;
+    const late = await page2.services.api.append(v2.chosen.sessionId, {
+      events: [{ seq: last + 1, t: 999, type: 'accusation', suspectId: 'barry', correct: true, cluesFound: 3, evidence: [], deductionCorrect: true } as never],
+      forecasts: [], recommendations: [],
+    }).catch((e: unknown) => e);
+    expect(classifyFailure(late)).toBe('closed');
+    expect(await page2.services.api.finalize(v2.chosen.sessionId, null)).toEqual(ok.response);
+    k2.controller.dispose();
+  }, 120_000);
 });
 
 describe('mystery station: refresh / reconnect', () => {

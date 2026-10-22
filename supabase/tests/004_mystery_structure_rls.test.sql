@@ -2,7 +2,7 @@
 -- Runs inside one transaction that is ROLLED BACK (nothing persists). Run with `supabase test db` or the PGlite runner.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(83);
+select plan(109);
 
 do $$
 begin
@@ -32,13 +32,16 @@ create function pg_temp.offer(p_seed text) returns jsonb language sql as $$
   select jsonb_build_object('seed', p_seed, 'cards', jsonb_build_array(
     pg_temp.card('wednesday', 'gengar'), pg_temp.card('enid', 'drifblim'), pg_temp.card('gomez', 'aegislash')))
 $$;
+create function pg_temp.versions() returns jsonb language sql as $$
+  select '{"poisoned_archive":1,"crypt_last_witness":1,"midnight_signal":1}'::jsonb
+$$;
 create function pg_temp.req(p_body jsonb) returns jsonb language sql as $$
   select jsonb_build_object('body', p_body, 'actor', jsonb_build_object('userId', 'aaaaaaaa-0000-4000-8000-0000000000a1'))
 $$;
 create function pg_temp.mk(p_id uuid, p_station text, p_action text, p_seed text, p_nick text, p_test boolean default false)
 returns jsonb language sql as $$
   select public.mystery_create_session(p_id, p_station, p_action, p_seed, p_nick, pg_temp.offer(p_seed), p_test,
-    pg_temp.req(jsonb_build_object('actionId', p_action, 'nickname', p_nick)))
+    pg_temp.req(jsonb_build_object('actionId', p_action, 'nickname', p_nick)), pg_temp.versions())
 $$;
 create function pg_temp.ev(p_seq int, p_t float8, p_type text, p_payload jsonb default '{}'::jsonb) returns jsonb
 language sql as $$ select jsonb_build_object('seq', p_seq, 't', p_t, 'type', p_type, 'payload', p_payload) $$;
@@ -47,7 +50,7 @@ select is(pg_temp.mk('a1111111-1111-4111-8111-111111111111', 'station_a', 'm_cre
 select is(pg_temp.mk('b2222222-2222-4222-8222-222222222222', 'station_b', 'm_create_b_01', 'fedcba9876543210fedcba9876543210', 'Bobby') ->> 'ok', 'true', 'fixture: mystery session on station_b');
 select is(public.mystery_select_duo('a1111111-1111-4111-8111-111111111111', 'station_a', 'enid', 'drifblim', pg_temp.req('{}')) ->> 'ok', 'true', 'fixture: duo selected on station_a');
 select is(public.mystery_append_events('a1111111-1111-4111-8111-111111111111', 'station_a', -1,
-  jsonb_build_array(pg_temp.ev(0, 0.5, 'stance', '{"stance":"crouch"}'), pg_temp.ev(1, 9.25, 'clue_found', '{"clueId":"master_key","cluesFound":1}')),
+  jsonb_build_array(pg_temp.ev(0, 0.5, 'stance', '{"stance":"crouch"}'), pg_temp.ev(1, 9.25, 'clue_found', '{"clueId":"falsified_transfer","cluesFound":1}')),
   '{"v":1,"egg":"resting"}', jsonb_build_array(jsonb_build_object('forecastNo', 0, 't', 3, 'target', 'detection_15s', 'value', 0.2, 'modelLabel', 'rule_based', 'features', '{"dist":12}'::jsonb)),
   jsonb_build_array(jsonb_build_object('recNo', 0, 't', 4, 'action', 'crouch', 'advice', 'Crouch: the Hyde is near'))) ->> 'ok',
   'true', 'fixture: events + forecast + recommendation on station_a');
@@ -68,13 +71,32 @@ select ok(not has_any_column_privilege('anon', t::regclass, 'SELECT'), 'anon can
 from unnest(array['public.mystery_sessions', 'public.mystery_offered_duos', 'public.mystery_events', 'public.mystery_clue_events',
                   'public.mystery_forecasts', 'public.mystery_recommendations', 'public.mystery_session_actions']) t;
 select ok(has_table_privilege('anon', t::regclass, 'SELECT'), 'anon can select ' || t)
-from unnest(array['public.mystery_station_status', 'public.mystery_results', 'public.mystery_leaderboard',
+from unnest(array['public.mystery_station_status', 'public.mystery_leaderboard',
                   'public.mystery_defeated', 'public.mystery_standings']) t;
+select ok(has_column_privilege('anon', 'public.mystery_results', 'verdict', 'SELECT')
+          and has_column_privilege('anon', 'public.mystery_results', 'case_id', 'SELECT')
+          and has_column_privilege('anon', 'public.mystery_results', 'deduction_correct', 'SELECT'),
+  'anon can select the public columns of mystery_results (verdict, case_id, deduction_correct)');
+select ok(not has_column_privilege(r, 'public.mystery_results', c, 'SELECT'), r || ' cannot select mystery_results.' || c)
+from unnest(array['anon', 'authenticated']) r, unnest(array['accused', 'evidence', 'client_claim']) c;
+select ok(not has_table_privilege('anon', 'public.mystery_results', 'SELECT'), 'anon has no table-wide SELECT on mystery_results (column grants only)');
+select ok(not exists (select 1 from information_schema.columns where table_schema = 'public'
+    and table_name in ('mystery_leaderboard', 'mystery_defeated', 'mystery_standings') and column_name in ('accused', 'evidence', 'client_claim')),
+  'public mystery views expose no accused / evidence / client_claim column');
+select ok((select bool_and(exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = v and column_name = 'case_id'))
+  from unnest(array['mystery_leaderboard', 'mystery_defeated', 'mystery_standings', 'mystery_station_status']) v),
+  'leaderboard, defeated, standings and station status carry case_id');
+select ok((select c.relrowsecurity from pg_class c where c.oid = 'public.mystery_case_bags'::regclass)
+          and not has_any_column_privilege('anon', 'public.mystery_case_bags', 'SELECT')
+          and not has_any_column_privilege('authenticated', 'public.mystery_case_bags', 'SELECT')
+          and not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'mystery_case_bags'),
+  'mystery_case_bags: RLS on, no client privilege, no policy (service role only)');
+select ok(not has_table_privilege('anon', 'public.mystery_result_audit', 'SELECT'), 'anon cannot select the operator audit view');
 select ok((select reloptions from pg_class where oid = t::regclass) @> array['security_invoker=true'], t || ' is security_invoker')
 from unnest(array['public.mystery_leaderboard', 'public.mystery_defeated', 'public.mystery_standings']) t;
 select is(
   (select count(*)::int from unnest(array[
-      'public.mystery_create_session(uuid,text,text,text,text,jsonb,boolean,jsonb)',
+      'public.mystery_create_session(uuid,text,text,text,text,jsonb,boolean,jsonb,jsonb,text)',
       'public.mystery_select_duo(uuid,text,text,text,jsonb)',
       'public.mystery_append_events(uuid,text,integer,jsonb,jsonb,jsonb,jsonb)',
       'public.mystery_finalize_session(uuid,text,integer,jsonb,jsonb)',
@@ -154,13 +176,19 @@ select throws_ok('delete from public.mystery_sessions', '42501', null, 'operator
 reset role;
 
 -- ---------------------------------------------------------------- constraints (as postgres) ------
-select throws_ok($$insert into public.mystery_sessions (id, station_id, rules_version, create_action_id, seed, nickname)
-  values (gen_random_uuid(), 'station_a', 'v2.5', 'm_bad_rules_01', '0123456789abcdef0123456789abcdef', 'Carol')$$,
+select throws_ok($$insert into public.mystery_sessions (id, station_id, rules_version, create_action_id, seed, nickname, case_id, case_version)
+  values (gen_random_uuid(), 'station_a', 'v2.5', 'm_bad_rules_01', '0123456789abcdef0123456789abcdef', 'Carol', 'midnight_signal', 1)$$,
   '23514', null, 'rules_version must be mystery-v3.1');
-select throws_ok($$insert into public.mystery_sessions (id, station_id, create_action_id, seed, nickname)
-  values (gen_random_uuid(), 'station_a', 'm_bad_seed_001', 'not-a-seed', 'Carol')$$, '23514', null, 'seed must be 32 hex');
-select throws_ok($$insert into public.mystery_sessions (id, station_id, create_action_id, seed, nickname)
-  values (gen_random_uuid(), 'station_a', 'm_bad_nick_001', '0123456789abcdef0123456789abcdef', '<b>x</b>')$$, '23514', null, 'nickname markup rejected');
+select throws_ok($$insert into public.mystery_sessions (id, station_id, create_action_id, seed, nickname, case_id, case_version)
+  values (gen_random_uuid(), 'station_a', 'm_bad_seed_001', 'not-a-seed', 'Carol', 'midnight_signal', 1)$$, '23514', null, 'seed must be 32 hex');
+select throws_ok($$insert into public.mystery_sessions (id, station_id, create_action_id, seed, nickname, case_id, case_version)
+  values (gen_random_uuid(), 'station_a', 'm_bad_nick_001', '0123456789abcdef0123456789abcdef', '<b>x</b>', 'midnight_signal', 1)$$, '23514', null, 'nickname markup rejected');
+select throws_ok($$insert into public.mystery_sessions (id, station_id, create_action_id, seed, nickname, case_id, case_version)
+  values (gen_random_uuid(), 'station_b', 'm_bad_case_001', '0123456789abcdef0123456789abcdef', 'Carol', 'silent_evidence', 1)$$,
+  '23514', null, 'case_id must be one of the three cases');
+select throws_ok($$insert into public.mystery_sessions (id, station_id, create_action_id, seed, nickname, case_version)
+  values (gen_random_uuid(), 'station_b', 'm_no_case_0001', '0123456789abcdef0123456789abcdef', 'Carol', 1)$$,
+  '23502', null, 'a session must name its case (no default)');
 select throws_ok($$insert into public.mystery_offered_duos (session_id, station_id, slot, character_id, pokemon_id, duo_name, role, rarity, stats, card)
   values ('b2222222-2222-4222-8222-222222222222', 'station_b', 1, 'xavier', 'gengar', 'X', 'stealth', 'common', '{}', '{}')$$,
   '23514', null, 'offered character must be one of the seven Nightshades');
@@ -171,7 +199,7 @@ select throws_ok($$insert into public.mystery_offered_duos (session_id, station_
 select throws_ok($$select public.mystery_create_session('c3333333-3333-4333-8333-333333333333', 'station_b', 'm_dup_pair_01',
   '00000000000000000000000000000003', 'Dupe', jsonb_build_object('seed', '00000000000000000000000000000003', 'cards',
   jsonb_build_array(pg_temp.card('enid', 'gengar'), pg_temp.card('enid', 'gengar'), pg_temp.card('ajax', 'sableye'))),
-  false, pg_temp.req('{}'))$$, '23505', null, 'an offer with a duplicate pair is refused by the database');
+  false, pg_temp.req('{}'), pg_temp.versions())$$, '23505', null, 'an offer with a duplicate pair is refused by the database');
 select throws_ok($$insert into public.mystery_events (session_id, station_id, seq, t, type, payload)
   values ('a1111111-1111-4111-8111-111111111111', 'station_a', 1, 10, 'stance', '{"stance":"walk"}')$$,
   '23505', null, 'duplicate (session_id, seq) rejected');
@@ -184,34 +212,66 @@ select lives_ok($$insert into public.mystery_events (session_id, station_id, seq
 select throws_ok($$insert into public.mystery_events (session_id, station_id, seq, t, type, payload)
   values ('a1111111-1111-4111-8111-111111111111', 'station_a', 61, 11, 'finish', '{}')$$, '23505', null, 'second terminal event rejected');
 select throws_ok($$insert into public.mystery_clue_events (session_id, station_id, clue_id, found_order, seq, t)
-  values ('a1111111-1111-4111-8111-111111111111', 'station_a', 'master_key', 2, 60, 10)$$, '23505', null, 'the same clue cannot be found twice');
+  values ('a1111111-1111-4111-8111-111111111111', 'station_a', 'falsified_transfer', 2, 60, 10)$$, '23505', null, 'the same clue cannot be found twice');
+select throws_ok($$insert into public.mystery_clue_events (session_id, station_id, clue_id, found_order, seq, t)
+  values ('a1111111-1111-4111-8111-111111111111', 'station_a', 'diary_page', 2, 60, 10)$$, '23514', null, 'an unknown clue id is refused');
+select lives_ok($$insert into public.mystery_clue_events (session_id, station_id, clue_id, found_order, seq, t)
+  values ('a1111111-1111-4111-8111-111111111111', 'station_a', 'watchtower_signal', 2, 60, 10)$$, 'clue ids of every case are accepted');
 select throws_ok($$update public.mystery_events set t = 0 where session_id = 'a1111111-1111-4111-8111-111111111111'$$,
   '42501', null, 'mystery_events are append-only even for the owner');
--- result coherence
-select throws_ok($$insert into public.mystery_results (session_id, station_id, nickname, character_id, pokemon_id, rules_version, outcome,
-  verdict, accused, correct, clues_found, egg_tier, egg_points, egg_security, active_time_s, score, catches, finalized_at)
-  values ('a1111111-1111-4111-8111-111111111111', 'station_a', 'Alice', 'enid', 'drifblim', 'mystery-v3.1', 'finished',
-  'case_solved', 'thornhill', true, array['transfer_note','master_key','greenhouse_trace'], 'rare', 3, 80, 200.0, 999.0, 0, now())$$,
+-- result coherence (case_id / case_version / evidence / deduction_correct have no defaults: the RPC must name them)
+create function pg_temp.res(p_verdict text, p_accused text, p_correct boolean, p_deduction boolean, p_clues text[], p_evidence text[],
+  p_points int, p_time numeric, p_score numeric, p_outcome text default 'finished', p_dnf text default null) returns void
+language sql as $$
+  insert into public.mystery_results (session_id, station_id, nickname, character_id, pokemon_id, rules_version, case_id, case_version,
+    outcome, dnf_reason, verdict, accused, correct, deduction_correct, evidence, clues_found, egg_tier, egg_points, egg_security,
+    active_time_s, score, catches, finalized_at)
+  values ('a1111111-1111-4111-8111-111111111111', 'station_a', 'Alice', 'enid', 'drifblim', 'mystery-v3.1', 'poisoned_archive', 1,
+    p_outcome, p_dnf, p_verdict, p_accused, p_correct, p_deduction, p_evidence, p_clues, 'rare', p_points, 80, p_time, p_score, 0, now())
+$$;
+select throws_ok($$select pg_temp.res('case_solved', 'thornhill', true, true, array['falsified_transfer','botanical_residue','access_ledger'],
+  array['falsified_transfer','botanical_residue','access_ledger'], 3, 200.0, 999.0)$$,
   '23514', null, 'finished score must equal points x 100 - active time');
-select throws_ok($$insert into public.mystery_results (session_id, station_id, nickname, character_id, pokemon_id, rules_version, outcome,
-  verdict, accused, correct, clues_found, egg_tier, egg_points, egg_security, active_time_s, score, catches, finalized_at)
-  values ('a1111111-1111-4111-8111-111111111111', 'station_a', 'Alice', 'enid', 'drifblim', 'mystery-v3.1', 'finished',
-  'case_solved', 'thornhill', true, array['master_key'], 'rare', 3, 80, 200.0, 100.0, 0, now())$$,
+select throws_ok($$select pg_temp.res('case_solved', 'thornhill', true, true, array['falsified_transfer'], array['falsified_transfer'], 3, 200.0, 100.0)$$,
   '23514', null, 'case_solved requires all three clues');
-select throws_ok($$insert into public.mystery_results (session_id, station_id, nickname, character_id, pokemon_id, rules_version, outcome,
-  dnf_reason, verdict, accused, correct, clues_found, egg_tier, egg_points, egg_security, active_time_s, score, catches, finalized_at)
-  values ('a1111111-1111-4111-8111-111111111111', 'station_a', 'Alice', 'enid', 'drifblim', 'mystery-v3.1', 'dnf',
-  'second_catch', 'not_accused', null, false, '{}', 'rare', 0, 80, 200.0, 0.0, 2, now())$$,
+select throws_ok($$select pg_temp.res('case_solved', 'thornhill', true, false, array['falsified_transfer','botanical_residue','access_ledger'],
+  array['falsified_transfer','note_drain_mud'], 3, 200.0, 100.0)$$,
+  '23514', null, 'case_solved requires the correct deduction (exactly the supporting evidence)');
+select throws_ok($$select pg_temp.res('case_solved', 'isaac', false, true, array['falsified_transfer','botanical_residue','access_ledger'],
+  array['falsified_transfer','botanical_residue','access_ledger'], 3, 200.0, 100.0)$$,
+  '23514', null, 'case_solved requires the correct suspect');
+select throws_ok($$select pg_temp.res('not_accused', null, false, true, array['falsified_transfer'], array['falsified_transfer'], 3, 200.0, 100.0)$$,
+  '23514', null, 'no suspect -> no cited evidence and no deduction');
+select throws_ok($$select pg_temp.res('egg_secured_mystery_unsolved', 'barry', false, false, array['falsified_transfer'],
+  array['a','b','c','d','e','f'], 3, 200.0, 100.0)$$, '23514', null, 'at most five evidence ids');
+select throws_ok($$select pg_temp.res('egg_secured_mystery_unsolved', 'barry', false, false, array['falsified_transfer'],
+  array['<script>'], 3, 200.0, 100.0)$$, '23514', null, 'evidence ids must be snake_case ids');
+select throws_ok($$select pg_temp.res('not_accused', null, false, false, '{}', '{}', 0, 200.0, 0.0, 'dnf', 'second_catch')$$,
   '23514', null, 'a DNF has no score (null)');
-select lives_ok($$insert into public.mystery_results (session_id, station_id, nickname, character_id, pokemon_id, rules_version, outcome,
-  verdict, accused, correct, clues_found, egg_tier, egg_points, egg_security, active_time_s, score, catches, finalized_at)
-  values ('a1111111-1111-4111-8111-111111111111', 'station_a', 'Alice', 'enid', 'drifblim', 'mystery-v3.1', 'finished',
-  'not_accused', null, false, array['master_key'], 'common', 1, 80, 345.7, -245.7, 1, now())$$,
+select lives_ok($$select pg_temp.res('not_accused', null, false, false, array['falsified_transfer'], '{}', 1, 345.7, -245.7)$$,
   'a finisher who left the case unsolved (accused null, not_accused) with a NEGATIVE score is valid');
 select throws_ok($$update public.mystery_results set score = 600 where session_id = 'a1111111-1111-4111-8111-111111111111'$$,
   '42501', null, 'published mystery results are immutable');
 select is((select score from public.mystery_results where session_id = 'a1111111-1111-4111-8111-111111111111'), -245.7::numeric(9,1),
   'stored negative score unchanged');
+
+-- ---------------------------------------------------------------- secret columns per role --------
+set local role anon;
+set local request.jwt.claims to '{"role":"anon"}';
+select throws_ok('select accused from public.mystery_results', '42501', null, 'anon cannot select mystery_results.accused');
+select throws_ok('select * from public.mystery_results', '42501', null, 'anon cannot select * from mystery_results');
+select is((select count(*)::int from public.mystery_results), 1, 'anon still reads the public columns (count)');
+reset role;
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"aaaaaaaa-0000-4000-8000-0000000000a1","role":"authenticated"}';
+select throws_ok('select evidence from public.mystery_results', '42501', null, 'a station account cannot select mystery_results.evidence');
+select is((select count(*)::int from public.mystery_result_audit), 0, 'a station account sees no rows in the operator audit view');
+reset role;
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"cccccccc-0000-4000-8000-0000000000c3","role":"authenticated"}';
+select results_eq($$select accused, evidence, deduction_correct from public.mystery_result_audit$$,
+  $$values (null::text, '{}'::text[], false)$$, 'the operator reads accused / evidence through mystery_result_audit');
+reset role;
 
 select * from finish();
 rollback;

@@ -1,33 +1,46 @@
 // MysteryDashboard (UX_MYSTERY §8) — Laptop 1, LOCAL DEMO. 12-col grid:
 //   A  StationLiveCard (this station) · Station B (live backend) · StandingsPanel
-//   B  ClueSolvePanel · DetectionTrendPanel · DuoPopularityPanel
+//   K  CaseBoard: four selectable case tiles = the case filter (All / Case 01 / 02 / 03 by title) and the per-case
+//      summary (runs, mystery-solving accuracy, median time, extraction rate, all-clues share)
+//   B  ClueSolvePanel (clues of each case, within that case) · DetectionTrendPanel · DuoPopularityPanel
 //   C  the four analytics: Descriptive · Diagnostic · Predictive (ModelCard + reliability diagram) · Prescriptive
-// Presents ONLY what src/mystery/analytics aggregated. Never shows seeds, the culprit or who anyone accused.
-// The row B/C panels are exported for the LIVE board (src/app/mystery/liveDashboard.tsx), which feeds them server rows.
-import type { DashboardAggregates, PickRate } from '../../mystery/analytics/index.ts';
+// Presents ONLY what src/mystery/analytics aggregated for the selected scope. Never shows seeds, the culprit or who
+// anyone accused (accusation outcomes are counts: solved / right suspect with weak evidence / wrong suspect / none).
+// The row K/B/C panels are exported for the LIVE board (src/app/mystery/liveDashboard.tsx), which feeds them server rows.
+import { ACCUSATION_TEXT, caseLabel, clueCountFor, type CaseSummary, type DashboardAggregates, type PickRate } from '../../mystery/analytics/index.ts';
+import { CASES } from '../../mystery/data/cases.ts';
 import { NIGHTSHADES } from '../../mystery/data/nightshades.ts';
 import { PARTNERS } from '../../mystery/data/partners.ts';
+import { CASE_IDS, type CaseId } from '../../mystery/types.ts';
 import type { LivePhase, LiveStatus, StoredRecord } from '../../app/mystery/records.ts';
 import { HeaderTools } from '../components/HeaderTools.tsx';
+import { ThingSigil } from '../components/ThingSigil.tsx';
 import { Icon } from '../Icon.tsx';
 import { LAYERS } from './LayerPanels.tsx';
+
+export type CaseScope = CaseId | 'all';
 
 interface Props {
   records: StoredRecord[];
   live: LiveStatus | null;
   now: number;
   agg: DashboardAggregates;
-  clues: { id: string; title: string }[];
+  scope: CaseScope;
+  onScope: (s: CaseScope) => void;
+  /** False when no record carries a case id (combined-only board). */
+  caseAware: boolean;
 }
 
 const pct = (x: number | null | undefined, digits = 0) => (x === null || x === undefined ? '—' : `${(x * 100).toFixed(digits)}%`);
 /** For the aggregates' *Pct fields, which are already 0–100. */
 const pct100 = (x: number | null | undefined) => (x === null || x === undefined ? '—' : `${Math.round(x)}%`);
 const num = (x: number | null | undefined, d = 1) => (x === null || x === undefined ? '—' : x.toFixed(d));
+const secs = (x: number | null | undefined) => (x === null || x === undefined ? '—' : `${x.toFixed(0)} s`);
 const nameOfChar = (id: string) => NIGHTSHADES[id as keyof typeof NIGHTSHADES]?.shortName ?? id;
 const nameOfMon = (id: string) => PARTNERS[id as keyof typeof PARTNERS]?.name ?? id;
 const abilityName = (id: string) =>
   Object.values(NIGHTSHADES).find((n) => n.power.id === id)?.power.name ?? Object.values(PARTNERS).find((p) => p.move.id === id)?.move.name ?? id;
+const isCase = (v: unknown): v is CaseId => typeof v === 'string' && (CASE_IDS as readonly string[]).includes(v);
 
 const PHASE_TEXT: Record<LivePhase, string> = {
   idle: 'Idle', name: 'Name entry', duo: 'Choosing duo', tutorial: 'Tutorial', investigating: 'Investigating',
@@ -35,26 +48,28 @@ const PHASE_TEXT: Record<LivePhase, string> = {
 };
 const SIGNAL_LOST_MS = 15000;
 
-export function MysteryDashboard({ records, live, now, agg, clues }: Props) {
+export function MysteryDashboard({ records, live, now, agg, scope, onScope, caseAware }: Props) {
   return (
-    <main className="mdash" data-testid="mystery-dashboard">
+    <main className="mdash" data-testid="mystery-dashboard" data-scope={agg.scope}>
       <header className="mdash__head">
-        <h1 className="display mdash__title">Raven Island · Control Center</h1>
+        <h1 className="display mdash__title">Nevermore · Control Center</h1>
         <span className="mdash__chip">mystery-v3.1</span>
         <span className="mdash__chip mdash__chip--demo">LOCAL DEMO · this browser only</span>
         <span className="text-2 mdash__count">{records.length} session{records.length === 1 ? '' : 's'}</span>
         <HeaderTools mode="local_demo" />
       </header>
 
-      <div className="mdash__grid">
+      <div className="mdash__grid mdash__grid--cases">
         <StationLiveCard live={live} now={now} />
         <section className="mdash-card mdash-card--muted mdash-a2" aria-label="Station B">
           <p className="caps">Station B</p>
           <p className="text-2">Both stations appear here live once the Supabase backend is deployed (Realtime). This demo reads only the sessions played in this browser.</p>
         </section>
-        <Standings records={records} />
+        <Standings records={records} scope={agg.scope} />
 
-        <ClueSolve agg={agg} clues={clues} />
+        <CaseBoard agg={agg} scope={scope} onScope={onScope} caseAware={caseAware} />
+
+        <ClueSolve agg={agg} />
         <DetectionTrend agg={agg} />
         <DuoPopularity agg={agg} />
 
@@ -64,6 +79,16 @@ export function MysteryDashboard({ records, live, now, agg, clues }: Props) {
         <PrescriptiveLayer agg={agg} />
       </div>
     </main>
+  );
+}
+
+/** Clue pips sized to the case's clue count (legacy / unknown case → 3). */
+export function CluePips({ found, caseId }: { found: number; caseId?: string | null }) {
+  const total = clueCountFor(isCase(caseId) ? caseId : null);
+  return (
+    <span role="img" aria-label={`${Math.min(found, total)} of ${total} clues`} data-testid="clue-pips" data-total={total}>
+      {Array.from({ length: total }, (_, i) => <span key={i} className={`mdash-pip${i < found ? ' is-on' : ''}`} />)}
+    </span>
   );
 }
 
@@ -80,6 +105,7 @@ function StationLiveCard({ live, now }: { live: LiveStatus | null; now: number }
   const age = Math.max(0, Math.round((now - live.updatedAt) / 1000));
   const active = !['idle', 'results', 'dnf'].includes(live.phase);
   const lost = active && now - live.updatedAt > SIGNAL_LOST_MS;
+  const liveCase = (live as LiveStatus & { caseId?: string | null }).caseId ?? null;
   return (
     <section className="mdash-card mdash-a1" data-testid="station-live" data-phase={lost ? 'lost' : live.phase}>
       <div className="mdash-row">
@@ -87,34 +113,47 @@ function StationLiveCard({ live, now }: { live: LiveStatus | null; now: number }
         <span className={`mdash-phase mdash-phase--${lost ? 'lost' : live.phase}`}>{lost ? 'Signal lost' : PHASE_TEXT[live.phase]}</span>
       </div>
       <p className="mdash-station__who"><strong>{live.nickname || '—'}</strong>{live.duo && <> · {nameOfChar(live.duo.characterId)} &amp; {nameOfMon(live.duo.pokemonId)}</>}</p>
+      {isCase(liveCase) && <p className="mdash-small" data-testid="station-case">{caseLabel(liveCase)}</p>}
       <dl className="mdash-kv">
-        <div><dt>Clues</dt><dd>{[0, 1, 2].map((i) => <span key={i} className={`mdash-pip${i < live.clues ? ' is-on' : ''}`} />)}</dd></div>
+        <div><dt>Clues</dt><dd><CluePips found={live.clues} caseId={liveCase} /></dd></div>
         <div><dt>Egg</dt><dd>{live.egg ? `${live.egg.tier ?? 'not found'}${live.egg.tier ? ` · ${live.egg.security}` : ''}` : '—'}</dd></div>
         <div><dt>HP · caught</dt><dd className="num">{live.hp ?? '—'} · {live.catches ?? '—'}/2</dd></div>
         <div><dt>Hyde</dt><dd>{live.hydeMode ?? '—'}</dd></div>
         <div><dt>Risk</dt><dd className="num">{live.risk ? `${live.risk.p.toFixed(2)} · ${live.risk.label === 'ML estimate' ? 'ML' : 'Rule-based'}` : '—'}</dd></div>
         <div><dt>Time</dt><dd className="num">{live.activeTimeS !== null ? `${live.activeTimeS.toFixed(1)} s` : '—'}</dd></div>
       </dl>
-      {live.advice && <p className="mdash-advice">Thing: “{live.advice.text}” {live.advice.followed === null ? '' : live.advice.followed ? '· followed' : '· not followed'}</p>}
+      {live.advice && (
+        <p className="mdash-advice">
+          <ThingSigil size={24} pose="point" /> “{live.advice.text}” {live.advice.followed === null ? '' : live.advice.followed ? '· followed' : '· not followed'}
+        </p>
+      )}
       <p className="mdash-age text-2">updated {age} s ago</p>
     </section>
   );
 }
 
-function Standings({ records }: { records: StoredRecord[] }) {
-  const finished = records.filter((r) => r.record.result?.outcome === 'finished' && r.record.result.score !== null)
+/** "C02" tag for a case id (nothing for legacy rows). */
+export function CaseTag({ caseId }: { caseId: string | null | undefined }) {
+  if (!isCase(caseId)) return null;
+  return <span className="mdash-casetag" title={caseLabel(caseId)}>C{CASES[caseId].number}</span>;
+}
+
+function Standings({ records, scope }: { records: StoredRecord[]; scope: CaseScope }) {
+  const inScope = scope === 'all' ? records : records.filter((r) => (r.record.caseId ?? r.record.result?.caseId) === scope);
+  const finished = inScope.filter((r) => r.record.result?.outcome === 'finished' && r.record.result.score !== null)
     .sort((a, b) => (b.record.result!.score! - a.record.result!.score!) || (a.record.result!.activeTimeS - b.record.result!.activeTimeS));
-  const dnf = records.filter((r) => r.record.result?.outcome === 'dnf');
+  const dnf = inScope.filter((r) => r.record.result?.outcome === 'dnf');
   return (
     <section className="mdash-card mdash-a3" aria-label="Standings" data-testid="standings">
-      <p className="caps">Standings · mystery-v3.1</p>
+      <p className="caps">Standings · {scope === 'all' ? 'all cases' : `Case ${CASES[scope].number}`} · mystery-v3.1</p>
       {finished.length === 0 ? <p className="text-2">No finishers yet.</p> : (
-        <ol className="mdash-standings">
-          {finished.slice(0, 7).map((r, i) => (
+        <ol className="mdash-standings mdash-standings--cases">
+          {finished.slice(0, 6).map((r, i) => (
             <li key={r.record.sessionId}>
               <span className="num mdash-rank">{i + 1}</span>
               <span className="mdash-name">{r.nickname}</span>
               <span className="text-2 mdash-duo">{r.record.duo ? `${nameOfChar(r.record.duo.characterId)} & ${nameOfMon(r.record.duo.pokemonId)}` : ''}</span>
+              <CaseTag caseId={r.record.caseId ?? r.record.result?.caseId} />
               <span className="num mdash-score">{r.record.result!.score!.toFixed(1)}</span>
             </li>
           ))}
@@ -125,9 +164,71 @@ function Standings({ records }: { records: StoredRecord[] }) {
   );
 }
 
-function Bar({ label, value, note }: { label: string; value: number | null; note?: string }) {
+// ----------------------------------------------------------------------------------------------------- cases
+
+/**
+ * Row K — the case filter AND the per-case summary in one: four selectable tiles (All cases / Case 01 / 02 / 03, by
+ * title), each showing runs, mystery-solving accuracy (case solved ÷ finished), median completion time (finishers),
+ * extraction rate (egg delivered ÷ ended runs) and the share that found all of the case's clues. A radiogroup: arrow
+ * keys / click select the scope of every panel below. Combined-only boards (no case ids) disable the case tiles.
+ */
+export function CaseBoard({ agg, scope, onScope, caseAware }: { agg: DashboardAggregates; scope: CaseScope; onScope: (s: CaseScope) => void; caseAware: boolean }) {
+  const d = agg.descriptive;
+  const tiles: { id: CaseScope; head: string; title: string; c: CaseSummary }[] = [
+    {
+      id: 'all', head: 'All cases', c: d.combined,
+      title: !caseAware ? 'Combined only (no case ids yet)' : d.legacyExcluded > 0 ? `Combined · ${d.legacyExcluded} legacy run${d.legacyExcluded === 1 ? '' : 's'} not counted` : 'Combined',
+    },
+    ...d.cases.map((c) => ({ id: c.caseId as CaseScope, head: `Case ${c.number}`, title: c.title, c })),
+  ];
+  const current = caseAware ? scope : 'all';
+  const move = (dir: number) => {
+    const enabled = tiles.filter((t) => caseAware || t.id === 'all');
+    const i = enabled.findIndex((t) => t.id === current);
+    onScope(enabled[(i + dir + enabled.length) % enabled.length]!.id);
+  };
   return (
-    <div className="mdash-bar">
+    <section className="mdash-case" aria-label="Results per case" data-testid="case-board">
+      <div
+        className="mdash-tiles" role="radiogroup" aria-label="Case filter" data-testid="case-filter"
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+          else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
+        }}
+      >
+        {tiles.map(({ id, head, title, c }) => {
+          const on = current === id;
+          const disabled = !caseAware && id !== 'all';
+          const summary = `${c.runs} runs · solved ${pct100(c.solvedPctOfFinished)} of ${c.finished} finished · median ${secs(c.medianTimeS)} · extraction ${pct100(c.extractionPct)} · all clues ${pct100(c.allCluesPct)}`;
+          return (
+            <button
+              key={id} type="button" role="radio" aria-checked={on} tabIndex={on ? 0 : -1} disabled={disabled}
+              className={`mdash-tile${on ? ' is-on' : ''}`} onClick={() => onScope(id)}
+              aria-label={`${head}: ${title}. ${summary}`} title={summary}
+              data-testid={`case-filter-${id}`}
+            >
+              <span className="mdash-tile__head">
+                <strong>{head}</strong>
+                <span className="mdash-tile__title" data-testid={id === 'all' && d.legacyExcluded > 0 ? 'legacy-note' : undefined}>{title}</span>
+                <span className="num mdash-tile__runs" data-testid={`case-row-${id}`}>{c.runs} run{c.runs === 1 ? '' : 's'}</span>
+              </span>
+              <span className="mdash-tile__stats num" data-testid={id === 'all' ? 'case-summary' : undefined}>
+                <span>Solved <b>{pct100(c.solvedPctOfFinished)}</b></span>
+                <span>Median <b>{secs(c.medianTimeS)}</b></span>
+                <span>Extract <b>{pct100(c.extractionPct)}</b></span>
+                <span>Clues <b>{pct100(c.allCluesPct)}</b></span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function Bar({ label, value, note, title }: { label: string; value: number | null; note?: string; title?: string }) {
+  return (
+    <div className="mdash-bar" title={title}>
       <span className="mdash-bar__label">{label}</span>
       <span className="mdash-bar__track"><span style={{ width: `${Math.round((value ?? 0) * 100)}%` }} /></span>
       <span className="num mdash-bar__value">{pct(value)}{note && <span className="mdash-small"> {note}</span>}</span>
@@ -135,13 +236,61 @@ function Bar({ label, value, note }: { label: string; value: number | null; note
   );
 }
 
-export function ClueSolve({ agg, clues }: { agg: DashboardAggregates; clues: { id: string; title: string }[] }) {
+const OUTCOME_ORDER = [
+  ['solved', 'solved'], ['rightSuspectWrongEvidence', 'right_suspect_wrong_evidence'], ['wrongSuspect', 'wrong_suspect'],
+  ['notAccused', 'not_accused'], ['unsolved', 'unsolved'], ['dnf', 'dnf'],
+] as const;
+
+/** Stacked bar of accusation outcomes (counts only — never who was accused). */
+export function AccusationBar({ agg }: { agg: DashboardAggregates }) {
+  const a = agg.descriptive.accusation;
+  const parts = OUTCOME_ORDER.map(([k, kind]) => ({ kind, n: a[k] })).filter((p) => p.n > 0);
+  const total = parts.reduce((s, p) => s + p.n, 0);
+  if (total === 0) return <p className="mdash-small">No accusations yet.</p>;
+  const legend = `Accusations: ${parts.map((p) => `${ACCUSATION_TEXT[p.kind]} ${p.n}`).join(' · ')}${a.deductionCorrectPctOfAccused !== null ? ` · evidence exactly right ${pct100(a.deductionCorrectPctOfAccused)}` : ''}`;
+  return (
+    <div className="mdash-acc" data-testid="accusation-outcomes">
+      <div className="mdash-acc__bar" role="img" aria-label={parts.map((p) => `${ACCUSATION_TEXT[p.kind]} ${p.n}`).join(', ')}>
+        {parts.map((p) => <span key={p.kind} className={`mdash-acc__seg mdash-acc__seg--${p.kind}`} style={{ width: `${(100 * p.n) / total}%` }} />)}
+      </div>
+      <p className="mdash-small mdash-acc__legend" title={legend}>{legend}</p>
+    </div>
+  );
+}
+
+/** Clue find rates, always WITHIN each case (each case has its own three clues). */
+export function ClueSolve({ agg }: { agg: DashboardAggregates }) {
   const d = agg.descriptive;
+  const groups = new Map<string, typeof d.clueRates>();
+  for (const c of d.clueRates) groups.set(c.caseId ?? 'legacy', [...(groups.get(c.caseId ?? 'legacy') ?? []), c]);
+  const many = groups.size > 1;
   return (
     <section className="mdash-card mdash-b1" aria-label="Clue solve rates" data-testid="clue-solve">
-      <p className="caps">Clues · solve rate</p>
-      {clues.map((c) => <Bar key={c.id} label={c.title} value={d.clueFindRate[c.id] ?? null} />)}
-      <p className="mdash-foot">All three: <strong>{pct100(d.allThreePct)}</strong> · Case Solved: <strong>{pct100(d.caseSolvedPctOfFinished)}</strong> of finishers · n = {d.runs}</p>
+      <p className="caps">Clues · find rate{d.scope === 'all' ? ' · within each case' : ` · Case ${CASES[d.scope].number}`}</p>
+      {groups.size === 0 && <p className="text-2">No finished runs yet.</p>}
+      {many ? (
+        <div className="mdash-cluemx" role="table" aria-label="Clue find rate per case">
+          {[...groups.entries()].map(([key, list]) => (
+            <div key={key} className="mdash-cluemx__row" role="row" data-testid={`clue-group-${key}`}>
+              <span className="mdash-cluemx__case num" role="rowheader" title={key === 'legacy' ? 'Legacy case' : caseLabel(key as CaseId)}>
+                {key === 'legacy' ? 'old' : CASES[key as CaseId].number}<span className="mdash-small"> n={list[0]?.of ?? 0}</span>
+              </span>
+              {list.slice(0, 3).map((c) => (
+                <span key={c.clueId} className="mdash-cluemx__cell" role="cell" title={`${c.title}${c.location ? ` — ${c.location}` : ''}: ${c.found}/${c.of}`}>
+                  <span className="mdash-cluemx__title">{c.title}</span>
+                  <span className="mdash-cluemx__val"><span className="mdash-bar__track"><span style={{ width: `${Math.round((c.rate ?? 0) * 100)}%` }} /></span><b className="num">{pct(c.rate)}</b></span>
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : (
+        [...groups.values()].map((list) => list.map((c) => (
+          <Bar key={c.clueId} label={c.title} value={c.rate} title={c.location ? `${c.title} — ${c.location}` : c.title} note={`${c.found}/${c.of}`} />
+        )))
+      )}
+      {!many && <p className="mdash-foot">All clues of this case: <strong>{pct100(d.allCluesPct)}</strong> · Case Solved: <strong>{pct100(d.caseSolvedPctOfFinished)}</strong> of finishers · n = {d.runs}</p>}
+      <AccusationBar agg={agg} />
     </section>
   );
 }
@@ -172,6 +321,8 @@ export function DuoPopularity({ agg }: { agg: DashboardAggregates }) {
     <li key={p.id}><span>{name}{p.smallSample ? '*' : ''}</span><span className="num">{pct(p.rate)}</span><span className="mdash-small num">{p.selected}/{p.offered}</span></li>
   );
   const small = [...characters, ...pokemon].some((p) => p.offered > 0 && p.smallSample);
+  const scopeSummary = agg.scope === 'all' ? agg.descriptive.combined : agg.descriptive.cases.find((c) => c.caseId === agg.scope);
+  const topDuo = scopeSummary?.duos[0];
   return (
     <section className="mdash-card mdash-b3" aria-label="Duo popularity" data-testid="duo-popularity">
       <p className="caps">Pick rate when offered</p>
@@ -184,6 +335,7 @@ export function DuoPopularity({ agg }: { agg: DashboardAggregates }) {
           {mons.length > 4 && mons.length <= 6 && mons.slice(4).map((p) => row(p, nameOfMon(p.id)))}
         </ul>
       </div>
+      {topDuo && <p className="mdash-small" data-testid="top-duo">Most played{agg.scope === 'all' ? '' : ' in this case'}: {nameOfChar(topDuo.characterId)} &amp; {nameOfMon(topDuo.pokemonId)} ×{topDuo.runs}</p>}
       {small && <p className="mdash-small">* small sample (offered fewer than 10 times)</p>}
     </section>
   );
@@ -205,13 +357,13 @@ export function DescriptiveLayer({ agg }: { agg: DashboardAggregates }) {
         <div><dt>Finished</dt><dd>{d.finished}</dd></div>
         <div><dt>DNF</dt><dd>{d.dnf}</dd></div>
         <div><dt>Solved</dt><dd>{pct100(d.caseSolvedPctOfFinished)}</dd></div>
-        <div><dt>Median time</dt><dd>{d.medianTimeS === null ? '—' : `${d.medianTimeS.toFixed(0)} s`}</dd></div>
+        <div title={`Finishers' completion time: median ${secs(d.medianTimeS)}, mean ${secs(d.meanTimeS)}`}><dt>Median time</dt><dd>{secs(d.medianTimeS)}</dd></div>
       </dl>
       <div className="lp-stance">
         {(['crouch', 'walk', 'sprint', 'idle'] as const).map((k) => s[k] > 0 && <span key={k} className={`lp-stance__seg lp-stance__seg--${k}`} style={{ width: `${s[k] * 100}%` }} />)}
       </div>
       <p className="lp-legend">Crouch {pct(s.crouch)} · Walk {pct(s.walk)} · Sprint {pct(s.sprint)} · Still {pct(s.idle)}</p>
-      <p className="mdash-foot">Top F/Q: {d.topAbilities.slice(0, 3).map((a) => `${abilityName(a.abilityId)} ×${a.uses}`).join(' · ') || '—'}</p>
+      <p className="mdash-foot">Mean time {secs(d.meanTimeS)} · Top F/Q: {d.topAbilities.slice(0, 3).map((a) => `${abilityName(a.abilityId)} ×${a.uses}`).join(' · ') || '—'}</p>
       {d.smallSample && <p className="mdash-small">Small sample — read with care.</p>}
     </section>
   );
@@ -222,14 +374,19 @@ export function DiagnosticLayer({ agg }: { agg: DashboardAggregates }) {
   return (
     <section className="mdash-card mdash-layer" style={{ ['--layer' as string]: LAYERS[1]!.color }} data-testid="dash-diagnostic">
       <LayerHead k="diagnostic" />
+      <p className="mdash-sub">Why cases stayed unsolved ({d.unsolvedRuns} run{d.unsolvedRuns === 1 ? '' : 's'})</p>
+      <ul className="mdash-list" data-testid="case-failures">
+        {d.caseFailures.slice(0, 2).map((c) => <li key={`${c.code}:${c.ref ?? ''}`}><span className="lp-badge lp-badge--case">Case</span><span>{c.text}</span><span className="num">{c.count}</span></li>)}
+        {d.caseFailures.length === 0 && <li className="text-2">Every finished case was solved.</li>}
+      </ul>
       <p className="mdash-sub">Rule-verified causes of catches / DNFs</p>
       <ul className="mdash-list">
-        {d.failureCauses.slice(0, 3).map((c) => <li key={c.code}><span className="lp-badge lp-badge--cause">Cause</span><span>{c.text}</span><span className="num">{c.count}</span></li>)}
+        {d.failureCauses.slice(0, 2).map((c) => <li key={c.code}><span className="lp-badge lp-badge--cause">Cause</span><span>{c.text}</span><span className="num">{c.count}</span></li>)}
         {d.failureCauses.length === 0 && <li className="text-2">No catches recorded.</li>}
       </ul>
       <p className="mdash-sub">Patterns (correlation, not proof)</p>
       <ul className="mdash-list">
-        {d.patterns.slice(0, 2).map((p) => <li key={p.code}><span className="lp-badge lp-badge--pattern">≈ Pattern</span><span>{p.text}</span><span className="num">{p.numerator}/{p.denominator}</span></li>)}
+        {d.patterns.slice(0, 1).map((p) => <li key={p.code}><span className="lp-badge lp-badge--pattern">≈ Pattern</span><span>{p.text}</span><span className="num">{p.numerator}/{p.denominator}</span></li>)}
         {d.patterns.length === 0 && <li className="text-2">Not enough runs for a pattern.</li>}
       </ul>
     </section>
@@ -248,7 +405,7 @@ export function PredictiveLayer({ agg }: { agg: DashboardAggregates }) {
           <dl className="mdash-kv mdash-kv--model">
             <div><dt>Model</dt><dd title={c.modelType ?? ''}>{c.modelType ?? '—'}</dd></div>
             <div><dt>Target</dt><dd title={c.target}>Detected within 15 s</dd></div>
-            <div><dt>Data</dt><dd title={c.split ?? ''}>{c.episodes ?? '—'} simulated episodes</dd></div>
+            <div><dt>Data</dt><dd title={c.split ?? ''}>{c.episodes ?? '—'} simulated episodes · 3 cases</dd></div>
             <div><dt>Holdout</dt><dd title={c.split ?? ''}>{c.split && /session/i.test(c.split) ? 'session-grouped' : c.split ?? '—'}{c.sessionsTest ? ` · ${c.sessionsTest} sessions` : ''}</dd></div>
             <div><dt>Base rate</dt><dd className="num">{pct(c.baseRate, 1)}</dd></div>
             <div><dt>Brier</dt><dd className="num">{num(c.brier, 3)} <span className="mdash-small">vs {num(c.baselineBrier, 3)} base-rate</span></dd></div>
@@ -259,7 +416,7 @@ export function PredictiveLayer({ agg }: { agg: DashboardAggregates }) {
       ) : (
         <p className="text-2" data-testid="model-card">No trained model — stations show Rule-based risk estimate.{c.invalidReason ? ` (${c.invalidReason})` : ''}</p>
       )}
-      <p className="mdash-small">Live check: {live.n} forecast{live.n === 1 ? '' : 's'} observed{live.brier !== null ? ` · Brier ${live.brier.toFixed(3)}` : ''} — {live.note}</p>
+      <p className="mdash-small">Live check{agg.scope === 'all' ? '' : ` (Case ${CASES[agg.scope].number})`}: {live.n} forecast{live.n === 1 ? '' : 's'} observed{live.brier !== null ? ` · Brier ${live.brier.toFixed(3)}` : ''} — {live.note}</p>
     </section>
   );
 }

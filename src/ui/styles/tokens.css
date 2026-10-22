@@ -23,6 +23,8 @@ html { font-size: clamp(15px, min(1.1713vw, 2.0833vh), 22.5px); }
   --c-text-2: #d4cbb5;
   --c-text-muted: #a49fbf;
   --c-ink: #0b1020;
+  /* Nevermore: Deadly Secrets wordmark only — cool "ghost-silver", distinct from the warm --c-text body ivory. */
+  --c-title-silver: #e3e2f2;
 
   /* Accent & semantic */
   --c-accent: #8b7cf6;
@@ -112,7 +114,7 @@ html { font-size: clamp(15px, min(1.1713vw, 2.0833vh), 22.5px); }
 .high-contrast {
   --c-bg: #000; --c-surface-1: #000; --c-surface-2: #111; --c-hud: #000; --c-scrim: rgba(0, 0, 0, 0.95);
   --c-border: #fff; --c-border-strong: #fff;
-  --c-text: #fff; --c-text-2: #fff; --c-text-muted: #e6e6e6;
+  --c-text: #fff; --c-text-2: #fff; --c-text-muted: #e6e6e6; --c-title-silver: #fff;
   --c-accent: #c4b8ff; --c-accent-text: #d9d2ff; --c-lantern: #ffc766; --c-focus: #ffff00;
   --c-success: #8cf0b8; --c-danger: #ff9a9a;
   --shadow-1: none; --shadow-2: none; --glow-accent: none; --glow-lantern: none; --glow-rare: none; --glow-legendary: none;

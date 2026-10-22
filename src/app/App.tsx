@@ -111,7 +111,7 @@ export function App() {
   if (route.kind === 'mystery') {
     return (
       <GlobalShell fullscreenHotkey={false} music={THEME_MUSIC}>
-        <MysteryApp characterId={route.characterId} pokemonId={route.pokemonId} seed={route.seed} skipTutorial={route.skipTutorial} />
+        <MysteryApp characterId={route.characterId} pokemonId={route.pokemonId} seed={route.seed} skipTutorial={route.skipTutorial} skipPrologue={route.skipPrologue} caseId={route.caseId} />
       </GlobalShell>
     );
   }

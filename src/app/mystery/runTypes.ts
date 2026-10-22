@@ -2,8 +2,8 @@
 // 3d-artist) exactly as docs/MYSTERY_CONTRACT.md specifies them. The app only talks to these shapes, so the HUD, board
 // and results compile and test without the concrete classes; integration.ts loads the real ones.
 import type {
-  AbilityStatus, ActiveEffects, CaseDef, ClueId, Duo, DuoCard, EggRuntime, HydeRuntime, MapDef, MysteryInput, Objective,
-  PlayerState, RunResult, RunStatus, StampedEvent, StateSnapshot, SuspectId,
+  Accusation, AbilityStatus, ActiveEffects, CaseDef, CaseSolution, ClueId, Duo, DuoCard, EggRuntime, HydeRuntime, MapDef, MysteryInput, Objective,
+  PlayerState, RunResult, RunStatus, StampedEvent, StateSnapshot,
 } from '../../mystery/types.ts';
 
 /** 'practice' = the tutorial crate at the pier (sim extension beyond the contract list). */
@@ -31,8 +31,8 @@ export interface MysteryRunLike {
   objective(): Objective;
   isWallOpen(id: string): boolean;
   snapshot(): StateSnapshot;
-  /** null = "Leave the case unsolved" (verdict not_accused). */
-  accuse(suspect: SuspectId | null): StampedEvent[];
+  /** suspectId null = "Leave the case unsolved" (verdict not_accused). `solution` is loaded only after the commit. */
+  accuse(accusation: Accusation, solution: CaseSolution): StampedEvent[];
   result(): RunResult | null;
   // Sim extensions (UX_MYSTERY data asks); optional so the app degrades if one is missing.
   boardAllowed?(): boolean;

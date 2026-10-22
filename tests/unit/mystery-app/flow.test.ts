@@ -5,14 +5,15 @@ import type { MysterySession } from '../../../src/app/mystery/session.ts';
 import type { RunResult } from '../../../src/mystery/types.ts';
 
 const session = (nickname = '', seed = 'seed-a'): MysterySession => ({
-  rulesVersion: 'mystery-v3.1', sessionId: `id-${seed}`, seed, offer: previewOffer(seed), offerSource: 'preview', nickname, createdAt: '2026-10-27T00:00:00Z',
+  rulesVersion: 'mystery-v3.1', sessionId: `id-${seed}`, seed, offer: previewOffer(seed), offerSource: 'preview', caseId: 'midnight_signal', caseVersion: 1, nickname, createdAt: '2026-10-27T00:00:00Z',
 });
 
 const run = (s: MysteryFlowState, ...actions: MysteryAction[]) => actions.reduce(mysteryReducer, s);
 
 const result = (over: Partial<RunResult> = {}): RunResult => ({
-  rulesVersion: 'mystery-v3.1', outcome: 'finished', dnfReason: null, verdict: 'case_solved', accused: 'thornhill', correct: true,
-  cluesFound: ['transfer_note', 'master_key', 'greenhouse_trace'], eggTier: 'rare', eggPoints: 3, eggSecurity: 80, activeTimeS: 241.3,
+  rulesVersion: 'mystery-v3.1', caseId: 'midnight_signal', caseVersion: 1, outcome: 'finished', dnfReason: null, verdict: 'case_solved', accused: 'barry', correct: true,
+  evidence: ['falsified_patrol_log', 'alarm_override', 'watchtower_signal'], deductionCorrect: true,
+  cluesFound: ['falsified_patrol_log', 'alarm_override', 'watchtower_signal'], eggTier: 'rare', eggPoints: 3, eggSecurity: 80, activeTimeS: 241.3,
   score: 58.7, catches: 0, hp: 100, duo: { characterId: 'enid', pokemonId: 'gengar' }, ...over,
 });
 
@@ -22,7 +23,7 @@ describe('mystery flow', () => {
     expect(initialFlow(session('Raven')).screen).toBe('cards');
   });
 
-  it('home → nickname → cards → tutorial → play → accusing → results', () => {
+  it('home → nickname → cards → case → prologue → tutorial → play → accusing → results', () => {
     const s0 = initialFlow(session());
     const card = s0.session.offer.cards[1];
     let s = run(s0, { type: 'start' });
@@ -31,9 +32,19 @@ describe('mystery flow', () => {
     expect(s.screen).toBe('cards');
     expect(s.session.nickname).toBe('Raven');
     s = run(s, { type: 'select', duo: card });
-    expect(s.screen).toBe('tutorial');
+    expect(s.screen).toBe('case');
+    expect(s.session.caseId).toBe('midnight_signal'); // assigned with the session, before the cards
+    expect(run(s, { type: 'prologueDone' })).toBe(s); // the story starts only after the case file
+    s = run(s, { type: 'caseRevealed' });
+    expect(s.screen).toBe('prologue');
     expect(s.session.selected).toEqual({ characterId: card.characterId, pokemonId: card.pokemonId });
     expect(s.attempt).toBe(1);
+    expect(run(s, { type: 'tutorialDone' })).toBe(s); // the tutorial only starts after the prologue
+    expect(run(s, { type: 'pause' })).toBe(s); // not on the island yet: no pause / board
+    expect(run(s, { type: 'toggleBoard' })).toBe(s);
+    s = run(s, { type: 'prologueDone' });
+    expect(s.screen).toBe('tutorial');
+    expect(s.attempt).toBe(1); // finishing or skipping the story starts the same run
     s = run(s, { type: 'tutorialDone' });
     expect(s.screen).toBe('play');
     expect(s.attempt).toBe(1); // same run continues after the tutorial
@@ -42,6 +53,8 @@ describe('mystery flow', () => {
     s = run(s, { type: 'ended', result: result() });
     expect(s.screen).toBe('results');
     expect(s.result?.verdict).toBe('case_solved');
+    expect(s.session.closed).toBe(true); // a refresh can never resume this case for a second accusation
+    expect(s.session.caseId).toBe('midnight_signal');
   });
 
   it('rejects a duo that was not offered and selections outside the cards screen', () => {
@@ -60,7 +73,7 @@ describe('mystery flow', () => {
   });
 
   it('board and pause overlays: Tab toggles the board, Esc closes the board first, then toggles pause', () => {
-    const s0 = run(initialFlow(session('R')), { type: 'select', duo: session().offer.cards[0] }, { type: 'tutorialDone' });
+    const s0 = run(initialFlow(session('R')), { type: 'select', duo: session().offer.cards[0] }, { type: 'caseRevealed' }, { type: 'prologueDone' }, { type: 'tutorialDone' });
     let s = run(s0, { type: 'toggleBoard' });
     expect(s.overlay).toBe('board');
     s = run(s, { type: 'togglePause' });
@@ -80,12 +93,16 @@ describe('mystery flow', () => {
     const cards = initialFlow(session('R'));
     expect(run(cards, { type: 'deposited' })).toBe(cards);
     expect(run(cards, { type: 'ended', result: result() })).toBe(cards);
-    const tut = run(cards, { type: 'select', duo: cards.session.offer.cards[0] });
+    const story = run(cards, { type: 'select', duo: cards.session.offer.cards[0] }, { type: 'caseRevealed' });
+    expect(run(story, { type: 'deposited' })).toBe(story);
+    expect(run(story, { type: 'ended', result: result() })).toBe(story);
+    const tut = run(story, { type: 'prologueDone' });
     expect(run(tut, { type: 'deposited' })).toBe(tut);
+    expect(run(tut, { type: 'prologueDone' })).toBe(tut);
   });
 
   it('a DNF during play goes to results', () => {
-    const s = run(initialFlow(session('R')), { type: 'select', duo: session().offer.cards[2] }, { type: 'tutorialDone' },
+    const s = run(initialFlow(session('R')), { type: 'select', duo: session().offer.cards[2] }, { type: 'caseRevealed' }, { type: 'prologueDone' }, { type: 'tutorialDone' },
       { type: 'ended', result: result({ outcome: 'dnf', dnfReason: 'second_catch', verdict: 'not_accused', score: null }) });
     expect(s.screen).toBe('results');
     expect(s.result?.outcome).toBe('dnf');
@@ -108,5 +125,16 @@ describe('mystery flow', () => {
     const fast = shortcutFlow(s, duo, true);
     expect(fast.screen).toBe('play');
     expect(fast.session.nickname).toBe('Guest');
+  });
+
+  it('prologue=0 skips only the story; tutorial=0 skips both; reset keeps the choice', () => {
+    const noStory = initialFlow(session('R'), false, true);
+    const duo = noStory.session.offer.cards[0];
+    expect(run(noStory, { type: 'select', duo }).screen).toBe('tutorial');
+    expect(run(initialFlow(session('R'), true), { type: 'select', duo }).screen).toBe('play');
+    const storyThenPlay = run(initialFlow(session('R'), true, false), { type: 'select', duo }, { type: 'caseRevealed' });
+    expect(storyThenPlay.screen).toBe('prologue');
+    expect(run(storyThenPlay, { type: 'prologueDone' }).screen).toBe('play');
+    expect(run(noStory, { type: 'reset', session: session() }).skipPrologue).toBe(true);
   });
 });

@@ -80,6 +80,7 @@ export const SERVER_CODE_MAP: Readonly<Record<string, BackendErrorCode>> = {
   RUN_NOT_FINISHED: 'WRONG_PHASE', // finalisation before deposit + accusation / DNF
   TOO_MANY_EVENTS: 'INVALID_INPUT', // batch over the size limit
   TEST_SEED_FORBIDDEN: 'UNAUTHORIZED', // fixed operator seeds need an operator account
+  CASE_OUTDATED: 'WRONG_PHASE', // the session's case version is no longer deployed: the run cannot be verified
 };
 
 /** Server codes the client may safely re-send with the same actionId. */

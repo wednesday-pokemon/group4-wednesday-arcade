@@ -4,7 +4,7 @@ import { MysteryRun, IDLE_INPUT, type MysteryRunOptions } from '../../../src/mys
 import { REGISTRIES, type Registries } from '../../../src/mystery/draft.ts';
 import { NEUTRAL_MODS } from '../../../src/mystery/stats.ts';
 import type { CaseDef, MapDef, MysteryInput, StampedEvent, Vec2 } from '../../../src/mystery/types.ts';
-import { SILENT_EVIDENCE } from '../../../src/mystery/data/case.ts';
+import { POISONED_ARCHIVE } from '../../../src/mystery/data/cases.ts';
 
 const rect = (minX: number, minZ: number, maxX: number, maxZ: number): Vec2[] => [
   { x: minX, z: minZ }, { x: minX, z: maxZ }, { x: maxX, z: maxZ }, { x: maxX, z: minZ },
@@ -44,9 +44,9 @@ export function fixtureMap(o: FixtureOptions = {}): MapDef {
       { id: 'path', name: 'Path', polygon: rect(-20, -20, 20, 20) },
     ],
     clues: [
-      { clueId: 'transfer_note', roomId: 'path', x: -15, z: 10, searchS: 2.5 },
-      { clueId: 'master_key', roomId: 'crypt', x: -15, z: -10, searchS: 2.5 },
-      { clueId: 'greenhouse_trace', roomId: 'egg_chamber', x: 15, z: -10, searchS: 3 },
+      { clueId: 'falsified_transfer', roomId: 'path', x: -15, z: 10, searchS: 2.5 },
+      { clueId: 'access_ledger', roomId: 'crypt', x: -15, z: -10, searchS: 2.5 },
+      { clueId: 'botanical_residue', roomId: 'egg_chamber', x: 15, z: -10, searchS: 3 },
     ],
     eggSpawn: { x: 10, z: -15 },
     tower: { x: 0, z: -17, radius: 2.5 },
@@ -65,7 +65,8 @@ export function neutralRegistries(): Registries {
   return { nightshades, partners };
 }
 
-export const CASE: CaseDef = SILENT_EVIDENCE;
+/** The fixture map carries Case 01's three clue ids (falsified_transfer / access_ledger / botanical_residue). */
+export const CASE: CaseDef = POISONED_ARCHIVE;
 
 export function makeRun(o: Partial<MysteryRunOptions> & { fixture?: FixtureOptions } = {}): MysteryRun {
   return new MysteryRun({

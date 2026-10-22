@@ -14,7 +14,7 @@ import { HttpError } from '../_shared/errors.ts';
 import { readJson, serve } from '../_shared/http.ts';
 import { loadEventsBySeq, loadMysterySession } from '../_shared/mystery-db.ts';
 import { applyBatch, progressFromRow, progressSummary, splitResend } from '../_shared/mystery-events.ts';
-import { requireData, requireEggRules, rulesContext } from '../_shared/mystery-rules.ts';
+import { requireData, requireEggRules, resolveCase, rulesContext } from '../_shared/mystery-rules.ts';
 import { MAX_APPEND_BYTES, parseMysteryAppend } from '../_shared/mystery-validation.ts';
 
 const MAX_ATTEMPTS = 3;
@@ -47,7 +47,9 @@ serve('mystery-append-events', async (req, ctx) => {
       throw new HttpError('SESSION_CLOSED', `Session is ${row.status}`, { status: row.status, abandonedReason: row.abandoned_reason });
     }
 
-    const next = applyBatch(progress, fresh, rulesContext(row.seed, data.caseDef, egg));
+    // The SESSION's case decides which clue ids exist (validated against the version it was created with).
+    const { caseDef } = resolveCase(row.case_id, row.case_version, data);
+    const next = applyBatch(progress, fresh, rulesContext(row.seed, caseDef, egg));
     try {
       const out = await callRpc(admin, 'mystery_append_events', {
         p_session_id: row.id,

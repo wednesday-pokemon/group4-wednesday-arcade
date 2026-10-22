@@ -1,4 +1,6 @@
-// Raven Island — the walkable map for "The Silent Evidence" (≈ 90 × 120 m). Game-designer owned.
+// Raven Island — the ONE walkable map shared by all three cases (≈ 90 × 120 m). Game-designer owned.
+// A case only moves its three clues and the egg and renames rooms (CaseDef.placements / egg / roomNames); walls, cover,
+// hiding spots and the Hyde patrol never change, so every stealth system behaves the same in every case.
 //
 // Coordinates: metres, XZ ground plane. −Z = north (Iago Tower), +Z = south (pier). yaw 0 faces −Z (north).
 // Layout and rationale (ASCII map, patrol, pacing): docs/MYSTERY_DESIGN.md §2–§3.
@@ -12,7 +14,8 @@
 // - Every consecutive pair of patrol waypoints (including last → first) is a straight line that keeps ≥ 0.6 m + wall
 //   radius clear of every wall and cover piece, so the loop works even before nav-grid smoothing.
 // - Landmarks are decoration only (no collision); collision/LOS come from walls and cover.
-import type { CoverDef, HidingSpotDef, MapDef, RoomDef, Vec2, WallDef } from '../types.ts';
+import type { CaseDef, CoverDef, HidingSpotDef, MapDef, RoomDef, Vec2, WallDef } from '../types.ts';
+import { POISONED_ARCHIVE } from './cases.ts';
 import { MYSTERY_TUNING } from './tuning.ts';
 
 const v = (x: number, z: number): Vec2 => ({ x, z });
@@ -211,9 +214,13 @@ const PATROL: Vec2[] = [
   v(-8, 42), // P20 lawn north of the pier
 ];
 
-export function buildIsland(): MapDef {
+/** Map id shared by every case's island (the case id is appended: `raven_island_v31:<caseId>`). */
+export const ISLAND_BASE_ID = 'raven_island_v31';
+
+/** The island dressed for one case (default: Case 01). Each case gets its own map id so renderers rebuild props. */
+export function buildIsland(caseDef: CaseDef = POISONED_ARCHIVE): MapDef {
   return {
-    id: 'raven_island_v31',
+    id: `${ISLAND_BASE_ID}:${caseDef.id}`,
     name: 'Raven Island Ruins',
     bounds: { minX: -45, maxX: 45, minZ: -60, maxZ: 60 },
     playerStart: { x: 0, z: 54, yaw: 0 }, // on the pier, facing the island (north)
@@ -222,13 +229,9 @@ export function buildIsland(): MapDef {
     walls: WALLS.map((w) => ({ ...w, a: { ...w.a }, b: { ...w.b } })),
     cover: COVER.map((c) => ({ ...c })),
     hidingSpots: HIDING.map((h) => ({ ...h })),
-    rooms: ROOMS.map((r) => ({ ...r, polygon: r.polygon.map((p) => ({ ...p })) })),
-    clues: [
-      { clueId: 'transfer_note', roomId: 'research_room', x: 38, z: -6, searchS: 2.5 }, // desk behind the bookshelf
-      { clueId: 'master_key', roomId: 'crypt', x: -22, z: 21, searchS: 2.5 }, // just inside the crypt's main entrance
-      { clueId: 'greenhouse_trace', roomId: 'egg_chamber', x: -40, z: -31, searchS: 3 }, // release latch inside the cage
-    ],
-    eggSpawn: v(-28, -20), // shrine between the four pillars
+    rooms: ROOMS.map((r) => ({ ...r, name: caseDef.roomNames[r.id] ?? r.name, polygon: r.polygon.map((p) => ({ ...p })) })),
+    clues: caseDef.placements.map((c) => ({ ...c })),
+    eggSpawn: v(caseDef.egg.x, caseDef.egg.z),
     tower: { x: 8, z: -51.5, radius: 3 },
     safeReleasePoints: [v(0, 49), v(-36, 40), v(36, 40), v(-6, 20), v(-36, -46), v(36, -48)],
     powerSwitch: { id: 'shortcut_switch', x: 33, z: -13, gateWallId: SHORTCUT_GATE_WALL_ID, openS: 0 },

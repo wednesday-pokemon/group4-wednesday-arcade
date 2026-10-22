@@ -1,13 +1,19 @@
-// Small world objects: the three clue props (transfer note, key pouch, latch + residue) and the Pokemon egg with tier styling.
+// Small world objects: the clue props (see clueModels.ts) and the Pokemon egg with tier styling.
 import * as THREE from 'three';
 import type { ClueId } from '../../mystery/types.ts';
 import { basicVC, lambertVC } from '../actors.ts';
 import { MeshBuilder, mulberry32 } from '../util.ts';
-import { BOX, CONE4, CYL6, CYL8, ICO0, ICO1, TORUS, eggHex } from './common.ts';
+import { BOX, CONE4, CYL8, ICO0, ICO1, eggHex } from './common.ts';
+import { buildClueModel } from './clueModels.ts';
+
+const MARKER_GEO = new THREE.OctahedronGeometry(0.07, 0);
+const MARKER_MAT = new THREE.MeshBasicMaterial({ color: '#ffe08a' });
 
 export class ClueProp {
   readonly root = new THREE.Group();
   readonly inner = new THREE.Group();
+  /** small gold diamond that hovers above the prop (shared geometry / material, never disposed per prop) */
+  readonly marker: THREE.Mesh;
   private readonly geos: THREE.BufferGeometry[] = [];
   private readonly mats: THREE.Material[] = [];
 
@@ -15,41 +21,26 @@ export class ClueProp {
     const rand = mulberry32(clueId.length * 977 + 5);
     const lit = new MeshBuilder(rand);
     const em = new MeshBuilder(rand);
-    switch (clueId) {
-      case 'transfer_note':
-        lit.add(BOX, '#e9dfc4', [0, 0.02, 0], [0, 0.35, 0], [0.34, 0.025, 0.24], { gradient: 0.1, jitter: 0.04 });
-        lit.add(BOX, '#d8cba8', [0.03, 0.04, 0.01], [0, 0.2, 0], [0.3, 0.02, 0.2], { gradient: 0.1, jitter: 0.04 });
-        lit.add(BOX, '#2a2630', [0.0, 0.056, 0.0], [0, 0.35, 0], [0.22, 0.004, 0.02], { gradient: 0, jitter: 0 });
-        lit.add(BOX, '#2a2630', [0.0, 0.056, 0.05], [0, 0.35, 0], [0.18, 0.004, 0.015], { gradient: 0, jitter: 0 });
-        lit.add(BOX, '#6a4a9a', [-0.04, 0.062, -0.07], [0, 0.35, 0], [0.04, 0.008, 0.04], { gradient: 0, jitter: 0 });
-        em.add(ICO0, '#ffd86a', [0.05, 0.075, -0.02], [0, 0, 0], 0.012, { jitter: 0, gradient: 0 });
-        break;
-      case 'master_key':
-        lit.add(ICO1, '#5a3a24', [0, 0.1, 0], [0, 0, 0], [0.13, 0.12, 0.11], { gradient: 0.3, jitter: 0.06 });
-        lit.add(CONE4, '#3a2416', [0, 0.23, 0], [0, 0.8, 0], [0.07, 0.1, 0.07], { gradient: 0 });
-        lit.add(TORUS, '#3a2416', [0, 0.2, 0], [Math.PI / 2, 0, 0], [0.07, 0.07, 0.07], { gradient: 0, jitter: 0 });
-        em.add(CYL6, '#ffd24a', [0.1, 0.19, 0.0], [0, 0, 1.15], [0.012, 0.22, 0.012], { jitter: 0, gradient: 0 });
-        em.add(TORUS, '#ffd24a', [0.19, 0.27, 0.0], [0, 0, 0], [0.04, 0.04, 0.1], { jitter: 0, gradient: 0 });
-        em.add(BOX, '#ffd24a', [0.03, 0.11, 0.0], [0, 0, 0.5], [0.03, 0.04, 0.012], { jitter: 0, gradient: 0 });
-        break;
-      case 'greenhouse_trace':
-        lit.add(BOX, '#2a2d44', [0, 0.04, 0], [0, 0.4, 0], [0.34, 0.06, 0.07], { gradient: 0.1 });
-        lit.add(BOX, '#2a2d44', [0.14, 0.1, 0], [0, 0.4, 0.6], [0.14, 0.05, 0.05], { gradient: 0 });
-        lit.add(ICO0, '#1a1c2e', [-0.1, 0.06, 0], [0, 0, 0], [0.04, 0.04, 0.04], { gradient: 0 });
-        lit.add(BOX, '#d8d0b0', [-0.08, 0.02, 0.12], [0, 0.9, 0], [0.12, 0.012, 0.09], { gradient: 0, jitter: 0.06 });
-        em.add(ICO1, '#7bffb0', [0.0, 0.015, -0.1], [0, 0.3, 0], [0.12, 0.012, 0.09], { jitter: 0, gradient: 0 });
-        em.add(ICO0, '#9affd0', [0.09, 0.02, -0.14], [0, 0.3, 0], [0.04, 0.012, 0.03], { jitter: 0, gradient: 0 });
-        em.add(CONE4, '#7bffb0', [-0.07, 0.07, -0.08], [0, 0, 0], [0.025, 0.1, 0.025], { jitter: 0, gradient: 0 });
-        break;
-    }
+    buildClueModel(clueId, lit, em);
     const lg = lit.build();
     const eg = em.build();
     this.geos.push(lg, eg);
-    const lm = lambertVC({ emissive: new THREE.Color('#2a2440'), emissiveIntensity: 0.8 });
+    const lm = lambertVC({ emissive: new THREE.Color('#3c3560'), emissiveIntensity: 0.9 });
     const em2 = basicVC();
     this.mats.push(lm, em2);
     this.inner.add(new THREE.Mesh(lg, lm), new THREE.Mesh(eg, em2));
-    this.root.add(this.inner);
+    this.inner.scale.setScalar(1.5);
+    this.marker = new THREE.Mesh(MARKER_GEO, MARKER_MAT);
+    this.marker.position.y = 1.35;
+    this.root.add(this.inner, this.marker);
+  }
+
+  /** Yaw that turns the prop's readable face toward the island centre (the player approaches from the paths). */
+  faceYaw(x: number, z: number): number {
+    const base = Math.atan2(x, z);
+    if (this.clueId === 'alarm_override') return base + Math.PI; // operator side is +Z
+    if (this.clueId === 'watchtower_signal') return base + Math.PI / 2; // lens points along +X
+    return base;
   }
 
   dispose(): void {

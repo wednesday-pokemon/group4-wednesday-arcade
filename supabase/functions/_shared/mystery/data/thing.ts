@@ -5,7 +5,7 @@
 // to the 60 budget. Thing NEVER names or hints at the culprit, and never names a suspect at all before the verdict.
 // Templates use {placeholders} filled by formatThingLine(): {character} = NightshadeDef.shortName,
 // {pokemon} = PokemonPartnerDef.name, {power} = power name, {move} = move name, {n} = a number.
-import type { ClueId, DnfReason, HydeMode, Verdict } from '../types.ts';
+import type { DnfReason, HydeMode, Verdict } from '../types.ts';
 
 export type ThingPose = 'stand' | 'wave' | 'point' | 'shush' | 'count1' | 'count2' | 'count3' | 'thumbsUp' | 'tap' | 'fist';
 export interface ThingLine { id: string; text: string; pose: ThingPose }
@@ -25,9 +25,11 @@ export interface ThingScript {
   tutorial: TutorialLine[];
   objective: Record<'find_clues' | 'find_egg' | 'retrieve_egg' | 'deliver_egg' | 'accuse', ThingLine>;
   search: { start: ThingLine; interrupted: ThingLine };
-  clueFound: Record<ClueId, ThingLine>;
+  /** Generic clue-found line; each case's ClueDef.thing.found is preferred. */
+  clueFound: ThingLine;
   clueCount: Record<1 | 2 | 3, ThingLine>;
-  vision: Record<ClueId | 'egg' | 'nothing', ThingLine>;
+  /** Reveal-power lines for the egg / nothing; per-clue vision lines come from ClueDef.thing.vision. */
+  vision: Record<'egg' | 'nothing', ThingLine>;
   threat: Record<HydeMode, ThingLine[]>;
   catch: { first: ThingLine; blocked: ThingLine; invulnerable: ThingLine };
   egg: { seen: ThingLine; pickup: ThingLine; setDown: ThingLine; forcedDrop: ThingLine; lowSecurity: ThingLine };
@@ -65,7 +67,7 @@ export const THING: ThingScript = {
 
   objective: {
     find_clues: line('obj_clues', 'point', 'Three clues hide in the ruins. Start looking.'),
-    find_egg: line('obj_egg', 'point', 'The egg waits in the Egg Chamber.'),
+    find_egg: line('obj_egg', 'point', 'Now find the egg. Follow the case file.'),
     retrieve_egg: line('obj_retrieve', 'point', 'Pick the egg back up with E.'),
     deliver_egg: line('obj_deliver', 'point', 'Carry the egg to Iago Tower, north.'),
     accuse: line('obj_accuse', 'point', 'Name the one who released the Hyde.'),
@@ -76,12 +78,8 @@ export const THING: ThingScript = {
     interrupted: line('search_paused', 'tap', 'Search paused. Your progress is kept.'),
   },
 
-  /** On pickup, one line per clue (content-neutral: points to the board, not to a person). */
-  clueFound: {
-    transfer_note: line('clue_note', 'point', "A note from Orloff's desk. Read it on the board."),
-    master_key: line('clue_key', 'point', 'A key where no key belongs. Check the board.'),
-    greenhouse_trace: line('clue_trace', 'point', 'Something on the latch. Tab to compare.'),
-  },
+  /** On pickup when the case has no line of its own (content-neutral: points to the board, not to a person). */
+  clueFound: line('clue_found', 'point', 'Evidence. Read it on the board.'),
 
   /** Progress line after the per-clue line; index = clues found (1..3). */
   clueCount: {
@@ -92,9 +90,6 @@ export const THING: ThingScript = {
 
   /** Psychic Vision / reveal effects: a light inference prompt, never a suspect. */
   vision: {
-    transfer_note: line('vision_note', 'point', 'A vision of paper and ink. Find the desk.'),
-    master_key: line('vision_key', 'point', 'A vision of cold metal by the crypt door.'),
-    greenhouse_trace: line('vision_trace', 'point', 'A vision of resin on a latch. Look closely.'),
     egg: line('vision_egg', 'point', 'A vision of a shell, waiting in the dark.'),
     nothing: line('vision_none', 'tap', 'The vision is quiet. Nothing left nearby.'),
   },
@@ -139,12 +134,12 @@ export const THING: ThingScript = {
   tower: {
     approach: line('tower_approach', 'point', 'Iago Tower. Step inside and press E.'),
     deposit: line('tower_deposit', 'thumbsUp', 'Egg secured. Now — who released the Hyde?'),
-    fewClues: line('tower_few_clues', 'tap', 'Only {n} of 3 clues. The case may stay unsolved.'),
+    fewClues: line('tower_few_clues', 'tap', 'Only {n} of {total} clues. The case may stay unsolved.'),
   },
 
   accusation: {
     prompt: line('accuse_prompt', 'point', 'Name one suspect. You only get one try.'),
-    reminder: line('accuse_reminder', 'tap', 'Who does each clue point to — and explain?'),
+    reminder: line('accuse_reminder', 'tap', 'Which suspect do all three clues name?'),
   },
 
   results: {
@@ -163,7 +158,7 @@ export const THING: ThingScript = {
     line('hint_crouch', 'shush', 'Crouch near the Hyde. Walking is heard at 7 m.'),
     line('hint_hide', 'shush', 'Hiding spots hide you. It can still hear you.'),
     line('hint_walls', 'tap', 'Walls muffle sound. Keep stone between you.'),
-    line('hint_where', 'point', 'Clues: Research Room, Crypt, Egg Chamber.'),
+    line('hint_where', 'point', 'Three clues per case. The board shows where.'),
     line('hint_board', 'tap', 'On the board: who is explained, who is not?'),
     line('hint_patrol', 'point', 'It walks a loop. Wait for it to pass.'),
   ],

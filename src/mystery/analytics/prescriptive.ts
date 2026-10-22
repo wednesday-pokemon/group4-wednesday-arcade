@@ -83,6 +83,16 @@ function roomName(run: MysteryRun, x: number, z: number): string {
   return run.roomAt(x, z)?.name ?? 'open ground';
 }
 
+/**
+ * "Get the egg" copy from the CASE being played: the case file's egg objective ("Find the egg in the burial vault of
+ * the crypt."), else the (case-renamed) room the egg rests in. Never a fixed room name.
+ */
+export function eggAdvice(run: MysteryRun): string {
+  const objective = run.caseDef?.egg?.objective?.trim().replace(/\.$/, '');
+  if (objective) return fit(objective, MAX_TEXT);
+  return fit(`Fetch the egg from the ${roomName(run, run.egg.x, run.egg.z)}`, MAX_TEXT);
+}
+
 function opt(action: AdviceAction, text: string, reason: string, score: number, extra: Partial<AdviceOption> = {}): AdviceOption {
   return {
     action, text: fit(text, MAX_TEXT), reason: fit(reason, MAX_REASON), feasible: true, score,
@@ -264,7 +274,7 @@ export class PrescriptiveService {
   /** Every feasible option, best first. Empty when the run is not in play / accusing. */
   candidates(run: MysteryRun): AdviceOption[] {
     if (run.status === 'accusing') {
-      return [opt('review_evidence', 'Review the evidence board (Tab)', 'Check what each clue you found points to', 50)];
+      return [opt('review_evidence', 'Review the evidence board (Tab)', 'Weigh what each clue you found actually says', 50)];
     }
     if (run.status !== 'playing') return [];
     const s = situation(run);
@@ -330,7 +340,7 @@ export class PrescriptiveService {
       if (de !== null) out.push(opt('retrieve_egg', 'Go back and pick up the egg (E)', `The egg lies ${m(de)} away`, s.threat ? 52 : 70, { target: { x: egg.x, z: egg.z } }));
     } else if (egg.state === 'resting' && run.objective() === 'find_egg') {
       const de = navDistance(run, egg, tol);
-      if (de !== null) out.push(opt('get_egg', 'Fetch the egg from the Egg Chamber', `All clues found; the egg is ${m(de)} away`, s.threat ? 48 : 64, { target: { x: egg.x, z: egg.z } }));
+      if (de !== null) out.push(opt('get_egg', eggAdvice(run), `All clues found; the egg is ${m(de)} away`, s.threat ? 48 : 64, { target: { x: egg.x, z: egg.z } }));
     }
     if (egg.state !== 'carried' && egg.state !== 'delivered' && run.objective() === 'find_clues') {
       let best: { id: string; x: number; z: number; dist: number } | null = null;

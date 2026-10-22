@@ -236,43 +236,49 @@ Use `VITE_SUPABASE_URL=http://127.0.0.1:54321` and the local anon key from `npx 
 | RLS + grants | `supabase/migrations/20261021000600_mystery_rls_and_grants.sql` |
 | Atomic RPCs (service role only) | `supabase/migrations/20261021000700_mystery_rpcs.sql` |
 | Realtime (adds `mystery_station_status`, `mystery_results` only) | `supabase/migrations/20261021000800_mystery_realtime.sql` |
+| Three cases: case per session (per-station bag), widened clue CHECKs, evidence/deduction, per-case views, column privileges (§12.6) | `supabase/migrations/20261022000100_mystery_cases.sql` |
 | Edge Functions | `supabase/functions/{mystery-create-session,mystery-get-session,mystery-select-duo,mystery-append-events,mystery-finalize}`; `admin-reset` extended (`scope`) |
 | Server rules (pure, unit-tested) | `supabase/functions/_shared/{mystery-events,mystery-rules,mystery-validation,mystery-db}.ts` |
 | Generated copies of the browser's pure modules | `supabase/functions/_shared/mystery/**` and `_shared/mystery-registry.generated.ts` ← `npm run sync:shared` |
-| Tests | `supabase/tests/004_*`, `005_*` (pgTAP), `supabase/tests/unit/{mystery,shared-identity}.test.ts`, `supabase/tests/offline/mystery-roundtrip.ts` |
+| Tests | `supabase/tests/004_*`, `005_*`, `006_mystery_cases` (pgTAP), `supabase/tests/unit/{mystery,shared-identity}.test.ts`, `supabase/tests/offline/mystery-roundtrip.ts` |
 
 Tables (all RLS-enabled; no client role can INSERT/UPDATE/DELETE anything):
 
 | Table | Purpose | Readable by |
 |---|---|---|
-| `mystery_sessions` | session UUID, station, `rules_version = 'mystery-v3.1'`, server seed, status `offered → playing → finished/dnf` (or `abandoned`), selected duo, event projections, validated `progress` | own station, operator |
+| `mystery_sessions` | session UUID, station, `rules_version = 'mystery-v3.1'`, server seed, assigned `case_id` + `case_version`, status `offered → playing → finished/dnf` (or `abandoned`), selected duo, event projections, validated `progress` | own station, operator |
 | `mystery_offered_duos` | the 3 server-computed cards (slot 0–2; unique (session, slot) and (session, character, pokemon); full `card` + `stats` jsonb) | own station, operator |
 | `mystery_events` | StampedEvents (`seq`, `t`, `type`, `payload`), unique (session, seq), append-only; ≤ 1 finish/dnf, ≤ 1 accusation, ≤ 1 delivery per session | own station, operator |
 | `mystery_clue_events` | one row per discovered clue (derived from validated `clue_found`) | own station, operator |
 | `mystery_forecasts` | prediction **as issued** (`target`, `value`, `model_label` `ml`/`rule_based`, `model_version`, `features`) — immutable | own station, operator |
 | `mystery_recommendations` | advice, `accepted`, `outcome` (fill-only: null → value, never rewritten) | own station, operator |
-| `mystery_results` | one immutable server-recomputed result per session (outcome, verdict, accused, correct, clues, egg tier/points/security, active time, score — null for DNF —, catches, claim audit) | everyone (test runs: operator only) |
+| `mystery_results` | one immutable server-recomputed result per session (case, outcome, verdict, accused, correct, cited evidence, deduction, clues, egg tier/points/security, active time, score — null for DNF —, catches, claim audit) | everyone, EXCEPT the columns `accused`, `evidence`, `client_claim` (no client role; operators via `mystery_result_audit`); test runs: operator only |
+| `mystery_case_bags` | per station: remaining case ids of the current shuffled bag + the case dealt last | service role only (RLS on, no policy) |
 | `mystery_session_actions` | receipts/audit (create, select, finalize, abandon) | operator |
 | `mystery_station_status` | sanitized live status per terminal (Realtime) | everyone |
 
-Views (security invoker, rules-version partitioned, test runs excluded): `mystery_leaderboard` (finishers, `rank`,
-score desc → active time asc → finalized first), `mystery_defeated` (DNFs only), `mystery_standings` (every finisher —
-negative scores included — above every DNF; DNFs unranked, longest survival first; `standing_group` 0/1).
+Views (security invoker, rules-version partitioned, test runs excluded, NO `accused` column): `mystery_leaderboard`
+(finishers, `rank` over all cases + `case_rank` within the row's `case_id`, score desc → active time asc → finalized
+first), `mystery_defeated` (DNFs only), `mystery_standings` (every finisher — negative scores included — above every DNF;
+DNFs unranked, longest survival first; `standing_group` 0/1; `rank` combined, `case_rank` per case). Operator-only:
+`mystery_result_audit` (definer view filtered by `private.is_operator()`: accused, evidence, client_claim).
 
 ### 12.2 Deploy (only after approval)
 
 ```bash
 npm run sync:shared                       # copies src/mystery pure modules + data; fails on impure/out-of-tree imports
 npm run typecheck:functions && npm run test:supabase-unit && npm run test:db:offline && npm run test:db:roundtrip
-npx supabase db push --dry-run            # must list ONLY 20261021000500..800 (the four v2.5 migrations are already applied)
+npx supabase db push --dry-run            # must list ONLY the mystery migrations not applied yet: 20261021000500..800 and 20261022000100_mystery_cases
 npx supabase db push
 npx supabase functions deploy --use-api \
   mystery-create-session mystery-get-session mystery-select-duo mystery-append-events mystery-finalize admin-reset
 ```
 
 No new secrets are required. Optional: `npx supabase secrets set MYSTERY_ALLOW_TEST_SEEDS=true` lets
-`mystery-create-session` accept a `testSeed` (operator seed-reuse tests); such sessions are stored with `is_test = true`
-and never ranked or shown publicly. Leave it unset on event day. Redeploy the mystery functions whenever
+`mystery-create-session` accept a `testSeed` (operator seed-reuse tests) and, together with it, a `testCase` (one of
+`poisoned_archive`, `crypt_last_witness`, `midnight_signal`) that forces the session's case without touching the station's
+bag; such sessions are stored with `is_test = true` and never ranked or shown publicly. Leave it unset on event day
+(without the flag both fields answer `403 TEST_SEED_FORBIDDEN`; `testCase` without `testSeed` is `422 INVALID_INPUT`). Redeploy the mystery functions whenever
 `src/mystery/{types,draft,stats,scoring,caseLogic,config}.ts` or `src/mystery/data/**` change (after `npm run sync:shared`):
 the server must compute the same offers, egg tiers and verdicts as the browser.
 
@@ -293,11 +299,11 @@ it. Errors: `{ "error": { "code", "message", "retryable", "details?" }, "request
 
 | # | Function | Request | Success | Errors |
 |---|---|---|---|---|
-| 1 | `mystery-create-session` | `{ actionId, nickname, testSeed? }` | `201` new / `200` + `x-idempotent-replay` → `MysterySessionEnvelope` | 422 INVALID_INPUT, 403 TEST_SEED_FORBIDDEN, 409 ACTION_ID_CONFLICT, 429 RATE_LIMITED (6 creates/min/station) |
+| 1 | `mystery-create-session` | `{ actionId, nickname, testSeed?, testCase? }` | `201` new / `200` + `x-idempotent-replay` → `MysterySessionEnvelope` (with the assigned `caseId`; a replay returns the SAME case) | 422 INVALID_INPUT, 403 TEST_SEED_FORBIDDEN, 409 ACTION_ID_CONFLICT, 429 RATE_LIMITED (6 creates/min/station) |
 | 2 | `mystery-get-session` | `{ sessionId? }` | `200` → envelope, or `{session:null,offer:null,result:null}` when nothing is open | 404 SESSION_NOT_FOUND (also for another station's id) |
 | 3 | `mystery-select-duo` | `{ sessionId, characterId, pokemonId }` | `200` → envelope (`status: "playing"`); same choice again = replay | 422 DUO_NOT_OFFERED, 409 ALREADY_SELECTED, 409 SESSION_CLOSED |
-| 4 | `mystery-append-events` | `{ sessionId, events: StampedEvent[≤500], forecasts?: [≤50], recommendations?: [≤50] }` (≤ 256 KB) | `200` → `{ sessionId, accepted, duplicates, lastSeq, lastT, eventCount, terminal, progress, forecastsInserted, recommendationsUpserted }` | 422 EVENT_REJECTED `{seq, rule}`, 409 SEQ_CONFLICT `{seq, lastSeq}`, 409 NOT_SELECTED, 409 SESSION_CLOSED, 422 TOO_MANY_EVENTS (20 000/session) |
-| 5 | `mystery-finalize` | `{ sessionId, clientResult? }` (`clientResult` = the browser `RunResult`, audit only) | `201` → `{ sessionId, result: MysteryResultView, rank }`; every later call `200` + replay with the **same** result | 409 RUN_NOT_FINISHED, 409 NOT_SELECTED, 409 SESSION_CLOSED |
+| 4 | `mystery-append-events` | `{ sessionId, events: StampedEvent[≤500], forecasts?: [≤50], recommendations?: [≤50] }` (≤ 256 KB) | `200` → `{ sessionId, accepted, duplicates, lastSeq, lastT, eventCount, terminal, progress, forecastsInserted, recommendationsUpserted }` | 422 EVENT_REJECTED `{seq, rule}` (e.g. `clue_unknown` for a clue of another case, `accusation_duplicate`), 409 SEQ_CONFLICT `{seq, lastSeq}`, 409 NOT_SELECTED, 409 SESSION_CLOSED, 422 TOO_MANY_EVENTS (20 000/session), 409 CASE_OUTDATED |
+| 5 | `mystery-finalize` | `{ sessionId, clientResult? }` (`clientResult` = the browser `RunResult`, audit only) | `201` → `{ sessionId, result: MysteryResultView, rank, reveal }` (`reveal = { culprit, resolution }` for a finished run, `null` for a DNF); every later call `200` + replay with the **same** result + reveal | 409 RUN_NOT_FINISHED, 409 NOT_SELECTED, 409 SESSION_CLOSED, 409 CASE_OUTDATED |
 | – | `admin-reset` (operator) | `{ stationId, reason, actionId, scope?: "all" \| "legacy" \| "mystery" }` | `200` → `{ stationId, scope, abandonedSessionIds, abandonedMysterySessionIds, notice: "operator_reset" }` | as v2.5 |
 
 ```jsonc
@@ -307,6 +313,7 @@ it. Errors: `{ "error": { "code", "message", "retryable", "details?" }, "request
     "sessionId": "uuid", "stationId": "station_a", "rulesVersion": "mystery-v3.1",
     "status": "offered | playing | finished | dnf | abandoned", "abandonedReason": "null | superseded | operator_reset | player_reset",
     "seed": "32 hex (feed MysteryRun({ seed }))", "nickname": "Ann", "isTest": false,
+    "caseId": "poisoned_archive | crypt_last_witness | midnight_signal", "caseVersion": 1, // feed MysteryRun({ caseDef: caseById(caseId) })
     "selected": null, // or { "characterId": "enid", "pokemonId": "drifblim", "slot": 1 }
     "lastSeq": -1, "lastT": 0, "eventCount": 0,
     "progress": { "cluesFound": [], "egg": "resting", "eggSecurity": 100, "catches": 0, "sightings": 0, "delivered": false, "accused": false, "terminal": null },
@@ -315,8 +322,10 @@ it. Errors: `{ "error": { "code", "message", "retryable", "details?" }, "request
   "offer": { "seed": "same 32 hex", "cards": ["DuoCard", "DuoCard", "DuoCard"] }, // exactly draftOffer(seed)
   "result": null // or MysteryResultView
 }
-// MysteryResultView = RunResult fields (minus hp) + { sessionId, sightings, hintsUsed, nickname, stationId, isTest,
-//   claimMatches, verified: true, finalizedAt }; duo = { characterId, pokemonId }; score null for DNF.
+// MysteryResultView = RunResult fields (minus hp; incl. caseId, caseVersion, evidence, deductionCorrect) + { sessionId,
+//   sightings, hintsUsed, nickname, stationId, isTest, claimMatches, verified: true, finalizedAt };
+//   duo = { characterId, pokemonId }; score null for DNF. Returned to the OWNING station only.
+// accusation event payload = { suspectId: SuspectId|null, correct, cluesFound, evidence: string[≤5], deductionCorrect }
 // forecasts[i]       = { forecastNo, t, target: "detection_15s"|"extraction"|"eta_s", value, modelLabel: "ml"|"rule_based", modelVersion?, features: {name: number|bool|string|null} }
 // recommendations[i] = { recNo, t, action: "snake_id", advice: "≤240 chars", trigger?: "hint"|"context", accepted?: bool|null, outcome?: "snake_id"|null }
 ```
@@ -347,9 +356,10 @@ Adapter flow (station kiosk):
 
 | Suite | Command | Covers |
 |---|---|---|
-| pgTAP `004_mystery_structure_rls` (83) + `005_mystery_rpcs` (60) | `npm run test:db:offline` (or `npx supabase test db`) | RLS/privileges per role, constraints, duplicate seq rejected, single terminal, idempotent create/select/finalize, supersede, rate limit, leaderboard with negative scores above DNFs, operator reset, v2.5 rows untouched |
-| Unit (Vitest) | `npm run test:supabase-unit` | parsers, every event-order rule, resend dedupe, verdict/score recomputation, SQL score-CHECK parity, offer determinism + sanity, shared-copy identity |
-| TS ↔ SQL round-trip | `npm run test:db:roundtrip` | 150 random mystery sessions through the real modules + RPCs (plus the 300 v2.5 races) |
+| pgTAP `004_mystery_structure_rls` (109) + `005_mystery_rpcs` (64) + `006_mystery_cases` (24) | `npm run test:db:offline` (or `npx supabase test db`) | RLS/privileges per role (incl. column privileges: anon/stations cannot select `accused`/`evidence`/`client_claim`), constraints (case ids, widened clue ids, solved ⇒ correct ∧ deduction ∧ 3 clues, evidence ≤ 5 ids), duplicate seq rejected, single terminal, idempotent create/select/finalize, supersede, rate limit, leaderboard with negative scores above DNFs, operator reset, v2.5 rows untouched; case bag: 6 creates → each case exactly twice, never twice in a row, replay keeps the case, stations independent, forced test cases, per-case standings |
+| Unit (Vitest) | `npm run test:supabase-unit` | parsers (incl. `testCase`, accusation evidence), every event-order rule (clue ids of the session's case only), resend dedupe, verdict/score/evidence/deduction recomputation with the server's answer keys for all three cases, forged evidence dropped, lying claims overruled, `CASE_OUTDATED`, reveal, SQL score-CHECK parity, offer determinism + sanity, shared-copy identity + registry binding |
+| TS ↔ SQL round-trip | `npm run test:db:roundtrip` | 150 random mystery sessions through the real modules + RPCs (cases from the bag; replay keeps the case; per-station case counts never differ by more than one) + for EACH case: solved / wrong suspect / forged evidence, second finalize = same row, second accusation refused (plus the 300 v2.5 races) |
+| Integration (fake project) | `npx vitest run tests/integration` | kiosk ↔ functions ↔ board end to end: case assigned at create and identical after restore / refresh / replayed create, own bag per station, forged evidence dropped, wrong accusation claimed as correct overruled, one-shot accusation, finalize `reveal`, board per-case standings, no secret column on any public read or Realtime payload |
 
 ### 12.5 Event-day operations (mystery)
 
@@ -359,6 +369,43 @@ Adapter flow (station kiosk):
 * **Offensive nickname:** `delete from public.mystery_results where session_id = '<id>';` (results cannot be edited).
 * **Function errors:** logs carry `fn`, `requestId`, `status`, `durationMs` plus `mystery_events_appended`,
   `mystery_finalized` (`claimMatches=false` is logged at `warn`: the browser's own score/verdict differed from the server's).
+
+### 12.6 Three cases (migration `20261022000100_mystery_cases.sql`, 2026-10-22)
+
+Contract: `docs/MYSTERY_CASES.md`. Everything is additive; pre-existing rows are backfilled as `poisoned_archive` v1.
+
+* **Assignment.** `mystery_create_session(…, p_case_versions jsonb, p_test_case text default null)` draws the case
+  inside the existing `public.stations` row lock via `private.mystery_draw_case`: pop the head of
+  `mystery_case_bags.bag`; an empty bag is refilled with a fresh `order by random()` permutation whose head is swapped
+  away from `last_case` (so the same case is never dealt twice in a row and every 3 consecutive sessions of a station
+  play all three cases). The function passes the deployed `CaseDef.version` of every case (`p_case_versions`), the
+  RPC stores the drawn case's version. A replayed `actionId` returns `{ replay: true, sessionId, caseId, caseVersion }`
+  and draws nothing. `p_test_case` is only accepted with `p_is_test` (it never touches the bag).
+* **Validation.** append-events / finalize resolve the session's `case_id` → `CaseDef` + the server's own
+  `CaseSolution` (generated registry: `MYSTERY_DATA.cases` / `MYSTERY_DATA.solutions`). Clue ids of other cases are
+  `EVENT_REJECTED: clue_unknown`. A session whose stored `case_version` differs from the deployed one answers
+  `409 CASE_OUTDATED` (cannot be verified) — so redeploy only between visitors.
+* **Accusation.** Payload `{ suspectId, correct, cluesFound, evidence: string[≤5], deductionCorrect }` (strict). Finalize
+  sanitizes `evidence` with the shared `caseLogic.sanitizeEvidence` (found clues + the case's notes; unknown / forged
+  ids dropped; `[]` when nobody was accused) and recomputes `verdict` / `correct` / `deductionCorrect` with
+  `verdictFor` + its own answer key. Client values only feed `claim_matches` (raw cited ids kept in `client_claim`).
+* **Results.** `mystery_results.case_id / case_version` (copied from the session, never from the body),
+  `evidence text[]`, `deduction_correct`; `case_solved ⇒ correct ∧ deduction_correct ∧ 3 clues` (NOT VALID: legacy
+  rows kept). The finalize response adds `reveal: { culprit, resolution } | null` — the only response that ever
+  contains the culprit, and only once the run is stored.
+* **Secrecy.** Column privileges: `anon` / `authenticated` may select every `mystery_results` column except
+  `accused`, `evidence`, `client_claim` (`select *` is a permission error — always list columns). Realtime
+  `postgres_changes` omits non-selectable columns. Operators read them via `public.mystery_result_audit`.
+* **Board.** `mystery_station_status.case_id`, `mystery_standings.case_id / case_rank`, `mystery_leaderboard.case_rank`.
+  The feed exposes `snapshot.standings` (combined) and `snapshot.standingsByCase[caseId]` (rank within the case).
+
+Verify after `db push`:
+
+```sql
+select station_id, bag, last_case from public.mystery_case_bags;          -- rows appear with the first create per station
+select case_id, count(*) from public.mystery_sessions group by 1;          -- even per station
+select has_column_privilege('anon', 'public.mystery_results', 'accused', 'SELECT');   -- false
+```
 
 ### 12.4 Client notes (live mystery client, 2026-10-21)
 - Routes: `/` = LOCAL DEMO (never touches the leaderboard); `/?mode=terminal&station=station_a|station_b` = live mystery

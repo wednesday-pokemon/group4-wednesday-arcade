@@ -1,10 +1,16 @@
-// DescriptiveService exact counts + DiagnosticService cause/pattern discipline, on a scripted log and on bot episodes.
+// DescriptiveService exact counts + DiagnosticService cause/pattern discipline, on a scripted log and on bot episodes;
+// case awareness: per-case aggregates never mix clue sets, case-rule failure reasons (missed clues by title, wrong
+// suspect, right suspect with weak evidence, no accusation, DNF before accusing).
 import { describe, expect, it } from 'vitest';
-import { aggregateSessions, describeSession, stanceSeconds } from '../../../src/mystery/analytics/descriptive.ts';
-import { aggregateDiagnostics, catchChains, diagnoseCauses, diagnosePatterns, diagnoseSession, topCauses } from '../../../src/mystery/analytics/diagnostic.ts';
+import { aggregateSessions, describeSession, scopeRecords, stanceSeconds } from '../../../src/mystery/analytics/descriptive.ts';
+import {
+  aggregateDiagnostics, catchChains, diagnoseCaseReasons, diagnoseCauses, diagnosePatterns, diagnoseSession, failureReasons, topCauses,
+} from '../../../src/mystery/analytics/diagnostic.ts';
+import { accusationKind } from '../../../src/mystery/analytics/caseInfo.ts';
 import type { SessionRecord } from '../../../src/mystery/analytics/types.ts';
-import type { StampedEvent } from '../../../src/mystery/types.ts';
-import { episode, stamp } from './helpers.ts';
+import { CASES } from '../../../src/mystery/data/cases.ts';
+import { CASE_IDS, type CaseId, type ClueId, type StampedEvent } from '../../../src/mystery/types.ts';
+import { episode, recordOf, stamp } from './helpers.ts';
 
 const DUO = { characterId: 'eugene', pokemonId: 'sableye' } as const;
 
@@ -18,8 +24,8 @@ function scripted(): StampedEvent[] {
     [3.2, { type: 'noise', source: 'footstep', x: 1, z: 2, loudness: 0.95, radiusM: 13 }],
     [3.2, { type: 'hyde_heard', source: 'footstep', loudness: 0.95, distanceM: 9.2, occluded: false }],
     [3.2, { type: 'hyde_mode', from: 'PATROL', to: 'INVESTIGATE_SOUND', reason: 'heard_noise' }],
-    [4.0, { type: 'clue_search_start', clueId: 'transfer_note' }],
-    [6.0, { type: 'clue_found', clueId: 'transfer_note', cluesFound: 1 }],
+    [4.0, { type: 'clue_search_start', clueId: 'falsified_transfer' }],
+    [6.0, { type: 'clue_found', clueId: 'falsified_transfer', cluesFound: 1 }],
     [6.5, { type: 'noise', source: 'interact', x: 1, z: 2, loudness: 0.2, radiusM: 4 }],
     [8.0, { type: 'hyde_sighted', distanceM: 6.1 }],
     [9.0, { type: 'hyde_mode', from: 'INVESTIGATE_SOUND', to: 'CHASE', reason: 'saw_player' }],
@@ -34,15 +40,17 @@ function scripted(): StampedEvent[] {
     [31.0, { type: 'ability_denied', key: 'Q', reason: 'cooldown' }],
     [32.0, { type: 'hint_requested' }],
     [40.0, { type: 'egg_delivered', tier: 'rare', points: 3, security: 70 }],
-    [40.0, { type: 'accusation', suspectId: 'isaac', correct: false, cluesFound: 1 }],
+    [40.0, { type: 'accusation', suspectId: 'isaac', correct: false, cluesFound: 1, evidence: ['falsified_transfer'], deductionCorrect: false }],
     [40.0, { type: 'finish', verdict: 'egg_secured_mystery_unsolved', score: 260 }],
   ]);
 }
 
 describe('DescriptiveService — exact counts', () => {
   it('counts every event class exactly on a scripted log', () => {
-    const r = describeSession({ duo: DUO, events: scripted() });
+    const r = describeSession({ duo: DUO, events: scripted(), caseId: 'poisoned_archive' });
     expect(r.status).toBe('finished');
+    expect(r.caseId).toBe('poisoned_archive');
+    expect(r.caseVersion).toBe(CASES.poisoned_archive.version);
     expect(r.activeTimeS).toBe(40);
     expect(r.noise.total).toBe(6);
     expect(r.noise.bySource).toEqual({ footstep: 3, egg_drop: 0, ability: 0, interact: 2, impact: 1, decoy: 0 });
@@ -50,7 +58,14 @@ describe('DescriptiveService — exact counts', () => {
     expect(r.noise.heardBySource.footstep).toBe(1);
     expect(r.hyde).toMatchObject({ heard: 1, sightings: 1, chases: 1, catches: 1, blockedCatches: 0, hpLost: 35, firstAlertT: 3.2 });
     expect(r.hyde.alertsByMode).toEqual({ PATROL: 0, INVESTIGATE_SOUND: 1, SEARCH: 0, CHASE: 1, COOLDOWN: 1 });
-    expect(r.clues).toEqual({ found: [{ clueId: 'transfer_note', t: 6 }], count: 1, total: 3 });
+    expect(r.clues).toEqual({
+      found: [{ clueId: 'falsified_transfer', t: 6 }], count: 1, total: 3,
+      missing: [
+        { clueId: 'botanical_residue', title: 'Restricted Botanical Residue' },
+        { clueId: 'access_ledger', title: 'Archive and Greenhouse Access Ledger' },
+      ],
+    });
+    expect(r.accusation).toEqual({ kind: 'wrong_suspect', evidenceCount: 1 });
     expect(r.egg).toMatchObject({ pickupT: 20, securityLost: 10, security: 70, delivered: true, deliveredT: 40, points: 3, drops: [] });
     expect(r.abilities.F).toMatchObject({ uses: 1, successes: 1, denied: 0 });
     expect(r.abilities.Q).toMatchObject({ uses: 0, successes: 0, denied: 1 });
@@ -91,19 +106,22 @@ describe('DescriptiveService — exact counts', () => {
 
   it('aggregates sessions for Laptop 1 (finish/DNF, solved %, clue rates, pick rate when offered)', () => {
     const fin: SessionRecord = {
-      sessionId: 'a', duo: { characterId: 'enid', pokemonId: 'gengar' }, events: scripted(),
+      sessionId: 'a', caseId: 'poisoned_archive', duo: { characterId: 'enid', pokemonId: 'gengar' }, events: scripted(),
       offered: [{ characterId: 'enid', pokemonId: 'gengar' }, { characterId: 'ajax', pokemonId: 'dusknoir' }, { characterId: 'bianca', pokemonId: 'gengar' }],
-      result: { outcome: 'finished', verdict: 'case_solved', activeTimeS: 40, score: 260, cluesFound: ['transfer_note', 'master_key', 'greenhouse_trace'], catches: 1 },
+      result: { outcome: 'finished', verdict: 'case_solved', activeTimeS: 40, score: 260, cluesFound: ['falsified_transfer', 'botanical_residue', 'access_ledger'], catches: 1 },
     };
     const dnf: SessionRecord = {
-      sessionId: 'b', duo: { characterId: 'ajax', pokemonId: 'dusknoir' },
+      sessionId: 'b', caseId: 'poisoned_archive', duo: { characterId: 'ajax', pokemonId: 'dusknoir' },
       offered: [{ characterId: 'ajax', pokemonId: 'dusknoir' }, { characterId: 'enid', pokemonId: 'misdreavus' }, { characterId: 'gomez', pokemonId: 'gengar' }],
       events: stamp([[5, { type: 'catch', catchNumber: 1, hpLost: 35, eggSecurityLost: 0, blocked: false }], [9, { type: 'catch', catchNumber: 2, hpLost: 35, eggSecurityLost: 0, blocked: false }], [9, { type: 'dnf', reason: 'second_catch' }]]),
       result: { outcome: 'dnf', verdict: 'not_accused', activeTimeS: 9, score: null, cluesFound: [], catches: 2 },
     };
-    const a = aggregateSessions([fin, dnf], ['transfer_note', 'master_key', 'greenhouse_trace']);
-    expect(a).toMatchObject({ runs: 2, finished: 1, dnf: 1, inProgress: 0, caseSolvedPctOfFinished: 100, medianTimeS: 40, allThreePct: 50 });
-    expect(a.clueFindRate).toEqual({ transfer_note: 0.5, master_key: 0.5, greenhouse_trace: 0.5 });
+    const a = aggregateSessions([fin, dnf]);
+    expect(a).toMatchObject({ scope: 'all', legacyExcluded: 0, runs: 2, finished: 1, dnf: 1, inProgress: 0, caseSolvedPctOfFinished: 100, medianTimeS: 40, allCluesPct: 50 });
+    expect(a).toMatchObject({ finishRatePct: 50, extractionPct: 50, meanTimeS: 40 });
+    expect(a.clueFindRate).toEqual({ falsified_transfer: 0.5, botanical_residue: 0.5, access_ledger: 0.5 });
+    expect(a.accusation).toMatchObject({ solved: 1, dnf: 1, wrongSuspect: 0, accused: 1 });
+    expect(a.cases.map((c) => c.runs)).toEqual([2, 0, 0]);
     const enid = a.pickRate.characters.find((x) => x.id === 'enid')!;
     expect(enid).toMatchObject({ offered: 2, selected: 1, rate: 0.5, smallSample: true });
     const gengar = a.pickRate.pokemon.find((x) => x.id === 'gengar')!;
@@ -223,4 +241,200 @@ describe('DiagnosticService — causes only with rule evidence, patterns labelle
     expect(recs.reduce((s, r) => s + catchChains(r.events).length, 0)).toBe(catches);
     for (const p of agg.patterns) expect(p.text).toMatch(/correlation, not proof/);
   }, 60_000);
+});
+
+// ----------------------------------------------------------------------------------------------------- case awareness
+
+const ids = (c: CaseId) => CASES[c].clues.map((x) => x.id);
+
+/** A finished (or DNF) result-only record of `caseId` that found `found` (count of that case's clues, in order). */
+function rec(id: string, caseId: CaseId | null, found: number, extra: Partial<NonNullable<SessionRecord['result']>> = {}, clueIds?: string[]): SessionRecord {
+  const clues = (clueIds ?? (caseId ? ids(caseId) : [])).slice(0, found) as ClueId[];
+  const solved = found === 3 && extra.verdict === undefined;
+  return {
+    sessionId: id, caseId, duo: { characterId: 'enid', pokemonId: 'gengar' }, events: [],
+    result: {
+      outcome: 'finished', verdict: solved ? 'case_solved' : 'egg_secured_mystery_unsolved', activeTimeS: 100 + found, score: 200, cluesFound: clues, catches: 0,
+      correct: solved, deductionCorrect: solved, ...extra,
+    },
+  };
+}
+
+describe('case-aware aggregates', () => {
+  it('per-case aggregates never mix clue sets: "all clues" uses each case\'s own clues, clue rates stay within the case', () => {
+    const records: SessionRecord[] = [
+      // Case 01: 2 runs, one found all 3, one found 1
+      rec('a1', 'poisoned_archive', 3), rec('a2', 'poisoned_archive', 1),
+      // Case 02: 3 runs, all found 3 (two solved, one wrong suspect)
+      rec('b1', 'crypt_last_witness', 3), rec('b2', 'crypt_last_witness', 3),
+      rec('b3', 'crypt_last_witness', 3, { verdict: 'egg_secured_mystery_unsolved', correct: false, deductionCorrect: true }),
+      // Case 03: 1 run with 2 of its clues PLUS two foreign (Case 01) ids that must not count toward Case 03
+      rec('c1', 'midnight_signal', 2, {}, [...ids('midnight_signal').slice(0, 2), ...ids('poisoned_archive')]),
+      // legacy: 3 old ids, no case → excluded by default
+      rec('L1', null, 3, { verdict: 'case_solved' }, ['transfer_note', 'master_key', 'greenhouse_trace']),
+    ];
+    // c1 claims 4 found clues in the record; make sure only its own case's count
+    records[5].result!.cluesFound = [...ids('midnight_signal').slice(0, 2), ...ids('poisoned_archive').slice(0, 2)] as ClueId[];
+    const all = aggregateSessions(records);
+    expect(all.legacyExcluded).toBe(1);
+    expect(all.runs).toBe(6);
+    // allClues: a1, b1, b2, b3 → 4 of 6 (c1 has 4 ids but only 2 of ITS case)
+    expect(all.allCluesPct).toBeCloseTo((100 * 4) / 6, 10);
+    const byCase = Object.fromEntries(all.cases.map((c) => [c.caseId, c]));
+    expect(byCase.poisoned_archive.allCluesPct).toBe(50);
+    expect(byCase.crypt_last_witness.allCluesPct).toBe(100);
+    expect(byCase.midnight_signal.allCluesPct).toBe(0);
+    // clue rates: each case's three clues over THAT case's runs only (Case 01 clues in c1 never inflate Case 01)
+    const rate = (c: CaseId, i: number) => byCase[c].clues.find((x) => x.clueId === ids(c)[i])!;
+    expect(rate('poisoned_archive', 0)).toMatchObject({ found: 2, of: 2, rate: 1 });
+    expect(rate('poisoned_archive', 1)).toMatchObject({ found: 1, of: 2, rate: 0.5 });
+    expect(rate('midnight_signal', 2)).toMatchObject({ found: 0, of: 1, rate: 0 });
+    expect(byCase.poisoned_archive.clues.map((c) => c.clueId)).toEqual(ids('poisoned_archive'));
+    for (const c of CASE_IDS) expect(byCase[c].clues.every((x) => x.caseId === c)).toBe(true);
+    expect(all.clueFindRate.falsified_transfer).toBe(1); // within Case 01, not 3 of 6 runs
+    expect(Object.keys(all.clueFindRate)).toHaveLength(9);
+    // solving accuracy / accusation outcome per case
+    expect(byCase.crypt_last_witness.solvedPctOfFinished).toBeCloseTo((100 * 2) / 3, 10);
+    expect(byCase.crypt_last_witness.accusation).toMatchObject({ solved: 2, wrongSuspect: 1, rightSuspectWrongEvidence: 0 });
+    expect(byCase.crypt_last_witness.accusation.deductionCorrectPctOfAccused).toBe(100); // evidence right even for the wrong suspect
+    expect(byCase.crypt_last_witness.accusation.rightSuspectPctOfAccused).toBeCloseTo((100 * 2) / 3, 10);
+    // scoped to one case: only that case, its clues only
+    const one = aggregateSessions(records, { caseId: 'poisoned_archive' });
+    expect(one.scope).toBe('poisoned_archive');
+    expect(one.runs).toBe(2);
+    expect(one.clueRates.map((c) => c.clueId)).toEqual(ids('poisoned_archive'));
+    expect(one.allCluesPct).toBe(50);
+    expect(one.medianTimeS).toBe((103 + 101) / 2);
+    // the per-case table does not depend on the scope
+    expect(one.cases).toEqual(all.cases);
+    // legacy records only join the combined view on request, never a case view
+    const withLegacy = aggregateSessions(records, { legacy: 'include' });
+    expect(withLegacy.runs).toBe(7);
+    expect(withLegacy.legacyExcluded).toBe(0);
+    expect(withLegacy.clueRates.filter((c) => c.caseId === null).map((c) => c.clueId)).toEqual(['greenhouse_trace', 'master_key', 'transfer_note']);
+    expect(aggregateSessions(records, { caseId: 'poisoned_archive', legacy: 'include' }).runs).toBe(2);
+    expect(scopeRecords(records, { caseId: 'midnight_signal' }).records.map((r) => r.sessionId)).toEqual(['c1']);
+    // the pre-case API (clue id array) means "everything, combined"
+    expect(aggregateSessions(records, ['x']).runs).toBe(7);
+  });
+
+  it('per-case summary: runs, solving accuracy, median time, extraction rate, usage (no names of the accused anywhere)', () => {
+    const records = [
+      rec('a1', 'poisoned_archive', 3),
+      { ...rec('a2', 'poisoned_archive', 1), result: { outcome: 'dnf', verdict: 'not_accused', activeTimeS: 50, score: null, cluesFound: [], catches: 2 } } as SessionRecord,
+      rec('b1', 'crypt_last_witness', 3),
+    ];
+    const a = aggregateSessions(records);
+    const c1 = a.cases[0];
+    expect(c1).toMatchObject({ caseId: 'poisoned_archive', number: '01', title: 'The Poisoned Archive', runs: 2, finished: 1, dnf: 1, extractionPct: 50, solvedPctOfFinished: 100, medianTimeS: 103 });
+    expect(c1.accusation.dnf).toBe(1);
+    expect(c1.characters).toEqual([{ id: 'enid', runs: 2 }]);
+    expect(c1.duos[0]).toEqual({ characterId: 'enid', pokemonId: 'gengar', runs: 2 });
+    expect(a.combined).toMatchObject({ caseId: 'all', runs: 3, finished: 2 });
+    expect(JSON.stringify(a)).not.toMatch(/thornhill|isaac|barry|Thornhill|Isaac|Barry/);
+  });
+});
+
+describe('case-rule failure reasons', () => {
+  const t0 = stamp([
+    [5, { type: 'clue_found', clueId: 'sabotaged_gate', cluesFound: 1 }],
+    [9, { type: 'clue_found', clueId: 'tunnel_access_record', cluesFound: 2 }],
+    [40, { type: 'egg_delivered', tier: 'rare', points: 3, security: 90 }],
+  ]);
+  const withAcc = (acc: Partial<Extract<StampedEvent, { type: 'accusation' }>>, verdict: 'case_solved' | 'egg_secured_mystery_unsolved' | 'not_accused') => [
+    ...t0,
+    { type: 'accusation', suspectId: 'isaac', correct: true, cluesFound: 2, evidence: [], deductionCorrect: false, ...acc, t: 41, seq: 4 } as StampedEvent,
+    { type: 'finish', verdict, score: 259, t: 41, seq: 5 } as StampedEvent,
+  ];
+
+  it('flags "right suspect, wrong evidence" and names the missed clue of THIS case', () => {
+    const ev = withAcc({ correct: true, deductionCorrect: false, evidence: ['sabotaged_gate', 'note_bell_rope'] }, 'egg_secured_mystery_unsolved');
+    expect(accusationKind({ events: ev })).toBe('right_suspect_wrong_evidence');
+    const items = diagnoseCaseReasons(ev, { caseId: 'crypt_last_witness' });
+    expect(items.map((i) => i.code)).toEqual(['weak_evidence', 'missed_clue']);
+    expect(items.every((i) => i.kind === 'case')).toBe(true);
+    expect(items[0].evidenceSeq).toEqual([4, 5]);
+    expect(items[0].text).toMatch(/^0:41 · Right suspect, but the cited evidence was not the full chain/);
+    expect(items[1]).toMatchObject({ ref: 'equipment_match' });
+    expect(items[1].text).toContain('“Groundskeeper’s Tool Roll” (Egg Chamber)');
+    // never names a suspect
+    for (const it of items) expect(it.text).not.toMatch(/Thornhill|Isaac|Barry|Marilyn|Night|Dort/);
+  });
+
+  it('wrong suspect vs not accused vs DNF before accusing vs solved', () => {
+    expect(diagnoseCaseReasons(withAcc({ correct: false, deductionCorrect: false }, 'egg_secured_mystery_unsolved'), { caseId: 'crypt_last_witness' })[0])
+      .toMatchObject({ code: 'wrong_suspect', text: '0:41 · The accused suspect was not the culprit of Case 02 · The Crypt’s Last Witness.' });
+    expect(diagnoseCaseReasons(withAcc({ suspectId: null, correct: false }, 'not_accused'), { caseId: 'crypt_last_witness' })[0].code).toBe('not_accused');
+    const dnf = stamp([[5, { type: 'catch', catchNumber: 1, hpLost: 35, eggSecurityLost: 0, blocked: false }], [9, { type: 'catch', catchNumber: 2, hpLost: 35, eggSecurityLost: 0, blocked: false }], [9, { type: 'dnf', reason: 'second_catch' }]]);
+    const d = diagnoseCaseReasons(dnf, { caseId: 'midnight_signal' });
+    expect(d.map((x) => x.code)).toEqual(['dnf_before_accusation', 'missed_clue', 'missed_clue', 'missed_clue']);
+    expect(d.slice(1).map((x) => x.ref)).toEqual(ids('midnight_signal'));
+    expect(d[1].text).toContain('Rewritten Patrol Log');
+    // failure reasons for the results panel = case reasons + stealth mistakes
+    const rep = diagnoseSession(dnf, { caseId: 'midnight_signal' });
+    expect(failureReasons(rep).map((x) => x.code)).toEqual(['dnf_before_accusation', 'missed_clue', 'missed_clue', 'missed_clue', 'catch', 'dnf_second_catch']);
+    // solved → nothing to explain
+    const all3 = [...t0.slice(0, 2), { type: 'clue_found', clueId: 'equipment_match', cluesFound: 3, t: 20, seq: 3 } as StampedEvent];
+    const solved = [...all3, { type: 'accusation', suspectId: 'isaac', correct: true, cluesFound: 3, evidence: ids('crypt_last_witness'), deductionCorrect: true, t: 41, seq: 4 } as StampedEvent, { type: 'finish', verdict: 'case_solved', score: 300, t: 41, seq: 5 } as StampedEvent];
+    expect(diagnoseCaseReasons(solved, { caseId: 'crypt_last_witness' })).toEqual([]);
+    expect(failureReasons(diagnoseSession(solved, { caseId: 'crypt_last_witness' }))).toEqual([]);
+    // still running → nothing yet
+    expect(diagnoseCaseReasons(t0, { caseId: 'crypt_last_witness' })).toEqual([]);
+  });
+
+  it('works from the result alone (anonymous live rows) and aggregates by case clue titles', () => {
+    const records: SessionRecord[] = [
+      rec('a', 'poisoned_archive', 2, { verdict: 'egg_secured_mystery_unsolved', correct: true, deductionCorrect: false }),
+      rec('b', 'poisoned_archive', 3, { verdict: 'egg_secured_mystery_unsolved', correct: false, deductionCorrect: false }),
+      rec('c', 'crypt_last_witness', 3),
+      rec('d', 'midnight_signal', 3, { verdict: 'not_accused', correct: false, deductionCorrect: false }),
+    ];
+    const a = diagnoseCaseReasons([], { caseId: 'poisoned_archive', result: records[0].result });
+    expect(a.map((x) => x.code)).toEqual(['weak_evidence', 'missed_clue']);
+    expect(a[1].text).toContain('Archive and Greenhouse Access Ledger');
+    const agg = aggregateDiagnostics(records);
+    expect(agg.unsolvedRuns).toBe(3);
+    const by = Object.fromEntries(agg.caseFailures.map((c) => [c.ref ? `${c.code}:${c.ref}` : c.code, c]));
+    expect(by.weak_evidence.count).toBe(1);
+    expect(by.wrong_suspect.count).toBe(1);
+    expect(by.not_accused.count).toBe(1);
+    expect(by['missed_clue:access_ledger']).toMatchObject({ count: 1, caseId: 'poisoned_archive', text: 'Missed “Archive and Greenhouse Access Ledger” (Case 01)' });
+    expect(JSON.stringify(agg.caseFailures)).not.toMatch(/thornhill|isaac|barry/i);
+  });
+
+  it('on bot episodes of each case every unsolved run explains itself with that case\'s clue titles', () => {
+    for (const [i, c] of CASE_IDS.entries()) {
+      for (let k = 0; k < 2; k++) {
+        const ep = episode({ characterId: 'gomez', pokemonId: 'froslass' }, `case-diag-${i}-${k}`, { profile: 'careless', sprintProb: 0.4, accuse: 'guess' }, undefined, c);
+        expect(ep.run.caseDef.id).toBe(c);
+        const r = recordOf(ep);
+        const reasons = diagnoseCaseReasons(r.events, { caseId: c, result: r.result });
+        if (ep.result?.verdict === 'case_solved') expect(reasons).toEqual([]);
+        else expect(reasons.length).toBeGreaterThan(0);
+        const titles = CASES[c].clues.map((x) => x.title);
+        for (const it of reasons.filter((x) => x.code === 'missed_clue')) expect(titles.some((t) => it.text.includes(t))).toBe(true);
+        const d = describeSession({ duo: ep.duo, events: r.events, result: ep.result, caseId: c });
+        expect(d.clues.total).toBe(CASES[c].clues.length);
+        expect(d.clues.missing.map((m) => m.clueId)).toEqual(CASES[c].clues.filter((x) => !ep.result!.cluesFound.includes(x.id)).map((x) => x.id));
+      }
+    }
+  }, 120_000);
+});
+
+describe('board scope policy (LOCAL DEMO and LIVE boards)', () => {
+  it('case-aware as soon as one record has a case id; otherwise combined-only with every record', async () => {
+    const { boardOptions, dashboard } = await import('../../../src/mystery/analytics/index.ts');
+    const legacy = rec('L', null, 3, { verdict: 'case_solved' }, ['transfer_note', 'master_key', 'greenhouse_trace']);
+    const c2 = rec('c2', 'crypt_last_witness', 3);
+    const onlyLegacy = boardOptions([legacy], 'crypt_last_witness');
+    expect(onlyLegacy).toEqual({ caseAware: false, options: { caseId: 'all', legacy: 'include' } });
+    expect(dashboard([legacy], onlyLegacy.options).descriptive.runs).toBe(1);
+    const mixed = boardOptions([legacy, c2], 'crypt_last_witness');
+    expect(mixed).toEqual({ caseAware: true, options: { caseId: 'crypt_last_witness', legacy: 'exclude' } });
+    const d = dashboard([legacy, c2], mixed.options);
+    expect(d.scope).toBe('crypt_last_witness');
+    expect(d.descriptive.runs).toBe(1);
+    expect(d.descriptive.legacyExcluded).toBe(1);
+    expect(d.diagnostic.unsolvedRuns).toBe(0);
+  });
 });

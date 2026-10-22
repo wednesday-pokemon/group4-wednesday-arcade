@@ -1,9 +1,12 @@
 // URL routing for the single deployment:
 //   /                                            "The Silent Evidence" mystery journey (rules mystery-v3.1), LOCAL DEMO:
-//                                                Home → nickname → three duo cards → Thing tutorial → island → results
-//   /?mode=mystery[&character=..&pokemon=..][&seed=..][&tutorial=0]
+//                                                Home → nickname → three duo cards → Thing's prologue → Thing tutorial
+//                                                → island → results
+//   /?mode=mystery[&character=..&pokemon=..][&seed=..][&tutorial=0][&prologue=0][&case=<caseId>]
 //                                                same journey; dev/operator shortcut. A valid Nightshade + Pokémon pair
-//                                                skips straight to the island (tutorial=0 skips the tutorial too); `seed`
+//                                                skips straight to the island (tutorial=0 skips the tutorial too;
+//                                                prologue=0 skips the case-file reveal + Thing's story; case=<caseId>
+//                                                forces that case for this ephemeral session); `seed`
 //                                                alone reproduces that seed's three-card offer. Never persisted.
 //   /?mode=rowing[&character=..&pokemon=..][&tutorial=0]
 //                                                the previous v3.0 real-time rowing journey (kept reachable);
@@ -18,6 +21,8 @@
 //                                                analytics from server rows, operator sign-in + Reset station)
 //   /?mode=dashboard&demo=1                      Laptop 1 MYSTERY dashboard, LOCAL DEMO: sessions finished on this browser
 //   /?mode=dashboard&legacy=1[&demo=1]           legacy v2.5 board (its LOCAL DEMO with demo=1)
+import { isCaseId } from '../mystery/data/cases.ts';
+import type { CaseId } from '../mystery/types.ts';
 import { isCharacterId, isPokemonId, isStationId } from '../game/index.ts';
 import type { CharacterId, PokemonId, StationId } from '../game/index.ts';
 import { NIGHTSHADE_IDS, type NightshadeId } from '../mystery/types.ts';
@@ -29,7 +34,7 @@ export type Route =
   | { kind: 'mystery_live_dashboard' }
   | { kind: 'mystery_station'; stationId: StationId }
   | { kind: 'play'; characterId: CharacterId | null; pokemonId: PokemonId | null; skipTutorial: boolean }
-  | { kind: 'mystery'; characterId: NightshadeId | null; pokemonId: PokemonId | null; seed: string | null; skipTutorial: boolean }
+  | { kind: 'mystery'; characterId: NightshadeId | null; pokemonId: PokemonId | null; seed: string | null; skipTutorial: boolean; skipPrologue: boolean; caseId: CaseId | null }
   | { kind: 'invalid'; message: string };
 
 export function parseRoute(search: string): Route {
@@ -37,7 +42,7 @@ export function parseRoute(search: string): Route {
   const mode = params.get('mode');
   if (mode === null) {
     if (params.get('legacy') === '1') return { kind: 'terminal', stationId: null, forceLocal: true };
-    return { kind: 'mystery', characterId: null, pokemonId: null, seed: null, skipTutorial: false };
+    return { kind: 'mystery', characterId: null, pokemonId: null, seed: null, skipTutorial: false, skipPrologue: false, caseId: null };
   }
   if (mode === 'dashboard') {
     const demo = params.get('demo') === '1';
@@ -55,6 +60,8 @@ export function parseRoute(search: string): Route {
       pokemonId: pair ? (pokemon as PokemonId) : null,
       seed: seed && /^[A-Za-z0-9_-]{1,64}$/.test(seed) ? seed : null,
       skipTutorial: params.get('tutorial') === '0',
+      skipPrologue: params.get('prologue') === '0',
+      caseId: isCaseId(params.get('case')) ? (params.get('case') as CaseId) : null,
     };
   }
   if (mode === 'rowing' || mode === 'play') {

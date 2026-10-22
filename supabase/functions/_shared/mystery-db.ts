@@ -1,7 +1,7 @@
 // mystery-v3.1 data access (service role) + client-facing views. Reads are narrow selects; every write is an RPC.
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.45.4';
 import type { StationId } from './game/index.ts';
-import type { DuoCard, DuoOffer, NightshadeId, PokemonId } from './mystery/types.ts';
+import type { CaseId, DuoCard, DuoOffer, NightshadeId, PokemonId, SuspectId } from './mystery/types.ts';
 import { HttpError } from './errors.ts';
 import {
   RULE_EVENT_TYPES, progressFromRow, progressSummary, type MysteryEventType, type MysteryProgress, type ParsedEvent,
@@ -18,6 +18,8 @@ export interface MysterySessionRow {
   seed: string;
   is_test: boolean;
   nickname: string;
+  case_id: CaseId;
+  case_version: number;
   status: MysteryStatus;
   selected_slot: number | null;
   character_id: NightshadeId | null;
@@ -34,7 +36,7 @@ export interface MysterySessionRow {
 
 // One literal (supabase-js parses select strings at the type level).
 const SESSION_COLUMNS =
-  'id, station_id, rules_version, seed, is_test, nickname, status, selected_slot, character_id, pokemon_id, selected_at, last_seq, last_t, event_count, progress, abandoned_reason, created_at, finalized_at';
+  'id, station_id, rules_version, seed, is_test, nickname, case_id, case_version, status, selected_slot, character_id, pokemon_id, selected_at, last_seq, last_t, event_count, progress, abandoned_reason, created_at, finalized_at';
 
 export interface MysteryResultRow {
   session_id: string;
@@ -43,11 +45,15 @@ export interface MysteryResultRow {
   character_id: NightshadeId;
   pokemon_id: PokemonId;
   rules_version: 'mystery-v3.1';
+  case_id: CaseId;
+  case_version: number;
   outcome: 'finished' | 'dnf';
   dnf_reason: 'second_catch' | 'hp_depleted' | null;
   verdict: 'case_solved' | 'egg_secured_mystery_unsolved' | 'not_accused';
-  accused: 'thornhill' | 'isaac' | 'barry' | null;
+  accused: SuspectId | null;
   correct: boolean;
+  evidence: string[];
+  deduction_correct: boolean;
   clues_found: string[];
   egg_tier: 'common' | 'rare' | 'legendary' | null;
   egg_points: number;
@@ -134,14 +140,19 @@ export async function loadRuleEvents(admin: SupabaseClient, sessionId: string): 
 }
 
 // ------------------------------------------------------------------------------------------------- views
+/** The station's OWN verified result (service role -> owning station only; includes the accusation). */
 export interface MysteryResultView {
   sessionId: string;
   rulesVersion: 'mystery-v3.1';
+  caseId: CaseId;
+  caseVersion: number;
   outcome: 'finished' | 'dnf';
   dnfReason: MysteryResultRow['dnf_reason'];
   verdict: MysteryResultRow['verdict'];
   accused: MysteryResultRow['accused'];
   correct: boolean;
+  evidence: string[];
+  deductionCorrect: boolean;
   cluesFound: string[];
   eggTier: MysteryResultRow['egg_tier'];
   eggPoints: number;
@@ -164,11 +175,15 @@ export function resultView(r: MysteryResultRow): MysteryResultView {
   return {
     sessionId: r.session_id,
     rulesVersion: r.rules_version,
+    caseId: r.case_id,
+    caseVersion: r.case_version,
     outcome: r.outcome,
     dnfReason: r.dnf_reason,
     verdict: r.verdict,
     accused: r.accused,
     correct: r.correct,
+    evidence: r.evidence ?? [],
+    deductionCorrect: r.deduction_correct === true,
     cluesFound: r.clues_found,
     eggTier: r.egg_tier,
     eggPoints: r.egg_points,
@@ -197,6 +212,9 @@ export interface MysterySessionView {
   seed: string;
   nickname: string;
   isTest: boolean;
+  /** The case assigned at creation (never changes; the culprit is NOT part of any session response). */
+  caseId: CaseId;
+  caseVersion: number;
   selected: { characterId: NightshadeId; pokemonId: PokemonId; slot: number } | null;
   lastSeq: number;
   lastT: number;
@@ -225,6 +243,8 @@ export function sessionView(row: MysterySessionRow): MysterySessionView {
     seed: row.seed,
     nickname: row.nickname,
     isTest: row.is_test,
+    caseId: row.case_id,
+    caseVersion: row.case_version,
     selected: row.selected_slot === null || !row.character_id || !row.pokemon_id
       ? null
       : { characterId: row.character_id, pokemonId: row.pokemon_id, slot: row.selected_slot },

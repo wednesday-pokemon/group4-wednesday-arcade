@@ -8,7 +8,7 @@
 //     accusation mode the board is a focus trap that nothing closes.
 // Browser defaults (Tab focus, Space/arrow scroll, F fullscreen hotkey…) are suppressed for game keys; M reaches mute.
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject } from 'react';
-import type { Duo, RoomId, SuspectId } from '../../mystery/types.ts';
+import type { Accusation, CaseDef, Duo, RoomId } from '../../mystery/types.ts';
 import { Button } from '../../ui/components/Button.tsx';
 import type { DuoCardView } from '../../ui/mystery/duoView.ts';
 import { EvidenceBoard } from '../../ui/mystery/EvidenceBoard.tsx';
@@ -19,7 +19,6 @@ import { ThingSigil } from '../../ui/components/ThingSigil.tsx';
 import { markScreenMounted } from '../keyboard.ts';
 import { useSettings } from '../settings.ts';
 import type { MysteryAction, MysteryOverlay, MysteryScreen } from './flow.ts';
-import { caseDef as registryCase } from './integration.ts';
 import { GAME_CODES } from './input.ts';
 import { appendRecord, browserStorage } from './records.ts';
 import { useMysteryLoop, type AutopilotProfile } from './useMysteryLoop.ts';
@@ -40,6 +39,10 @@ declare global {
 export interface PlayViewProps {
   duo: Duo;
   seed: string;
+  /** The session's assigned case (public definition). */
+  caseDef: CaseDef;
+  /** LIVE station: never expose the seed in debug output. */
+  hideSeed?: boolean;
   card: DuoCardView;
   screen: MysteryScreen;
   overlay: MysteryOverlay;
@@ -75,6 +78,8 @@ export default function PlayView(p: PlayViewProps) {
   const loop = useMysteryLoop(container, {
     duo: p.duo,
     seed: p.seed,
+    caseDef: p.caseDef,
+    hideSeed: p.hideSeed,
     tutorial: p.tutorial,
     paused,
     inputEnabled,
@@ -248,8 +253,8 @@ export default function PlayView(p: PlayViewProps) {
   };
 
   const run = loop.run();
-  const caseDef = run?.caseDef ?? registryCase();
-  const roomName = (id: RoomId) => run?.map.rooms.find((x) => x.id === id)?.name ?? ROOM_FALLBACK[id];
+  const caseDef = run?.caseDef ?? p.caseDef;
+  const roomName = (id: RoomId) => run?.map.rooms.find((x) => x.id === id)?.name ?? p.caseDef.roomNames[id] ?? ROOM_FALLBACK[id];
 
   // Tutorial signals from real state.
   const startPos = useRef<{ x: number; z: number } | null>(null);
@@ -332,7 +337,7 @@ export default function PlayView(p: PlayViewProps) {
             roomName={roomName}
             mode={p.screen === 'accusing' ? 'accuse' : 'review'}
             onClose={() => p.dispatch({ type: 'closeOverlay' })}
-            onAccuse={(s: SuspectId | null) => loop.accuse(s)}
+            onAccuse={(a: Accusation) => void loop.accuse(a)}
           />
         </div>
       )}

@@ -3,7 +3,7 @@
   "private": true,
   "version": "2.5.0",
   "type": "module",
-  "description": "Escape from Raven Island: The Hyde's Regatta - Pokemon Day III Halloween Arcade (GDD v2.5)",
+  "description": "Nevermore: Deadly Secrets - A Nevermore Mystery - Pokemon Day III Halloween Arcade (rules mystery-v3.1)",
   "scripts": {
     "dev": "vite --host",
     "build": "npm run sync:shared && tsc --noEmit -p tsconfig.json && vite build",

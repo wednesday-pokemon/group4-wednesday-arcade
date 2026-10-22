@@ -10,7 +10,7 @@
 /* ---------- Splash ---------- */
 .screen--splash { grid-template-rows: auto 1fr; align-items: center; }
 .splash__col { max-width: 40rem; display: grid; gap: var(--sp-4); align-content: center; animation: rise-in var(--dur-3) var(--ease-out); }
-.splash__title { font-size: var(--fs-3xl); text-transform: uppercase; }
+.splash__title { font-size: var(--fs-3xl); text-transform: uppercase; color: var(--c-title-silver); text-shadow: 0 0 18px rgba(227, 226, 242, 0.25); }
 .splash__title-2 { display: block; color: var(--c-lantern); }
 .splash__subtitle { font: var(--fw-semi) var(--fs-xl) / var(--lh-snug) var(--font-display); color: var(--c-text-2); margin-top: calc(var(--sp-2) * -1); }
 .splash__steps { display: grid; gap: var(--sp-3); }

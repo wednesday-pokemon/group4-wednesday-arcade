@@ -8,16 +8,18 @@ import { duoFactorsFromRun } from '../../../src/mystery/analytics/state.ts';
 import { eventFromRow, TelemetryCollector, thinForUpload } from '../../../src/mystery/analytics/telemetry.ts';
 import { dashboard } from '../../../src/mystery/analytics/index.ts';
 import { Bot } from '../../../src/mystery/bot.ts';
+import { CASES } from '../../../src/mystery/data/cases.ts';
+import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
 import { MysteryRun } from '../../../src/mystery/run.ts';
-import type { Duo, StampedEvent } from '../../../src/mystery/types.ts';
+import { CASE_IDS, type CaseId, type Duo, type StampedEvent } from '../../../src/mystery/types.ts';
 import { NAMED_DUOS, episode, stamp } from './helpers.ts';
 
 const SID = '6f1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b';
 const RULE_TYPES = new Set(['clue_found', 'egg_pickup', 'egg_drop', 'egg_damage', 'egg_delivered', 'catch', 'accusation', 'finish', 'dnf', 'hyde_sighted', 'hint_requested', 'hyde_mode', 'hyde_heard', 'stance', 'ability_used']);
 
 /** Plays a run through run.update like the app does, pressing V every `hintEveryS` seconds. */
-function playLikeApp(duo: Duo, seed: string, hintEveryS = 12, model?: unknown) {
-  const run = new MysteryRun({ duo, seed, tutorial: true });
+function playLikeApp(duo: Duo, seed: string, hintEveryS = 12, model?: unknown, caseId?: CaseId) {
+  const run = new MysteryRun({ duo, seed, tutorial: true, ...(caseId ? { caseDef: CASES[caseId] } : {}) });
   const analytics = model === undefined ? createMysteryAnalytics(run, { sessionId: SID, stationId: 'station_a' }) : new MysteryAnalytics(run, { sessionId: SID, model });
   const bot = new Bot(run, { profile: 'careless', sprintProb: 0.5, useAbilities: true, startDelayMaxS: 0 }, seed);
   // a little tutorial input (seq 0 events must be ignored)
@@ -31,7 +33,7 @@ function playLikeApp(duo: Duo, seed: string, hintEveryS = 12, model?: unknown) {
     if (hint) nextHint += hintEveryS;
     outputs.push(analytics.frame(run, run.update(1 / 60, { ...input, hint })));
   }
-  if (run.status === 'accusing') outputs.push(analytics.frame(run, run.accuse(bot.accusation())));
+  if (run.status === 'accusing') outputs.push(analytics.frame(run, run.accuse(bot.accusation(), CASE_SOLUTIONS[run.caseDef.id])));
   return { run, analytics, outputs };
 }
 
@@ -66,13 +68,15 @@ describe('TelemetryCollector', () => {
     const c = ep.collector;
     const sent: StampedEvent[] = [];
     let batches = 0;
-    for (let b = c.pendingBatch(200); b; b = c.pendingBatch(200)) {
+    // batch size relative to this episode's upload so it always needs several batches (episode length is seed-dependent)
+    const size = Math.max(10, Math.ceil(thinForUpload(c.events).length / 4));
+    for (let b = c.pendingBatch(size); b; b = c.pendingBatch(size)) {
       batches++;
-      expect(b.events.length).toBeLessThanOrEqual(200);
+      expect(b.events.length).toBeLessThanOrEqual(size);
       const body = parseMysteryAppend({ sessionId: SID, events: b.events, forecasts: b.forecasts, recommendations: b.recommendations });
       expect(body.events.length).toBe(b.events.length);
       // retry before ack returns the same batch
-      expect(c.pendingBatch(200)?.events.map((e) => e.seq)).toEqual(b.events.map((e) => e.seq));
+      expect(c.pendingBatch(size)?.events.map((e) => e.seq)).toEqual(b.events.map((e) => e.seq));
       sent.push(...b.events);
       c.ackBatch(b);
     }
@@ -127,6 +131,39 @@ describe('MysteryAnalytics (app wiring)', () => {
       expect(d.predictive.live.n).toBeGreaterThan(0);
     }
   }, 120_000);
+
+  it('is case-aware end to end: meta, report, session record, forecasts and the per-case dashboard', () => {
+    const records = [];
+    for (const [i, caseId] of CASE_IDS.entries()) {
+      const { run, analytics } = playLikeApp(NAMED_DUOS[i], `app-case-${i}`, 15, undefined, caseId);
+      expect(analytics.caseId).toBe(caseId);
+      expect(analytics.caseVersion).toBe(CASES[caseId].version);
+      expect(analytics.collector.meta).toMatchObject({ caseId, caseVersion: CASES[caseId].version });
+      const rep = analytics.report();
+      expect(rep.descriptive.caseId).toBe(caseId);
+      expect(rep.descriptive.clues.total).toBe(CASES[caseId].clues.length);
+      const res = run.result()!;
+      expect(rep.descriptive.accusation.kind).toBe(
+        res.outcome === 'dnf' ? 'dnf' : res.verdict === 'case_solved' ? 'solved' : res.verdict === 'not_accused' ? 'not_accused' : res.correct ? 'right_suspect_wrong_evidence' : 'wrong_suspect',
+      );
+      if (res.verdict !== 'case_solved') expect(rep.diagnostic.reasons.length).toBeGreaterThan(0);
+      else expect(rep.diagnostic.caseReasons).toEqual([]);
+      const rec = analytics.sessionRecord();
+      expect(rec).toMatchObject({ caseId, caseVersion: CASES[caseId].version });
+      expect(rec.result).toMatchObject({ caseId, correct: res.correct, deductionCorrect: res.deductionCorrect });
+      expect(JSON.stringify(rec.result)).not.toContain('accused');
+      records.push(rec);
+    }
+    const d = dashboard(records);
+    expect(d.scope).toBe('all');
+    expect(d.descriptive.cases.map((c) => [c.caseId, c.runs])).toEqual(CASE_IDS.map((id) => [id, 1]));
+    expect(dashboard(records, { caseId: 'crypt_last_witness' }).descriptive.runs).toBe(1);
+    // a legacy (case-less) record is excluded from every case view, and counted as such
+    const legacy = { ...records[0], sessionId: 'old', caseId: undefined, result: { ...records[0].result!, caseId: undefined } };
+    const withLegacy = dashboard([...records, legacy]);
+    expect(withLegacy.descriptive.runs).toBe(3);
+    expect(withLegacy.descriptive.legacyExcluded).toBe(1);
+  }, 180_000);
 
   it('without a model every surface says "Rule-based risk estimate"', () => {
     const { analytics } = playLikeApp({ characterId: 'wednesday', pokemonId: 'gengar' }, 'app-rule', 20, null);

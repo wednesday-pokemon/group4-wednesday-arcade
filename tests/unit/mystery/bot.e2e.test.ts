@@ -1,7 +1,7 @@
 // End-to-end: the scripted bot plays full visits on buildIsland() (3 clues → egg → Iago Tower → accusation).
 import { describe, expect, it } from 'vitest';
 import { allPairs } from '../../../src/mystery/draft.ts';
-import { playEpisode, type BotEpisode } from '../../../src/mystery/bot.ts';
+import { playEpisode, type BotEpisode } from '../../../src/mystery/episode.ts';
 import { NIGHTSHADE_IDS } from '../../../src/mystery/types.ts';
 import { POKEMON_IDS } from '../../../src/mystery/draft.ts';
 

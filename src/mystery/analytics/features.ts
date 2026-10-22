@@ -1,10 +1,13 @@
 // Feature extraction for the predictive models. ONE definition shared by data generation, training, evaluation and the
 // live service, so train/serve skew is impossible. Inputs are only what is known at time t: the StateSnapshot, the
 // previous snapshot (1 s earlier), the perceivable LiveContext and the duo's NUMBERS (PlayMods, derived card stats and
-// which effect kinds its own F / Q carry). No character or Pokémon ids are features.
+// which effect kinds its own F / Q carry). No character or Pokémon ids are features. Case awareness: the clue count is
+// normalised by the run's OWN case clue count, and `case_<id>` indicators (appended dynamically, like `room_<id>`) let
+// the model learn the per-case layout (where the clues and the egg lie); no feature reads the answer key.
 import { DEFAULT_TUNING } from '../config.ts';
 import { hearingRadius } from '../noise.ts';
-import type { StateSnapshot } from '../types.ts';
+import type { CaseId, StateSnapshot } from '../types.ts';
+import { caseLabel, LEGACY_CLUE_COUNT } from './caseInfo.ts';
 import { CONTROL_KINDS, ESCAPE_KINDS, clamp, hasKind } from './state.ts';
 import type { DuoFactors, LiveContext } from './types.ts';
 
@@ -56,6 +59,15 @@ export interface FeatureInput {
   prev: StateSnapshot | null;
   context: LiveContext | null;
   duo: DuoNumbers;
+  /** The case being played (null / absent = unknown → no case indicator is on). */
+  caseId?: CaseId | null;
+  /** The case's clue count (default 3 = every case and the legacy case). */
+  clueTotal?: number;
+}
+
+/** Clue count used to normalise the `clues` feature. */
+export function clueTotalOf(x: FeatureInput): number {
+  return x.clueTotal && x.clueTotal > 0 ? x.clueTotal : LEGACY_CLUE_COUNT;
 }
 
 const MAX_HP = DEFAULT_TUNING.player.maxHp;
@@ -96,7 +108,7 @@ export const FEATURES: Record<string, FeatureFn> = {
   egg_carried: (x) => b(x.snapshot.eggState === 'carried'),
   egg_dropped: (x) => b(x.snapshot.eggState === 'dropped'),
   eggSecurity: (x) => x.snapshot.eggSecurity / 100,
-  clues: (x) => x.snapshot.cluesFound / 3,
+  clues: (x) => Math.min(1, x.snapshot.cluesFound / clueTotalOf(x)),
   obj_find_egg: (x) => b(x.snapshot.objective === 'find_egg'),
   obj_retrieve_egg: (x) => b(x.snapshot.objective === 'retrieve_egg'),
   obj_deliver_egg: (x) => b(x.snapshot.objective === 'deliver_egg'),
@@ -124,13 +136,14 @@ export const ETA_EXTRA: Record<string, FeatureFn> = {
 export const BASE_FEATURE_NAMES: readonly string[] = Object.keys(FEATURES);
 
 export function isKnownFeature(name: string): boolean {
-  return name in FEATURES || name in ETA_EXTRA || /^room_[a-z0-9_]{1,40}$/.test(name);
+  return name in FEATURES || name in ETA_EXTRA || /^(room|case)_[a-z0-9_]{1,40}$/.test(name);
 }
 
 export function featureValue(name: string, x: FeatureInput): number {
   const f = FEATURES[name] ?? ETA_EXTRA[name];
   if (f) return f(x);
   if (name.startsWith('room_')) return b(x.snapshot.roomId === name.slice(5));
+  if (name.startsWith('case_')) return b(x.caseId === name.slice(5));
   return 0;
 }
 
@@ -167,7 +180,7 @@ export function featureLabel(name: string, x: FeatureInput, raises: boolean): st
     case 'egg_carried': return s.eggState === 'carried' ? 'Carrying the egg' : 'Not carrying the egg';
     case 'egg_dropped': return 'The egg is on the ground';
     case 'eggSecurity': return `Egg security ${Math.round(s.eggSecurity)}`;
-    case 'clues': return `${s.cluesFound} of 3 clues found`;
+    case 'clues': return `${s.cluesFound} of ${clueTotalOf(x)} clues found`;
     case 'obj_find_egg': return 'Heading for the egg';
     case 'obj_retrieve_egg': return 'Going back for the dropped egg';
     case 'obj_deliver_egg': return 'Carrying the egg to the tower';
@@ -175,6 +188,7 @@ export function featureLabel(name: string, x: FeatureInput, raises: boolean): st
       return raises ? 'Abilities are cooling down' : 'An ability is ready';
     default:
       if (name.startsWith('duo_') || name.startsWith('stat_')) return 'Your duo’s traits';
+      if (name.startsWith('case_')) return `The layout of ${caseLabel(x.caseId)}`;
       if (name.startsWith('room_')) return `You are in the ${name.slice(5).split('_').map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(' ')}`;
       return name;
   }

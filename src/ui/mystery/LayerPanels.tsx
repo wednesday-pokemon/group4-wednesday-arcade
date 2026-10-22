@@ -1,7 +1,10 @@
 // The four game-wide analytics LayerPanels on the results screen (UX_MYSTERY §6 AnalyticsGrid). They only PRESENT
-// what src/mystery/analytics computed for this run (any duo): no placeholder numbers — when the report is missing
-// each panel says "Analytics unavailable for this run".
-import type { ResultsAnalytics, TimelineMark } from '../../mystery/analytics/index.ts';
+// what src/mystery/analytics computed for this run (any duo, any case): no placeholder numbers — when the report is
+// missing each panel says "Analytics unavailable for this run". Clue counts are out of THIS case's clues; the
+// diagnostic panel leads with why the case was not solved (incorrect deduction, missed clues by case-file title) and
+// then the stealth causes. Shown after the accusation only; nothing here names a suspect.
+import type { DiagnosticItem, ResultsAnalytics, TimelineMark } from '../../mystery/analytics/index.ts';
+import { ThingSigil } from '../components/ThingSigil.tsx';
 import { Icon, type IconName } from '../Icon.tsx';
 
 interface Layer { key: 'descriptive' | 'diagnostic' | 'predictive' | 'prescriptive'; name: string; q: string; icon: IconName; color: string }
@@ -18,7 +21,9 @@ export function LayerPanels({ report }: { report: ResultsAnalytics | null }) {
     <section className="mys-analytics" aria-label="The four analytics">
       {LAYERS.map((l) => (
         <article key={l.key} className="layer-panel" style={{ ['--layer' as string]: l.color }} data-testid={`analytics-${l.key}`} data-filled={report ? true : undefined}>
-          <p className="layer-panel__badge"><Icon name={l.icon} /> {l.name}</p>
+          <p className="layer-panel__badge">
+            {l.key === 'prescriptive' ? <ThingSigil size={24} pose="point" label="Thing" /> : <Icon name={l.icon} />} {l.name}
+          </p>
           <h2 className="layer-panel__q">{l.q}</h2>
           {!report ? (
             <p className="layer-panel__empty text-2">Analytics unavailable for this run</p>
@@ -81,10 +86,25 @@ const MARK_GLYPH: Record<TimelineMark['kind'], { shape: 'dot' | 'diamond' | 'bar
   ability: { shape: 'dot', cls: 'accent' }, hint: { shape: 'dot', cls: 'accent' }, end: { shape: 'bar', cls: 'muted' },
 };
 
+/** Case-rule rows: the accusation outcome, then ONE row listing every missed clue of the case (by title). */
+function caseRows(r: ResultsAnalytics): DiagnosticItem[] {
+  const items = r.diagnostic.caseReasons ?? [];
+  const outcome = items.filter((it) => it.code !== 'missed_clue');
+  const missed = items.filter((it) => it.code === 'missed_clue');
+  if (missed.length === 0) return outcome;
+  const titles = r.descriptive.clues.missing.map((m) => `“${m.title}”`);
+  const t = missed[0]!.t;
+  const text = `${fmtT(t)} · Missed ${titles.length === 1 ? 'clue' : `${titles.length} clues`}: ${titles.join(', ')} — a solved case needs all ${r.descriptive.clues.total}.`;
+  return [...outcome, { ...missed[0]!, text, evidenceSeq: missed[0]!.evidenceSeq }];
+}
+
 function Diagnostic({ r }: { r: ResultsAnalytics }) {
   const d = r.diagnostic;
   const end = Math.max(1, r.descriptive.activeTimeS, ...d.timeline.map((m) => m.t));
-  const rows = [...d.top.slice(0, d.topPattern ? 2 : 3), ...(d.topPattern ? [d.topPattern] : [])];
+  const cases = caseRows(r);
+  const room = Math.max(1, 4 - cases.length);
+  const causes = d.top.slice(0, d.topPattern ? Math.max(0, room - 1) : room);
+  const rows = [...cases, ...causes, ...(d.topPattern && causes.length < room ? [d.topPattern] : [])].slice(0, 4);
   return (
     <div className="lp-diag">
       <svg className="lp-timeline" viewBox="0 0 380 40" preserveAspectRatio="none" role="img" aria-label="Timeline of this run" data-testid="diag-timeline">
@@ -99,12 +119,12 @@ function Diagnostic({ r }: { r: ResultsAnalytics }) {
         })}
       </svg>
       {rows.length === 0 ? (
-        <p className="lp-line text-2">No Hyde alerts were caused this run.</p>
+        <p className="lp-line text-2">Case solved and no Hyde alerts were caused this run.</p>
       ) : (
         <ul className="lp-rows">
           {rows.map((it) => (
-            <li key={`${it.kind}-${it.t}-${it.code}`} className="lp-row">
-              <span className={`lp-badge lp-badge--${it.kind}`}>{it.kind === 'cause' ? 'Cause' : '≈ Pattern'}</span>
+            <li key={`${it.kind}-${it.t}-${it.code}`} className="lp-row" data-kind={it.kind}>
+              <span className={`lp-badge lp-badge--${it.kind}`}>{it.kind === 'cause' ? 'Cause' : it.kind === 'case' ? 'Case' : '≈ Pattern'}</span>
               {/* the service's text already starts with the m:ss time */}
               <span className="lp-row__text">{it.text}</span>
             </li>
@@ -139,9 +159,7 @@ function Prescriptive({ r }: { r: ResultsAnalytics }) {
   const p = r.prescriptive;
   return (
     <div className="lp-presc">
-      {p.rows.length === 0 ? (
-        <p className="lp-line text-2">Thing gave no advice this run.</p>
-      ) : (
+      {p.rows.length > 0 && (
         <ul className="lp-rows">
           {p.rows.slice(-3).map((row) => (
             <li key={`${row.t}-${row.action}`} className="lp-row">

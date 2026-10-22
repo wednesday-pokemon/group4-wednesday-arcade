@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Opens Escape from Raven Island in a locked-down Chrome/Edge window for one of the three event laptops.
+  Opens Nevermore: Deadly Secrets in a locked-down Chrome/Edge window for one of the three event laptops.
 
 .DESCRIPTION
   Per-user, per-run only: nothing is installed, no registry or system setting is changed. Each role gets its own

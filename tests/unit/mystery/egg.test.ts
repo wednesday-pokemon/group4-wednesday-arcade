@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_TUNING } from '../../../src/mystery/config.ts';
 import { eggTierForSeed, EGG_TIERS } from '../../../src/mystery/scoring.ts';
 import type { MysteryRun } from '../../../src/mystery/run.ts';
-import { hold, makeRun, place } from './helpers.ts';
+import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
+import { CASE, hold, makeRun, place } from './helpers.ts';
 
 function carrying(): MysteryRun {
   const run = makeRun({ fixture: { hydeStart: { x: 15, z: 15, yaw: 0 }, patrol: [{ x: 15, z: 15 }] } });
@@ -97,15 +98,19 @@ describe('egg carry / drop / deposit', () => {
     expect(run.update(1, run_input({ moveZ: 1, interact: true }))).toEqual([]);
     expect(run.t).toBe(tAt);
     expect(run.log.filter((e) => e.type === 'egg_delivered')).toHaveLength(1);
-    const acc = run.accuse('thornhill');
+    const sol = CASE_SOLUTIONS[CASE.id];
+    const acc = run.accuse({ suspectId: sol.culprit, evidence: [...sol.supportingEvidence] }, sol);
     expect(acc.map((e) => e.type)).toEqual(['accusation', 'finish']);
-    expect(run.accuse('isaac')).toEqual([]);
+    // no clue was found: the uncitable clue ids are dropped from the recorded evidence
+    expect(acc[0]).toMatchObject({ type: 'accusation', suspectId: sol.culprit, correct: true, cluesFound: 0, evidence: [], deductionCorrect: false });
+    expect(run.accuse({ suspectId: 'isaac', evidence: [] }, sol)).toEqual([]);
     expect(run.status).toBe('finished');
     const r = run.result()!;
     expect(r.activeTimeS).toBeCloseTo(101, 0);
     expect(r.eggPoints).toBe(run.egg.points);
     expect(r.score).toBeCloseTo(run.egg.points * 100 - r.activeTimeS, 5);
     expect(r.verdict).toBe('egg_secured_mystery_unsolved'); // no clues found
+    expect(r).toMatchObject({ caseId: CASE.id, caseVersion: CASE.version, accused: sol.culprit, correct: true, deductionCorrect: false, evidence: [] });
   });
 
   it('walking out of the tower cancels the deposit', () => {
@@ -124,13 +129,13 @@ describe('clue search', () => {
     run.hydeBrain.active = false;
     place(run, -15, 11.2, 0);
     const ev = hold(run, 0.05, { interact: true });
-    expect(ev.find((e) => e.type === 'clue_search_start')).toMatchObject({ clueId: 'transfer_note' });
+    expect(ev.find((e) => e.type === 'clue_search_start')).toMatchObject({ clueId: 'falsified_transfer' });
     hold(run, 1);
     expect(run.player.interacting!.progress).toBeGreaterThan(0.35);
     run.player.yaw = Math.PI; // walk away (+Z)
     hold(run, 1.5, { moveZ: 1 });
     expect(run.player.interacting).toBeNull();
-    const prog = run.interaction.clueProgress.get('transfer_note')!;
+    const prog = run.interaction.clueProgress.get('falsified_transfer')!;
     expect(prog).toBeGreaterThan(0.35);
     expect(prog).toBeLessThan(1);
     expect(run.cluesFound).toHaveLength(0);
@@ -138,7 +143,7 @@ describe('clue search', () => {
     hold(run, 0.05, { interact: true });
     expect(run.player.interacting!.progress).toBeCloseTo(prog, 1);
     const done = hold(run, 2.5 * (1 - prog) + 0.1);
-    expect(done.find((e) => e.type === 'clue_found')).toMatchObject({ clueId: 'transfer_note', cluesFound: 1 });
+    expect(done.find((e) => e.type === 'clue_found')).toMatchObject({ clueId: 'falsified_transfer', cluesFound: 1 });
     expect(run.interactable()).toBeNull();
   });
 

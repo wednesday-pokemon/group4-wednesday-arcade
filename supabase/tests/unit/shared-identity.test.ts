@@ -55,8 +55,18 @@ describe('shared module copies are identical to their sources', () => {
 
   it('the generated registry binding matches the data that is present', () => {
     const binding = readFileSync(join(SHARED, 'mystery-registry.generated.ts'), 'utf8');
-    const dataPresent = ['nightshades.ts', 'partners.ts', 'case.ts'].every((f) => existsSync(join(ROOT, 'src/mystery/data', f)));
-    expect(binding.includes('caseDef: SILENT_EVIDENCE')).toBe(dataPresent);
+    const dataPresent = ['nightshades.ts', 'partners.ts', 'cases.ts', 'solutions.ts'].every((f) => existsSync(join(ROOT, 'src/mystery/data', f)));
+    expect(dataPresent, 'the three-case data + answer keys are present').toBe(true);
+    expect(binding.includes('cases: CASES, solutions: CASE_SOLUTIONS')).toBe(dataPresent);
+    expect(binding).toContain("import { CASES } from './mystery/data/cases.ts';");
+    expect(binding).toContain("import { CASE_SOLUTIONS } from './mystery/data/solutions.ts';");
+    expect(binding, 'the deleted single-case registry must not be bound any more').not.toContain('SILENT_EVIDENCE');
     expect(binding.includes('DEFAULT_TUNING.egg')).toBe(existsSync(join(ROOT, 'src/mystery/config.ts')));
+  });
+
+  it('the answer keys are shipped to the functions (server only) together with the public case data', () => {
+    expect(existsSync(join(SHARED, 'mystery/data/solutions.ts'))).toBe(true);
+    expect(existsSync(join(SHARED, 'mystery/data/cases.ts'))).toBe(true);
+    expect(existsSync(join(SHARED, 'mystery/data/case.ts')), 'stale copy of the deleted data/case.ts').toBe(false);
   });
 });

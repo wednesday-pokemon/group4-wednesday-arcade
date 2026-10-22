@@ -7,10 +7,11 @@ import { dashboard } from '../../src/mystery/analytics/index.ts';
 import { createLiveController } from '../../src/app/mystery/liveRun.ts';
 import type { LiveStatus } from '../../src/app/mystery/records.ts';
 import type { MysteryBoardSnapshot } from '../../src/lib/supabase/mysteryDashboardFeed.ts';
-import { orderStandings, type MysteryStandingRow } from '../../src/lib/supabase/mysteryWire.ts';
+import { orderStandings, standingsForCase, type MysteryStandingRow } from '../../src/lib/supabase/mysteryWire.ts';
+import type { CaseId } from '../../src/mystery/types.ts';
 import {
-  FakeSupabaseServer, MYSTERY_DNF_SEED, MYSTERY_FINISH_SEED, ManualTimers, OPERATOR, driveRun, openMysteryBoard,
-  openMysteryStation, settle, stationCredentials,
+  ANON_KEY, FakeSupabaseServer, MYSTERY_DNF_CASE, MYSTERY_DNF_SEED, MYSTERY_FINISH_SEED, ManualTimers, OPERATOR, driveRun,
+  openMysteryBoard, openMysteryStation, settle, stationCredentials,
 } from './fakeSupabase.ts';
 
 async function kiosk(server: FakeSupabaseServer, stationId: StationId) {
@@ -27,8 +28,12 @@ const status = (stationId: string, phase: LiveStatus['phase']): LiveStatus => ({
   activeTimeS: null, updatedAt: 0,
 });
 
-async function play(server: FakeSupabaseServer, k: Awaited<ReturnType<typeof kiosk>>, stationId: StationId, seed: string, nickname: string, profile: 'stealthy' | 'careless') {
+async function play(
+  server: FakeSupabaseServer, k: Awaited<ReturnType<typeof kiosk>>, stationId: StationId, seed: string, nickname: string,
+  profile: 'stealthy' | 'careless', caseId?: CaseId,
+) {
   server.nextMysterySeeds.push(seed);
+  if (caseId) server.nextMysteryCases.push(caseId);
   const offered = await k.controller.createSession(nickname);
   const chosen = await k.controller.selectDuo(offered.offer.cards[0]!);
   const { run } = await driveRun(k.controller, chosen, { stationId, timers: k.timers, profile });
@@ -55,8 +60,8 @@ describe('mystery live board', () => {
     let last = snaps.at(-1)!;
     expect(last.stations.map((s) => [s.heartbeat?.phase, s.signalLost])).toEqual([['name', false], ['name', false]]);
 
-    const dnf = await play(server, b, 'station_b', MYSTERY_DNF_SEED, 'Bravo Bo', 'careless');
-    const fin = await play(server, a, 'station_a', MYSTERY_FINISH_SEED, 'Alpha Al', 'stealthy');
+    const dnf = await play(server, b, 'station_b', MYSTERY_DNF_SEED, 'Bravo Bo', 'careless', MYSTERY_DNF_CASE);
+    const fin = await play(server, a, 'station_a', MYSTERY_FINISH_SEED, 'Alpha Al', 'stealthy', 'crypt_last_witness');
     expect(dnf.run.status).toBe('dnf');
     expect(fin.run.status).toBe('finished');
     expect(dnf.final.kind).toBe('verified');
@@ -67,15 +72,27 @@ describe('mystery live board', () => {
     last = snaps.at(-1)!;
     // Live station status rows (server-written) for both stations.
     const byId = Object.fromEntries(last.stations.map((s) => [s.stationId, s]));
-    expect(byId.station_a!.row).toMatchObject({ status: 'finished', nickname: 'Alpha Al' });
-    expect(byId.station_b!.row).toMatchObject({ status: 'dnf', nickname: 'Bravo Bo' });
+    expect(byId.station_a!.row).toMatchObject({ status: 'finished', nickname: 'Alpha Al', case_id: 'crypt_last_witness' });
+    expect(byId.station_b!.row).toMatchObject({ status: 'dnf', nickname: 'Bravo Bo', case_id: MYSTERY_DNF_CASE });
     // Standings: the finisher (ranked) above the DNF (unranked), even though the DNF finalized first.
     expect(last.standings.map((r) => [r.nickname, r.outcome, r.rank])).toEqual([['Alpha Al', 'finished', 1], ['Bravo Bo', 'dnf', null]]);
+    // Per case: each run is on its own case board (case_id on every standings row).
+    expect(last.standings.map((r) => r.case_id)).toEqual(['crypt_last_witness', MYSTERY_DNF_CASE]);
+    expect(last.standingsByCase.crypt_last_witness.map((r) => [r.nickname, r.rank])).toEqual([['Alpha Al', 1]]);
+    expect(last.standingsByCase[MYSTERY_DNF_CASE].map((r) => [r.nickname, r.rank])).toEqual([['Bravo Bo', null]]);
+    expect(last.standingsByCase.midnight_signal).toEqual([]);
+    // Public rows never carry who was accused or the cited evidence (column privileges; Realtime drops them too).
+    const publicJson = JSON.stringify(last);
+    expect(publicJson).not.toMatch(/"accused"|"evidence"|"client_claim"|"culprit"/);
+    const inserts = server.realtime.log.filter((e) => e.table === 'mystery_results' && e.eventType === 'INSERT');
+    expect(inserts).toHaveLength(2);
+    for (const e of inserts) for (const k of ['accused', 'evidence', 'client_claim']) expect(e.row).not.toHaveProperty(k);
+    expect(last.records.map((r) => r.caseId).sort()).toEqual(['crypt_last_witness', MYSTERY_DNF_CASE].sort());
     // Anonymous board: results-level records only (RLS hides events / offers / advice).
     expect(last.detailed).toBe(false);
     expect(last.records).toHaveLength(2);
     expect(last.records.every((r) => r.events.length === 0)).toBe(true);
-    const anon = dashboard(last.records, ['transfer_note', 'master_key', 'greenhouse_trace']);
+    const anon = dashboard(last.records);
     expect(anon.descriptive.finished).toBe(1);
     expect(anon.descriptive.dnf).toBe(1);
 
@@ -89,7 +106,7 @@ describe('mystery live board', () => {
     expect(finRec.events.length).toBeGreaterThan(10);
     expect(finRec.events.some((e) => e.type === 'clue_found')).toBe(true);
     expect(finRec.offered).toHaveLength(3);
-    const full = dashboard(last.records, ['transfer_note', 'master_key', 'greenhouse_trace']);
+    const full = dashboard(last.records);
     expect(full.descriptive.pickRate.characters.some((p) => p.offered > 0)).toBe(true);
     expect(full.descriptive.stanceMix.walk + full.descriptive.stanceMix.crouch + full.descriptive.stanceMix.sprint).toBeGreaterThan(0);
 
@@ -112,6 +129,39 @@ describe('mystery live board', () => {
     a.controller.dispose();
     b.controller.dispose();
   }, 120_000);
+
+  it('anon / station REST can never select accused, evidence or client_claim; operators read them via mystery_result_audit', async () => {
+    const server = new FakeSupabaseServer();
+    const k = await kiosk(server, 'station_a');
+    const played = await play(server, k, 'station_a', MYSTERY_FINISH_SEED, 'Secret Sue', 'stealthy');
+    expect(played.final.kind).toBe('verified');
+    const rest = (path: string, token = ANON_KEY) => server.fetch(`${server.origin}/rest/v1/${path}`, {
+      headers: { apikey: ANON_KEY, authorization: `Bearer ${token}` },
+    });
+    for (const col of ['accused', 'evidence', 'client_claim', '*']) {
+      const res = await rest(`mystery_results?select=session_id,${col}`);
+      expect(res.ok, `anon select ${col}`).toBe(false);
+      expect((await res.json()).code).toBe('42501');
+    }
+    const okRes = await rest('mystery_results?select=session_id,case_id,verdict,correct,deduction_correct');
+    expect(await okRes.json()).toEqual([expect.objectContaining({ case_id: played.final.kind === 'verified' ? played.final.response.result.caseId : null })]);
+    expect((await rest('mystery_result_audit?select=accused')).ok).toBe(false);
+    expect((await rest('mystery_case_bags?select=bag')).ok).toBe(false);
+    // a station account: still no secret columns; zero audit rows
+    const token = async (email: string, password: string) => (await (await server.fetch(`${server.origin}/auth/v1/token?grant_type=password`, {
+      method: 'POST', headers: { apikey: ANON_KEY, 'content-type': 'application/json' }, body: JSON.stringify({ email, password }),
+    })).json() as { access_token: string }).access_token;
+    const station = await token(stationCredentials('station_a').email, stationCredentials('station_a').password);
+    expect((await rest('mystery_results?select=session_id,accused', station)).ok).toBe(false);
+    expect(await (await rest('mystery_result_audit?select=session_id,accused', station)).json()).toEqual([]);
+    // the operator reads the audit view (accused + sanitized evidence)
+    const op = await token(OPERATOR.email, OPERATOR.password);
+    const audit = await (await rest('mystery_result_audit?select=session_id,accused,evidence', op)).json() as { session_id: string; accused: string; evidence: string[] }[];
+    expect(audit).toEqual([expect.objectContaining({ session_id: played.sessionId })]);
+    expect(audit[0]!.evidence).toHaveLength(3);
+    expect(typeof audit[0]!.accused).toBe('string');
+    k.controller.dispose();
+  }, 60_000);
 
   it('drops forged heartbeats (wrong shape / unknown station / free text) and never shows their text', async () => {
     const server = new FakeSupabaseServer();
@@ -151,11 +201,11 @@ describe('mystery live board', () => {
 
 describe('standings order (pure, same as the SQL view)', () => {
   it('every finisher — negative scores included — ranks above every DNF; DNFs longest survival first, unranked', () => {
-    const row = (id: string, outcome: 'finished' | 'dnf', score: number | null, t: number, at: string): MysteryStandingRow => ({
-      standing_group: outcome === 'finished' ? 0 : 1, rank: null, session_id: id, nickname: id, station_id: 'station_a',
-      character_id: 'enid', pokemon_id: 'gengar', outcome, dnf_reason: outcome === 'dnf' ? 'second_catch' : null,
+    const row = (id: string, outcome: 'finished' | 'dnf', score: number | null, t: number, at: string, caseId: CaseId = 'poisoned_archive'): MysteryStandingRow => ({
+      standing_group: outcome === 'finished' ? 0 : 1, rank: null, case_rank: null, session_id: id, nickname: id, station_id: 'station_a',
+      case_id: caseId, case_version: 1, character_id: 'enid', pokemon_id: 'gengar', outcome, dnf_reason: outcome === 'dnf' ? 'second_catch' : null,
       score: score === null ? null : score.toFixed(1), active_time_s: t.toFixed(1), verdict: 'not_accused', correct: false,
-      clue_count: 0, catches: 0, finalized_at: at,
+      deduction_correct: false, clue_count: 0, catches: 0, finalized_at: at,
     });
     const out = orderStandings([
       row('dnf-long', 'dnf', null, 300, '2026-10-31T18:00:01Z'),
@@ -167,5 +217,19 @@ describe('standings order (pure, same as the SQL view)', () => {
     expect(out.map((r) => [r.session_id, r.rank])).toEqual([
       ['top', 1], ['tie-late', 2], ['neg', 3], ['dnf-long', null], ['dnf-short', null],
     ]);
+  });
+  it('per-case standings: case_rank within the case, combined rank across cases', () => {
+    const row = (id: string, caseId: CaseId, score: number, at: string): MysteryStandingRow => ({
+      standing_group: 0, rank: null, case_rank: null, session_id: id, nickname: id, station_id: 'station_a', case_id: caseId,
+      case_version: 1, character_id: 'enid', pokemon_id: 'gengar', outcome: 'finished', dnf_reason: null, score: score.toFixed(1),
+      active_time_s: '100.0', verdict: 'case_solved', correct: true, deduction_correct: true, clue_count: 3, catches: 0, finalized_at: at,
+    });
+    const rows = [row('a1', 'poisoned_archive', 500, '2026-10-31T18:00:01Z'), row('b1', 'midnight_signal', 450, '2026-10-31T18:00:02Z'),
+      row('a2', 'poisoned_archive', 300, '2026-10-31T18:00:03Z'), row('b2', 'midnight_signal', 100, '2026-10-31T18:00:04Z')];
+    expect(orderStandings(rows).map((r) => [r.session_id, r.rank, r.case_rank])).toEqual([
+      ['a1', 1, 1], ['b1', 2, 1], ['a2', 3, 2], ['b2', 4, 2],
+    ]);
+    expect(standingsForCase(rows, 'midnight_signal').map((r) => [r.session_id, r.rank])).toEqual([['b1', 1], ['b2', 2]]);
+    expect(standingsForCase(rows, 'crypt_last_witness')).toEqual([]);
   });
 });

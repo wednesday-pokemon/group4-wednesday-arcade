@@ -2,13 +2,14 @@
 // staging for screenshots) or the real MysteryRun driven by the sim's own bot (?real=1).
 // Run:  node node_modules/vite/bin/vite.js --port 5210   then open /tools/mystery-preview.html
 // Query flags: ?manual=1 (no auto RAF; drive with __m.advance)  ?low=1  ?reduced=1  ?shot=1 (hide the bar)  ?real=1
-//              ?character=wednesday  ?pokemon=gengar  ?w=1280&h=720  ?emblems=1 (Thing pose contact sheet)  ?scenedebug
+//              ?case=poisoned_archive|crypt_last_witness|midnight_signal  ?character=wednesday  ?pokemon=gengar  ?w=1280&h=720  ?emblems=1 (Thing pose contact sheet)  ?scenedebug
 // Console / Playwright API: window.__m
 import * as THREE from 'three';
 import { MysteryScene } from '../src/three/mystery/MysteryScene.ts';
 import { NO_EFFECTS, type RenderableMysteryRun } from '../src/three/mystery/types.ts';
 import { THING_POSES, renderThingPng } from '../src/three/mystery/thing.ts';
 import { buildIsland } from '../src/mystery/data/island.ts';
+import { caseById, isCaseId } from '../src/mystery/data/cases.ts';
 import { MysteryRun } from '../src/mystery/run.ts';
 import { Bot } from '../src/mystery/bot.ts';
 import { createHydeRuntime } from '../src/mystery/hyde.ts';
@@ -72,7 +73,9 @@ class FakeRun implements RenderableMysteryRun {
 const characterId = (q.get('character') ?? 'wednesday') as NightshadeId;
 const pokemonId = (q.get('pokemon') ?? 'gengar') as PokemonId;
 const duo: Duo = { characterId, pokemonId };
-const map = buildIsland();
+const caseParam = q.get('case');
+const caseDef = caseById(isCaseId(caseParam) ? caseParam : 'poisoned_archive');
+const map = buildIsland(caseDef);
 const fake = new FakeRun(map);
 let real: MysteryRun | null = null;
 let bot: Bot | null = null;
@@ -86,7 +89,7 @@ scene.setAdaptiveResolution(q.get('adaptive') === '1');
 if (q.get('real') === '1') startReal(q.get('seed') ?? 'preview-1', false);
 
 function startReal(seed: string, tutorial: boolean, profile: 'stealthy' | 'careless' = 'stealthy'): void {
-  real = new MysteryRun({ duo, seed, tutorial });
+  real = new MysteryRun({ duo, seed, tutorial, caseDef });
   bot = new Bot(real, { profile, startDelayMaxS: 0 }, seed);
   current = real;
 }

@@ -12,10 +12,10 @@
 // inactive. Tutorial events are returned (seq 0) but not logged; endTutorial() resets the clock to 0, clears
 // cooldowns/effects and spawns the Hyde ≥ minSpawnM away. The log holds gameplay events only, seq 1, 2, 3, …
 import { AbilityInterpreter, createSlot, resetSlot, slotStatus, type AbilitySlot } from './abilities.ts';
-import { verdictFor } from './caseLogic.ts';
+import { evidenceSupports, isCorrectSuspect, sanitizeEvidence, solutionMatches, verdictFor } from './caseLogic.ts';
 import type { SimTuning } from './config.ts';
 import { createEffectState, type EffectState, type SimContext } from './context.ts';
-import { clueInteractLabel, defaultCase, defaultMap, defaultRegistries, defaultTuning, practiceCrateFor } from './defaults.ts';
+import { caseMap, defaultCase, defaultMap, defaultRegistries, defaultTuning, practiceCrateFor } from './defaults.ts';
 import { buildCardFrom, type Registries } from './draft.ts';
 import { damageEgg, createEgg, dropEgg, eggLossMult } from './egg.ts';
 import { pointInPolygon, wrapAngle, yawTo, World } from './geometry.ts';
@@ -30,7 +30,7 @@ import { Rng } from './rng.ts';
 import { round1, scoreFor } from './scoring.ts';
 import { combineMods } from './stats.ts';
 import {
-  MYSTERY_RULES_VERSION, type AbilityStatus, type ActiveEffects, type CaseDef, type ClueId, type DnfReason, type Duo,
+  MYSTERY_RULES_VERSION, type Accusation, type AbilityStatus, type ActiveEffects, type CaseDef, type CaseSolution, type ClueId, type DnfReason, type Duo,
   type DuoCard, type EggRuntime, type GameEvent, type HydeRuntime, type MapDef, type MysteryInput, type NoiseSource,
   type Objective, type PlayerState, type PlayMods, type RoomDef, type RunResult, type RunStatus, type StampedEvent,
   type StateSnapshot, type SuspectId, type Vec2, type Verdict,
@@ -80,6 +80,9 @@ export class MysteryRun implements SimContext {
   readonly interaction: Interaction;
   readonly practicePoint: Vec2;
   accused: SuspectId | null = null;
+  correct = false;
+  deductionCorrect = false;
+  evidence: string[] = [];
   verdict: Verdict = 'not_accused';
   dnfReason: DnfReason | null = null;
   /** Active seconds at the deposit (the clock stops there). */
@@ -100,8 +103,8 @@ export class MysteryRun implements SimContext {
   constructor(o: MysteryRunOptions) {
     this.duo = { characterId: o.duo.characterId, pokemonId: o.duo.pokemonId };
     this.seed = o.seed;
-    this.map = o.map ?? defaultMap();
     this.caseDef = o.caseDef ?? defaultCase();
+    this.map = o.map ?? (o.caseDef ? caseMap(o.caseDef.id) : defaultMap());
     this.tuning = o.tuning ?? defaultTuning();
     const reg = o.registries ?? defaultRegistries();
     const n = reg.nightshades[this.duo.characterId];
@@ -120,7 +123,7 @@ export class MysteryRun implements SimContext {
     this.power = createSlot(n.power);
     this.move = createSlot(p.move);
     this.practicePoint = practiceCrateFor(this.map) ?? defaultPracticePoint(this.map);
-    this.interaction = new Interaction((id) => clueInteractLabel(id) ?? `Search: ${this.clueTitle(id)}`, this.practicePoint);
+    this.interaction = new Interaction((id) => this.caseDef.clues.find((c) => c.id === id)?.interactLabel ?? `Search: ${this.clueTitle(id)}`, this.practicePoint);
     this.player.roomId = this.roomAt(this.player.x, this.player.z)?.id ?? null;
     this.status = o.tutorial ? 'tutorial' : 'playing';
     if (this.status === 'playing') this.hydeBrain.start(this);
@@ -347,14 +350,26 @@ export class MysteryRun implements SimContext {
     };
   }
 
-  /** One-shot accusation after the deposit. `null` = leave the case unsolved (verdict 'not_accused'). */
-  accuse(suspect: SuspectId | null): StampedEvent[] {
+  /**
+   * One-shot accusation after the deposit: a suspect (`null` = leave the case unsolved → 'not_accused') and the evidence
+   * cited for it. `solution` is the case's answer key, which the app loads only now (after the visitor committed);
+   * a key for another case/version is refused. Uncitable evidence ids are dropped.
+   */
+  accuse(accusation: Accusation, solution: CaseSolution): StampedEvent[] {
     this.pending = [];
-    if (this.status !== 'accusing') return [];
+    if (this.status !== 'accusing' || !solutionMatches(this.caseDef, solution)) return [];
+    const suspect = accusation.suspectId;
     if (suspect !== null && !this.caseDef.suspects.some((s) => s.id === suspect)) return [];
+    const evidence = suspect === null ? [] : sanitizeEvidence(this.caseDef, this.cluesFound, accusation.evidence);
     this.accused = suspect;
-    this.verdict = verdictFor(this.caseDef, this.cluesFound, suspect);
-    this.emit({ type: 'accusation', suspectId: suspect, correct: suspect !== null && suspect === this.caseDef.culprit, cluesFound: this.cluesFound.length });
+    this.evidence = evidence;
+    this.correct = isCorrectSuspect(solution, suspect);
+    this.deductionCorrect = suspect !== null && evidenceSupports(solution, evidence);
+    this.verdict = verdictFor(this.caseDef, solution, this.cluesFound, { suspectId: suspect, evidence });
+    this.emit({
+      type: 'accusation', suspectId: suspect, correct: this.correct, cluesFound: this.cluesFound.length, evidence: [...evidence],
+      deductionCorrect: this.deductionCorrect,
+    });
     this.status = 'finished';
     this.emit({ type: 'finish', verdict: this.verdict, score: scoreFor(this.egg.points, this.activeTimeS()) });
     return this.pending;
@@ -366,11 +381,15 @@ export class MysteryRun implements SimContext {
     const activeTimeS = this.activeTimeS();
     return {
       rulesVersion: MYSTERY_RULES_VERSION,
+      caseId: this.caseDef.id,
+      caseVersion: this.caseDef.version,
       outcome: finished ? 'finished' : 'dnf',
       dnfReason: finished ? null : this.dnfReason,
       verdict: finished ? this.verdict : 'not_accused',
       accused: this.accused,
-      correct: this.accused !== null && this.accused === this.caseDef.culprit,
+      correct: this.correct,
+      evidence: [...this.evidence],
+      deductionCorrect: this.deductionCorrect,
       cluesFound: [...this.cluesFound],
       eggTier: this.egg.tier,
       eggPoints: finished && this.egg.state === 'delivered' ? this.egg.points : 0,

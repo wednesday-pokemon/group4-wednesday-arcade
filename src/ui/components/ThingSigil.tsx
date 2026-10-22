@@ -1,5 +1,10 @@
-// ThingSigil (UX_MYSTERY §1): Thing's ORIGINAL line-art mark (stitched wrist, four fingers, thumb) in a lantern ring.
-// Sizes 24/32/64/96 px; `pose` is exposed as data-pose for CSS gestures (reduced motion: pose swaps only).
+// ThingSigil (UX_MYSTERY §1): Thing's portrait, everywhere Thing appears (home emblem, duo cards, tutorial, HUD
+// captions, results, dashboard advice). Renders the client-supplied photo (src/assets/thing/thing.png, picked up by
+// thingArt.ts) inside a round lantern frame when present; falls back to the original line-art mark (stitched wrist,
+// four fingers, thumb) otherwise. Sizes 24/32/64/96 px; `pose` is exposed as data-pose for CSS gestures (reduced
+// motion: animation off, pose swaps only).
+import { THING_ART } from '../mystery/thingArt.ts';
+
 export type ThingPose = 'stand' | 'wave' | 'point' | 'shush' | 'count1' | 'count2' | 'count3' | 'thumbsUp' | 'tap' | 'fist';
 
 interface ThingSigilProps {
@@ -11,6 +16,21 @@ interface ThingSigilProps {
 }
 
 export function ThingSigil({ size = 32, pose = 'stand', animated = false, label }: ThingSigilProps) {
+  if (THING_ART) {
+    return (
+      <span
+        className={`thing-sigil thing-sigil--photo${animated ? ' thing-sigil--animated' : ''}`}
+        style={{ width: `${size / 16}rem`, height: `${size / 16}rem` }}
+        data-pose={pose}
+        role={label ? 'img' : undefined}
+        aria-label={label}
+        aria-hidden={label ? undefined : true}
+        data-testid="thing-sigil"
+      >
+        <img src={THING_ART} alt="" className="thing-sigil__photo" draggable={false} />
+      </span>
+    );
+  }
   return (
     <svg
       viewBox="0 0 96 96"

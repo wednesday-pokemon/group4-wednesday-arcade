@@ -4,7 +4,7 @@
 //   centre (y 32rem) InteractPrompt + ring       bottom-centre CaptionStack above the ThingCaption
 //   bottom-left VitalsPanel (HP, noise + radius, hidden)              bottom-right AbilitySlots F / Q
 import type { CSSProperties } from 'react';
-import { CLUE_ICON, OBJECTIVE_TEXT, THREAT, type AbilityHud, type Caption, type MysteryHudModel, type Toast } from '../../app/mystery/hudModel.ts';
+import { CLUE_ICON, THREAT, type AbilityHud, type Caption, type MysteryHudModel, type Toast } from '../../app/mystery/hudModel.ts';
 import { Icon } from '../Icon.tsx';
 import { ThingNarrator } from './ThingNarrator.tsx';
 
@@ -88,7 +88,7 @@ function ObjectivePanel({ hud, tutorial }: { hud: MysteryHudModel; tutorial: boo
   const secLow = egg.security < 40;
   return (
     <section className="mhud-panel mhud-objective" aria-label="Objective">
-      <p className="mhud-objective__text" data-testid="hud-objective" aria-live="polite">{tutorial ? 'Practise at the pier' : OBJECTIVE_TEXT[hud.objective]}</p>
+      <p className="mhud-objective__text" data-testid="hud-objective" aria-live="polite">{tutorial ? 'Practise at the pier' : hud.objectiveText}</p>
       <p className="mhud-row">
         <span className="caps">Clues</span>
         <span className="mhud-clues" aria-label={`${hud.clues.found.length} of ${hud.clues.total} clues found`} data-testid="hud-clues">

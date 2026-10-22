@@ -25,7 +25,9 @@ They may only import each other, `src/game/types.ts` and `src/game/constants.ts`
 - `nightshades.ts`: `export const NIGHTSHADES: Record<NightshadeId, NightshadeDef>` — 7 entries, F powers per plan §5.
 - `partners.ts`: `export const PARTNERS: Record<PokemonId, PokemonPartnerDef>` — 18 entries, Q moves per plan §6, `legality`
   initially `{ status: 'unverified', ... }` until `docs/MOVE_LEGALITY.md` is done (orchestrator flips them).
-- `case.ts`: `export const SILENT_EVIDENCE: CaseDef` — Orloff / Thornhill / Isaac / Barry, three clues per plan §2.
+- `cases.ts`: `export const CASES: Record<CaseId, CaseDef>` — three alternate scenarios (Poisoned Archive / Crypt's Last
+  Witness / Midnight Signal), PUBLIC data only. `solutions.ts`: `CASE_SOLUTIONS` (answer keys; server + post-accusation
+  only). The retired single case `SILENT_EVIDENCE` (`case.ts`) is gone. Full contract: `docs/MYSTERY_CASES.md`.
 - `island.ts`: `export function buildIsland(): MapDef` — compact walkable map (≈ 90 × 120 m): pier → path → research room,
   ruined crypt (entrance), egg chamber, optional shortcut behind Gomez's power gate (also walkable the long way), Iago Tower
   courtyard. Real walls, low/high cover, ≥ 6 hiding spots, a learnable patrol loop, fog in the crypt.

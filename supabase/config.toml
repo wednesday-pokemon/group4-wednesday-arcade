@@ -1,4 +1,4 @@
-# Supabase CLI config (CLI 2.121) for "Escape from Raven Island: The Hyde's Regatta".
+# Supabase CLI config (CLI 2.121) for "Nevermore: Deadly Secrets" (display name; project/schema identifiers unchanged).
 # Local:  npx supabase start   (requires Docker)   |   Hosted: npx supabase link / db push / functions deploy
 # Hosted Auth settings are NOT pushed by `db push`; mirror the [auth] block in the Dashboard (docs/SUPABASE_SETUP.md).
 project_id = "raven-regatta"

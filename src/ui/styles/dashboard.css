@@ -96,3 +96,46 @@
 .station__name { font-size: var(--fs-lg); }
 .station__legs { margin: 2px 0; }
 .station__stats dd { font-size: var(--fs-md); }
+
+/* ---- Mystery board: three cases (case tiles = filter + per-case summary, case tags, clue matrix, outcomes) ------ */
+/* Fits 1366x768: row A and C give up 1rem each for the case-tile row. */
+.mdash__grid.mdash__grid--cases { grid-template-rows: minmax(11.5rem, auto) auto minmax(10.5rem, auto) minmax(14.5rem, auto); }
+.mdash-case { grid-column: 1 / -1; display: grid; gap: 0.2rem; min-width: 0; }
+.mdash-case__note { margin: 0; }
+.mdash-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; }
+.mdash-tile {
+  display: grid; gap: 0.05rem; min-width: 0; padding: 0.3rem 0.7rem; text-align: left; cursor: pointer; font: inherit; font-size: var(--fs-xs);
+  color: var(--c-text); background: var(--c-hud); border: 1px solid var(--c-border); border-radius: var(--r-lg);
+}
+.mdash-tile:hover:not(:disabled) { border-color: var(--c-lantern); }
+.mdash-tile:focus-visible { outline: 2px solid var(--c-lantern); outline-offset: 2px; }
+.mdash-tile.is-on { border-color: var(--c-lantern); background: var(--c-lantern-soft); box-shadow: inset 0 0 0 1px var(--c-lantern); }
+.mdash-tile:disabled { opacity: 0.45; cursor: not-allowed; }
+.mdash-tile__head { display: flex; align-items: baseline; gap: 0.45rem; min-width: 0; }
+.mdash-tile__head strong { text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+.mdash-tile.is-on .mdash-tile__head strong { color: var(--c-lantern); }
+.mdash-tile__title { flex: 1; min-width: 0; color: var(--c-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mdash-tile__runs { white-space: nowrap; color: var(--c-text-muted); }
+.mdash-tile__stats { display: flex; flex-wrap: wrap; gap: 0 0.7rem; color: var(--c-text-muted); font-size: 0.75rem; }
+.mdash-tile__stats b { color: var(--c-text); }
+.mdash-casetag { padding: 0 0.3rem; border-radius: var(--r-pill); border: 1px solid var(--c-border-strong); font-size: 0.6875rem; font-weight: var(--fw-bold); color: var(--c-text-2); }
+.mdash-standings.mdash-standings--cases li { grid-template-columns: 1.4rem minmax(0, 1fr) auto auto auto; }
+.mdash-standings.mdash-standings--cases .mdash-duo { overflow: hidden; text-overflow: ellipsis; }
+.mdash-cluemx { display: grid; gap: 0.2rem; }
+.mdash-cluemx__row { display: grid; grid-template-columns: 2.6rem repeat(3, minmax(0, 1fr)); gap: 0.5rem; align-items: end; }
+.mdash-cluemx__case { font-weight: var(--fw-bold); color: var(--c-lantern); white-space: nowrap; }
+.mdash-cluemx__cell { display: grid; min-width: 0; }
+.mdash-cluemx__title { font-size: 0.6875rem; color: var(--c-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mdash-cluemx__val { display: grid; grid-template-columns: minmax(0, 1fr) 2.4rem; gap: 0.3rem; align-items: center; font-size: 0.75rem; }
+.mdash-cluemx__val b { text-align: right; }
+.mdash-acc { display: grid; gap: 0.1rem; min-width: 0; }
+.mdash-acc__legend { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mdash-acc__bar { display: flex; height: 6px; border-radius: var(--r-pill); overflow: hidden; background: var(--c-surface-2); }
+.mdash-acc__seg { display: block; height: 100%; }
+.mdash-acc__seg--solved { background: var(--c-success); }
+.mdash-acc__seg--right_suspect_wrong_evidence { background: var(--c-lantern); }
+.mdash-acc__seg--wrong_suspect { background: var(--c-accent-text); }
+.mdash-acc__seg--not_accused { background: var(--c-text-muted); }
+.mdash-acc__seg--unsolved { background: var(--c-border-strong); }
+.mdash-acc__seg--dnf { background: var(--c-hyde, #9b2c4a); }
+.lp-badge--case { border: 1px solid var(--c-lantern); color: var(--c-lantern); }

@@ -5,7 +5,7 @@
 // Pure functions over an injected Storage so they are unit-testable. Never stores seeds or who was accused.
 import { thinForUpload } from '../../mystery/analytics/telemetry.ts';
 import type { SessionRecord } from '../../mystery/analytics/types.ts';
-import type { Duo, HydeMode } from '../../mystery/types.ts';
+import type { CaseId, Duo, HydeMode } from '../../mystery/types.ts';
 
 export const RECORDS_KEY = 'raven.mystery.records';
 export const LIVE_KEY = 'raven.mystery.live';
@@ -33,7 +33,7 @@ export function loadRecords(storage: Store): StoredRecord[] {
 
 /** Thin + strip a record for storage (no seeds, no accusation details). */
 export function compactRecord(r: SessionRecord): SessionRecord {
-  const events = thinForUpload(r.events).map((e) => (e.type === 'accusation' ? { ...e, suspectId: 'redacted' as never } : e));
+  const events = thinForUpload(r.events).map((e) => (e.type === 'accusation' && e.suspectId !== null ? { ...e, suspectId: 'redacted' as never, evidence: [] } : e));
   return { ...r, events };
 }
 
@@ -67,6 +67,8 @@ export interface LiveStatus {
   phase: LivePhase;
   nickname: string;
   duo: Duo | null;
+  /** The session's assigned case (public; never the answer). */
+  caseId?: CaseId | null;
   clues: number;
   egg: { state: string; tier: string | null; security: number } | null;
   hp: number | null;
