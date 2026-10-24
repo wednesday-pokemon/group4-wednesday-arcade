@@ -68,6 +68,32 @@ export interface ModelArtifact {
     l2Extraction?: number;
     l2ExtractionSelection?: string;
   };
+  /**
+   * Overhaul: the Hyde zone filter's parameters selected on TRAINING sessions (β counted, diffusion / alertFar by mean
+   * log-loss — scripts/mystery-train.ts) and its held-out metrics (scripts/mystery-evaluate.ts). Optional: without it
+   * the live filter uses ZONE_FILTER_DEFAULTS (src/mystery/analytics/hydeZones.ts).
+   */
+  zoneFilter?: {
+    params: { beta: number; diffusionPerS: number; offPatrolReturnPerS: number; chaseNearM: number; chaseFarLikelihood: number; alertNearM: number; alertFarLikelihood: number };
+    selection: string;
+    betaRows: number;
+    grid: { diffusionPerS: number; alertFarLikelihood: number; logLoss: number; brier: number }[];
+    metrics?: unknown;
+  };
+  /**
+   * Enemy contract: the RULE-BASED Crackstone risk is not trained; its definition constants and held-out calibration
+   * (scripts/mystery-evaluate.ts §7) are recorded here so the report quotes measured numbers. Optional.
+   */
+  crackstoneRisk?: {
+    method: 'rule_based';
+    label: string;
+    modelVersion: string;
+    horizonS: number;
+    cellM: number;
+    stepS: number;
+    belief: unknown;
+    metrics: { evaluatedAt: string; cells: unknown; here: unknown };
+  };
   metrics: {
     evaluatedAt: string;
     detection: ClassifierMetrics;

@@ -2,11 +2,14 @@
 // linear acceleration; swept collision with wall sliding (never stuck, never through); one footstep noise per stance
 // interval while moving (loudness = (stance + carry add) × footstepNoiseMult × wet × boost noise, clamped 0..1);
 // impacts (sprinting into a wall while carrying); hidden state (crouched inside a hiding spot); room tracking.
+// Noisy floors (case hazards, hazards.ts): walking / sprinting on one adds its loudnessAdd to each footstep's final
+// loudness (crouching is unaffected); the first loud step after entering a floor emits `hazard_triggered`.
 // Interaction (E) lives in interact.ts.
 import type { SimTuning } from './config.ts';
 import type { SimContext } from './context.ts';
 import { eggImpact } from './egg.ts';
 import { forward } from './geometry.ts';
+import { noisyFloorAt } from './hazards.ts';
 import { hearingRadius } from './noise.ts';
 import type { HidingSpotDef, MapDef, PlayerState, RoomId, Stance } from './types.ts';
 
@@ -16,6 +19,7 @@ export interface PlayerMemory {
   stepTimer: number;
   lastImpactT: number;
   noises: { t: number; loudness: number }[]; // own emissions (recentNoise)
+  floorId: string | null; // noisy floor already announced (hazard_triggered) since the player stepped onto it
 }
 
 export function createPlayer(map: MapDef, tuning: SimTuning): PlayerState {
@@ -28,7 +32,7 @@ export function createPlayer(map: MapDef, tuning: SimTuning): PlayerState {
 }
 
 export function createPlayerMemory(): PlayerMemory {
-  return { vx: 0, vz: 0, stepTimer: 0.25, lastImpactT: -Infinity, noises: [] };
+  return { vx: 0, vz: 0, stepTimer: 0.25, lastImpactT: -Infinity, noises: [], floorId: null };
 }
 
 export function hidingSpotAt(map: MapDef, x: number, z: number): HidingSpotDef | null {
@@ -44,6 +48,7 @@ export function stanceSpeed(ctx: SimContext, stance: Stance): number {
   v *= m.walkSpeedMult;
   if (ctx.egg.state === 'carried') v *= ctx.tuning.carry.speedMult;
   if (ctx.t < ctx.fx.speedBoostUntil) v *= ctx.fx.speedBoostMult;
+  if (ctx.t < ctx.fx.cursedUntil) v *= ctx.fx.curseSlowMult; // a landed Crackstone curse (ENEMY_CONTRACT R7)
   return v;
 }
 
@@ -56,6 +61,10 @@ export function footstepLoudness(ctx: SimContext, stance: Stance): number {
   l *= ctx.mods.footstepNoiseMult;
   if (ctx.roomAt(ctx.player.x, ctx.player.z)?.wet) l *= ctx.tuning.player.wetNoiseMult;
   if (ctx.t < ctx.fx.speedBoostUntil) l *= ctx.fx.speedBoostNoiseMult;
+  if (stance === 'walk' || stance === 'sprint') {
+    const floor = noisyFloorAt(ctx.map.world?.hazards, ctx.player.x, ctx.player.z);
+    if (floor) l += floor.loudnessAdd;
+  }
   return Math.max(0, Math.min(1, l));
 }
 
@@ -66,7 +75,8 @@ export function stanceNoiseRadius(ctx: SimContext, stance: Stance = ctx.player.s
 
 export interface MoveInput { moveX: number; moveZ: number; sprint: boolean; crouch: boolean }
 
-export function stepPlayer(ctx: SimContext, mem: PlayerMemory, input: MoveInput, dt: number): void {
+/** `announceHazards` false (tutorial): noisy floors still add loudness but emit no `hazard_triggered`. */
+export function stepPlayer(ctx: SimContext, mem: PlayerMemory, input: MoveInput, dt: number, announceHazards = true): void {
   const p = ctx.player;
   const P = ctx.tuning.player;
   let mx = clamp(input.moveX, -1, 1);
@@ -129,11 +139,19 @@ export function stepPlayer(ctx: SimContext, mem: PlayerMemory, input: MoveInput,
       mem.stepTimer -= interval;
       if (mem.stepTimer > interval) mem.stepTimer = 0;
       const loud = footstepLoudness(ctx, stance);
+      if (stance === 'walk' || stance === 'sprint') {
+        const floor = noisyFloorAt(ctx.map.world?.hazards, p.x, p.z);
+        if (floor && announceHazards && mem.floorId !== floor.id) {
+          mem.floorId = floor.id;
+          ctx.emit({ type: 'hazard_triggered', hazardId: floor.id });
+        }
+      }
       if (loud > 0) ctx.noise('footstep', p.x, p.z, loud);
     }
   } else {
     mem.stepTimer = 0.25; // the first step after standing still lands a quarter second early
   }
+  if (mem.floorId !== null && noisyFloorAt(ctx.map.world?.hazards, p.x, p.z)?.id !== mem.floorId) mem.floorId = null;
   // hidden + room
   p.hidden = p.crouched && hidingSpotAt(ctx.map, p.x, p.z) !== null;
   const room = ctx.roomAt(p.x, p.z);

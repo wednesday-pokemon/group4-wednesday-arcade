@@ -171,6 +171,11 @@ describe('MysteryAnalytics (app wiring)', () => {
     expect(rep.predictive.source).toBe('rule');
     expect(rep.predictive.label).toBe('Rule-based risk estimate · no trained model loaded');
     expect(analytics.currentRisk()?.label ?? 'Rule-based risk estimate').toBe('Rule-based risk estimate');
-    expect(analytics.collector.forecasts.every((f) => f.modelLabel === 'rule_based' && f.modelVersion === null)).toBe(true);
+    // the trained-model targets fall back to rule-based (no model version); the Bayesian / spawn-rule / zone-filter
+    // estimates are never ML either (their modelVersion names the method)
+    const model = analytics.collector.forecasts.filter((f) => f.target === 'detection_15s' || f.target === 'extraction');
+    expect(model.length).toBeGreaterThan(0);
+    expect(model.every((f) => f.modelLabel === 'rule_based' && f.modelVersion === null)).toBe(true);
+    expect(analytics.collector.forecasts.every((f) => f.modelLabel === 'rule_based')).toBe(true);
   }, 60_000);
 });

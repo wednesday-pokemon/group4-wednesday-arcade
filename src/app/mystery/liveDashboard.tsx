@@ -1,6 +1,9 @@
 // `/?mode=dashboard` — Laptop 1 LIVE board for the three cases (mystery-v3.1).
-//   Row A: Station A + Station B live cards (Realtime status rows + heartbeat; "Signal lost" after 15 s; clue pips sized
-//          to the station's case) · Standings (verified results: every finisher ranked above every DNF; per case when
+//   Header: KPI ribbon (runs, case solved %, extraction %, median time, chases / run — real aggregates of the scope).
+//   Row A: Station A + Station B live cards (the shared StationLiveCard + stationViewFromBoard of src/ui/mystery, so the
+//          live and demo boards match and fit 1366×768: Realtime status rows + heartbeat analytics — objective, chases,
+//          risk, tower odds, the egg estimate while it is uncertain, the Hyde chip, the newest Thing item as fixed copy;
+//          "Signal lost" after 15 s) · Standings (verified results: every finisher ranked above every DNF; per case when
 //          a case is selected, using the server's per-case ranks)
 //   Row K: case filter (All / Case 01 / 02 / 03) + per-case summary table (runs, mystery-solving accuracy, median time,
 //          extraction rate)
@@ -11,22 +14,22 @@
 // Never shows seeds, the culprit or who anyone accused. `/?mode=dashboard&demo=1` stays the LOCAL DEMO board,
 // `/?mode=dashboard&legacy=1` the v2.5 board.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { boardOptions, bundledPredictiveService, caseLabel, dashboard } from '../../mystery/analytics/index.ts';
+import { boardOptions, bundledPredictiveService, dashboard } from '../../mystery/analytics/index.ts';
 import { CASES } from '../../mystery/data/cases.ts';
 import { NIGHTSHADES } from '../../mystery/data/nightshades.ts';
-import { CASE_IDS, type CaseId } from '../../mystery/types.ts';
 import { PARTNERS } from '../../mystery/data/partners.ts';
 import type { BoardStation, MysteryBoardSnapshot } from '../../lib/supabase/mysteryDashboardFeed.ts';
 import type { MysteryBoardServices } from '../../lib/supabase/mysteryLive.ts';
-import { toNum, type HeartbeatPhase, type MysteryStandingRow } from '../../lib/supabase/mysteryWire.ts';
+import { toNum, type MysteryStandingRow } from '../../lib/supabase/mysteryWire.ts';
 import { ConnectionBadge } from '../../ui/components/Badge.tsx';
 import { Button } from '../../ui/components/Button.tsx';
 import { OperatorDrawer } from '../../ui/dashboard/OperatorDrawer.tsx';
 import { Icon } from '../../ui/Icon.tsx';
 import {
-  CaseBoard, CaseTag, ClueSolve, CluePips, DescriptiveLayer, DetectionTrend, DiagnosticLayer, DuoPopularity, PredictiveLayer, PrescriptiveLayer,
-  type CaseScope,
+  CaseBoard, CaseTag, ClueSolve, DescriptiveLayer, DetectionTrend, DiagnosticLayer, DuoPopularity, KpiRibbon, PredictiveLayer, PrescriptiveLayer,
+  StationLiveCard, type CaseScope,
 } from '../../ui/mystery/MysteryDashboard.tsx';
+import { stationViewFromBoard, type StationCardView } from '../../ui/mystery/stationView.ts';
 import '../../ui/styles/mystery.css';
 import { useHotkeys } from '../keyboard.ts';
 import { useTestHooks } from '../testHooks.ts';
@@ -82,13 +85,16 @@ function BoardProblem({ message, onRetry }: { message: string; onRetry: () => vo
 const nameOfChar = (id: string | null | undefined) => (id ? NIGHTSHADES[id as keyof typeof NIGHTSHADES]?.shortName ?? id : '');
 const nameOfMon = (id: string | null | undefined) => (id ? PARTNERS[id as keyof typeof PARTNERS]?.name ?? id : '');
 
-const PHASE_TEXT: Record<HeartbeatPhase, string> = {
-  idle: 'Idle', name: 'Name entry', duo: 'Choosing duo', tutorial: 'Tutorial', investigating: 'Investigating',
-  carrying: 'Carrying egg', accusing: 'Accusing', results: 'Results', dnf: 'DNF',
-};
-const STATUS_TEXT: Record<string, string> = { idle: 'Idle', offered: 'Choosing duo', playing: 'Investigating', finished: 'Results', dnf: 'DNF' };
-const STATUS_PHASE: Record<string, HeartbeatPhase> = { idle: 'idle', offered: 'duo', playing: 'investigating', finished: 'results', dnf: 'dnf' };
-
+/**
+ * The shared card view of a live station, plus the spectator egg rule: once the visitor LOCATED the egg (seen, or the
+ * estimate is certain) the station sends no site at all (heartbeat `eggLocated`) and the card shows "seen" — Laptop 1
+ * never names the true egg site.
+ */
+export function liveStationView(station: BoardStation, now: number): StationCardView {
+  const v = stationViewFromBoard(station, now);
+  if (station.heartbeat?.eggLocated === true) return { ...v, eggOdds: null, egg: v.egg === 'resting' || v.egg === 'unknown' ? 'seen' : v.egg };
+  return v;
+}
 function LiveBoard({ services }: { services: MysteryBoardServices }) {
   const [snap, setSnap] = useState<MysteryBoardSnapshot | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -133,11 +139,11 @@ function LiveBoard({ services }: { services: MysteryBoardServices }) {
   );
 
   return (
-    <main className="mdash" data-testid="screen-dashboard" data-board="mystery-live">
-      <header className="mdash__head">
-        <h1 className="display mdash__title">Nevermore · Control Center</h1>
-        <span className="mdash__chip">mystery-v3.1</span>
-        <span className="badge badge--live" data-testid="badge-mode"><span className="badge__dot" aria-hidden="true" />Live · verified results</span>
+    <main className="mdash mdash--kpi" data-testid="screen-dashboard" data-board="mystery-live">
+      <header className="mdash__head mdash__head--kpi">
+        <h1 className="display mdash__title" title="Rules mystery-v3.1 · live, verified results">Nevermore · Control Center</h1>
+        <KpiRibbon agg={agg} />
+        <span className="badge badge--live" data-testid="badge-mode"><span className="badge__dot" aria-hidden="true" />Live · verified</span>
         <ConnectionBadge state={snap?.connection ?? 'connecting'} />
         <span className="text-2 mdash__count">{snap?.records.length ?? 0} verified run{snap?.records.length === 1 ? '' : 's'}</span>
         <Button variant="ghost" size="sm" icon="lock" onClick={() => setDrawerOpen(true)} aria-expanded={drawerOpen} data-testid="btn-operator">Operator</Button>
@@ -151,8 +157,10 @@ function LiveBoard({ services }: { services: MysteryBoardServices }) {
         </p>
       )}
 
-      <div className="mdash__grid mdash__grid--cases" data-scope={agg.scope}>
-        {(snap?.stations ?? []).map((s, i) => <LiveStationCard key={s.stationId} station={s} now={now} area={i === 0 ? 'mdash-a1' : 'mdash-a2'} />)}
+      <div className="mdash__grid mdash__grid--cases mdash__grid--live" data-scope={agg.scope}>
+        {(snap?.stations ?? []).map((s, i) => (
+          <StationLiveCard key={s.stationId} view={liveStationView(s, now)} area={i === 0 ? 'mdash-a1' : 'mdash-a2'} testId={`station-live-${s.stationId}`} />
+        ))}
         {!snap && <section className="mdash-card mdash-a1"><p className="text-2">Connecting…</p></section>}
         <Standings rows={standingRows} loaded={snap?.loaded ?? false} scope={caseScope} />
 
@@ -169,47 +177,6 @@ function LiveBoard({ services }: { services: MysteryBoardServices }) {
       </div>
       {drawerOpen && <OperatorDrawer services={services.drawerServices} onClose={() => setDrawerOpen(false)} />}
     </main>
-  );
-}
-
-function LiveStationCard({ station, now, area }: { station: BoardStation; now: number; area: string }) {
-  const row = station.row;
-  const beat = station.heartbeat;
-  const active = row !== null && row.status !== 'idle';
-  const phase: HeartbeatPhase = beat?.phase ?? STATUS_PHASE[row?.status ?? 'idle'] ?? 'idle';
-  const label = station.signalLost ? 'Signal lost' : beat ? PHASE_TEXT[beat.phase] : STATUS_TEXT[row?.status ?? 'idle'] ?? 'Idle';
-  const age = station.lastSeenAt === null ? null : Math.max(0, Math.round((now - station.lastSeenAt) / 1000));
-  const clues = row?.clues_found ?? beat?.clues ?? 0;
-  const time = beat?.activeTimeS ?? toNum(row?.active_time_s);
-  const caseId = active ? (row?.case_id ?? null) : null;
-  return (
-    <section className={`mdash-card ${area}`} data-testid={`station-live-${station.stationId}`} data-phase={station.signalLost ? 'lost' : phase} aria-label={station.label}>
-      <div className="mdash-row">
-        <p className="caps">{station.label}</p>
-        <span className={`mdash-phase mdash-phase--${station.signalLost ? 'lost' : phase}`}>{label}</span>
-      </div>
-      {active ? (
-        <p className="mdash-station__who">
-          <strong>{row?.nickname || '—'}</strong>
-          {row?.character_id && row.pokemon_id && <> · {nameOfChar(row.character_id)} &amp; {nameOfMon(row.pokemon_id)}</>}
-        </p>
-      ) : (
-        <p className="text-2">{row?.notice === 'operator_reset' ? 'Reset by the operator.' : 'No visitor yet.'}</p>
-      )}
-      {caseId && (CASE_IDS as readonly string[]).includes(caseId) && <p className="mdash-small" data-testid={`station-case-${station.stationId}`}>{caseLabel(caseId as CaseId)}</p>}
-      <dl className="mdash-kv">
-        <div><dt>Clues</dt><dd><CluePips found={clues} caseId={caseId} /></dd></div>
-        <div><dt>Egg</dt><dd>{beat?.eggTier ? `${beat.eggTier} · ${beat.eggSecurity ?? '—'}` : row?.egg_state ?? '—'}</dd></div>
-        <div><dt>HP · caught</dt><dd className="num">{beat?.hp ?? '—'} · {row?.catches ?? beat?.catches ?? '—'}/2</dd></div>
-        <div><dt>Hyde</dt><dd>{beat?.hydeMode ?? '—'}</dd></div>
-        <div><dt>Risk</dt><dd className="num">{beat?.risk !== null && beat?.risk !== undefined ? `${beat.risk.toFixed(2)} · ${beat.riskSource === 'ml' ? 'ML' : 'Rule-based'}` : '—'}</dd></div>
-        <div><dt>Time</dt><dd className="num">{time !== null && time !== undefined ? `${time.toFixed(1)} s` : '—'}</dd></div>
-      </dl>
-      {beat && (beat.sync === 'offline' || beat.sync === 'unverified') && (
-        <p className="mdash-advice" data-testid={`station-sync-${station.stationId}`}>{beat.sync === 'offline' ? 'Terminal offline · saving locally' : 'Unverified run — not on the board'}</p>
-      )}
-      <p className="mdash-age text-2">{age === null ? 'no heartbeat yet' : `heartbeat ${age} s ago`}</p>
-    </section>
   );
 }
 

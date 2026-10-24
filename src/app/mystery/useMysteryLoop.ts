@@ -1,31 +1,85 @@
 // Owns one MysteryRun + MysteryScene + input controller per attempt and drives them from a single
 // requestAnimationFrame loop: run.update(dt, input) then scene.render(run, events, dt). Pause / board / accusation stop
-// the sim clock (update is not called). Turns run state + events into a throttled HUD model, audio cues, directional
-// sound captions, toasts and Thing subtitles. Exposes debug/advance hooks for tests, plus a TEST-ONLY autopilot that
-// feeds the game-developer's seeded Bot (src/mystery/bot.ts) through the same update() path a player uses.
+// the sim clock (update is not called). Turns run state + events into a throttled HUD model (≈15 Hz React), audio cues,
+// directional captions, the TL;DR ClueCard, ExamineToast and ONE Thing message stack (UX_OVERHAUL §6) fed by the
+// analytics layer's live() feed (≈3 Hz; LiveAnalytics.messages + advice) and the progressive hint ladder (R7).
+// The compass + minimap pull their own feed (`nav()`) at ≤ 30 Hz from refs, outside React render. Exposes debug/advance
+// hooks for tests, plus a TEST-ONLY autopilot that feeds the game-developer's seeded Bot (src/mystery/bot.ts) through
+// the same update() path a player uses.
+//
+// HIDDEN TRUTH: nothing here reads run.layout, map.clues or map.eggSpawn. A RESTING egg's position is read only while a
+// reveal power shows it (ActiveEffects.revealEgg); the Hyde's position only while it is visible or chasing (or an
+// enemy reveal shows it); Joseph Crackstone's position only per ENEMY_CONTRACT R4 (hud/crackstone.ts crackMarkerKind).
+// Crackstone (UX_ENEMIES): plaque, scan / curse banner, CURSED row, one threat-edge chevron, captions + cues, his
+// CRACKSTONE stack items (rate-limited by AlertLimiter), the organ drone (audio.setThreat source) and the spectator
+// status fields.
 import { useContext, useEffect, useRef, useState } from 'react';
 import { createMysteryAnalytics, type Advice, type MysteryAnalytics } from '../../mystery/analytics/index.ts';
+import type { LiveAnalytics, LiveMessage } from '../../mystery/analytics/types.ts';
 import type { MysteryRun } from '../../mystery/run.ts';
-import type { Accusation, CaseDef, Duo, StampedEvent } from '../../mystery/types.ts';
+import type { Accusation, CaseDef, ClueId, Duo, InvestigationState, StampedEvent, Vec2 } from '../../mystery/types.ts';
+import { mapGeometry, type MapTarget, type PublicMapState } from '../../ui/mystery/map/mapData.ts';
+import { headingDeg, relBearingDeg } from '../../ui/mystery/map/mapRender.ts';
 import { announce } from '../announce.tsx';
-import { audio } from '../audio.ts';
+import { audio, type ThreatSource } from '../audio.ts';
 import { getSettings, useSettings } from '../settings.ts';
+import { heardBearing } from './hud/compass.ts';
+import { HintLadder, HINT_SHOW_S, ladderPaused } from './hud/hintLadder.ts';
+import { buildNavFeed, mapFeedKey, type NavFeed } from './hud/navFeed.ts';
+import { buildOdds, OddsDeltaTracker, oddsPhase, type OddsView } from './hud/oddsModel.ts';
+import { deltaText } from '../../ui/mystery/odds.ts';
 import {
-  buildHud, CaptionLog, captionFor, clueTitle, CLUE_ICON, directionOf, NoiseMeter, RiskHold, ThingDirector, ThreatHold,
-  type AbilityMeta, type MysteryHudModel, type ThingLineState, type Toast,
+  AlertLimiter, CHASE_WHY, CRACK_HEAD, CrackThreatHold, ESCAPE_WHY, TelegraphTracker, crackHudView, crackMapState, crackMarkerKind, crackPillKey,
+  crackstoneOf, curseEdgeWanted, encounterStart, revealedByEffect, type TelegraphOutput,
+} from './hud/crackstone.ts';
+import { THING } from '../../mystery/data/thing.ts';
+import { thing as thingLines } from './thingLines.ts';
+import { distToPolygon } from '../../ui/mystery/map/mapData.ts';
+import { hydeEmergedOf, hydeVisibleOf, investigationOf, lineOfSightOf, routeOf } from './hud/publicRun.ts';
+import { stackKindOf, ThingStack, type StackItem } from './hud/thingStack.ts';
+import {
+  buildHud, CaptionLog, captionFor, clueCardContent, directionOf, hudRenderKey, NoiseMeter, noiseBand, objectiveText, RiskHold, ThreatHold, threatEdgePoint,
+  type AbilityMeta, type ClueCardView, type ExamineToastView, type HudExtras, type MysteryHudModel, type StackView, type Toast,
 } from './hudModel.ts';
 import { IDLE_INPUT, MysteryInputController, type MysteryFrameInput } from './input.ts';
-import { integrationStatus, loadCaseSolution, loadRunCtor, loadSceneCtor, nightshadeDef, partnerDef } from './integration.ts';
+import { integrationStatus, loadCaseSolution, loadCrackstoneFreeMap, loadRunCtor, loadSceneCtor, nightshadeDef, partnerDef } from './integration.ts';
 import { LiveRunContext } from './liveContext.ts';
 import { ctrlCrouchEnabled } from './kiosk.ts';
 import { browserStorage, writeLive, type LivePhase } from './records.ts';
 import type { MysteryRunLike, MysterySceneLike } from './runTypes.ts';
-import { thing as script } from './thingLines.ts';
+import type { LiveStatusWithInsights } from '../../ui/mystery/stationView.ts';
 
 const HUD_INTERVAL_MS = 66;
+/** The React HUD re-renders at least this often even when hudRenderKey is unchanged (safety net). */
+const HUD_FORCE_S = 0.5;
+/** Events after which the public investigation state is re-read at once (else 4 Hz). */
+const INV_EVENTS: ReadonlySet<string> = new Set(['site_checked', 'trace_found', 'clue_found', 'examined', 'passage_opened', 'hyde_emerged']);
+/** Low graphics also cuts CPU: the React HUD snapshot at 10 Hz instead of 15 (the canvases drop to 15 Hz). */
+const HUD_INTERVAL_LOW_MS = 100;
+/** Crackstone's area intro, this long after "Go." (UX_ENEMIES §6). */
+const CRACK_INTRO_DELAY_S = 3;
+/** Captions for his scan chant only within this distance; the cloak rustle only within 12 m. */
+const CRACK_CHANT_M = 40;
+const CRACK_RUSTLE_M = 12;
 const END_DELAY_S = { finished: 1.4, dnf: 2.4 } as const;
-const HINT_COOLDOWN_S = 10;
 const BOARD_LOCK_TOAST_S = 1.2;
+/** analytics.live() cadence (~3 Hz; the contract allows 2–4 Hz). */
+const LIVE_EVERY_S = 0.33;
+/** Station status (localStorage + LIVE hooks) cadence. */
+const STATUS_EVERY_S = 1;
+/** Odds panel render cadence (≤ 1 Hz, UX §7.6). */
+const ODDS_EVERY_S = 1;
+/** Seen-tracker / visibility / shimmer cadence. */
+const SLOW_EVERY_S = 0.25;
+const CLUE_CARD_S = 6;
+const CLUE_CARD_BLOCK_S = 2;
+const EXAMINE_TOAST_S = 3;
+const EMPTY_TOAST_GAP_S = 3;
+const SEEN_M = 12;
+const ADVICE_TARGET_S = 16;
+const HEARD_HYDE_S = 3;
+const SHIMMER_FAR_M = 6;
+const SHIMMER_NEAR_M = 2;
 
 export type LoopPhase = 'loading' | 'missing' | 'webgl_failed' | 'error' | 'ready';
 export type AutopilotProfile = 'stealthy' | 'careless';
@@ -63,13 +117,18 @@ export interface MysteryLoopHandle {
   run: () => MysteryRunLike | null;
   input: () => MysteryInputController | null;
   endTutorial: () => void;
-  /** null = leave the case unsolved. */
   /** The one-shot accusation (loads the case's answer key first); resolves false when it was not accepted. */
   accuse: (a: Accusation) => Promise<boolean>;
   /** Board may open now (blocked during CHASE); shows the 1.2 s "Board locked" toast when not. */
   tryOpenBoard: () => boolean;
   setAutopilot: (p: AutopilotProfile | null) => Promise<boolean>;
   analytics: () => MysteryAnalytics | null;
+  /** Compass + minimap feed (≤ 30 Hz pull, outside React render). */
+  nav: () => NavFeed | null;
+  /** The public map state (also for the Tab investigation map). */
+  mapState: () => PublicMapState | null;
+  /** Latest live analytics sample (forecasts + current advice), null before the first / without the API. */
+  liveAnalytics: () => LiveAnalytics | null;
   debug: () => object | null;
   advance: (ms: number) => void;
 }
@@ -84,6 +143,7 @@ export function isWebGLAvailable(): boolean {
 }
 
 type BotLike = { decide(): MysteryFrameInput; o: { decisionHz: number } };
+type LiveApi = { live?: () => LiveAnalytics; hint?: (level: 1 | 2 | 3, o?: { requested?: boolean }) => LiveMessage | null };
 
 export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOptions): MysteryLoopHandle {
   const [phase, setPhase] = useState<LoopPhase>('loading');
@@ -102,6 +162,9 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
     handle: (events: StampedEvent[], advice: Advice | null) => void;
     boardLocked: () => void;
     autopilot: (bot: BotLike | null) => void;
+    nav: () => NavFeed | null;
+    mapState: () => PublicMapState | null;
+    live: () => LiveAnalytics | null;
   } | null>(null);
   const debugRef = useRef<(() => object) | null>(null);
   const advanceRef = useRef<((ms: number) => void) | null>(null);
@@ -147,8 +210,13 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         return;
       }
       try {
-        const run = new Run({ duo: opts.current.duo, seed: opts.current.seed, caseDef: opts.current.caseDef, tutorial: opts.current.tutorial });
+        // TEST FIXTURE only (local demo): `&crackstone=0` plays the case without its second enemy
+        const noCrack = !opts.current.hideSeed && typeof location !== 'undefined' && new URLSearchParams(location.search).get('crackstone') === '0';
+        const fixtureMap = noCrack ? await loadCrackstoneFreeMap(opts.current.caseDef.id) : null;
+        if (disposed) return;
+        const run = new Run({ duo: opts.current.duo, seed: opts.current.seed, caseDef: opts.current.caseDef, tutorial: opts.current.tutorial, ...(fixtureMap ? { map: fixtureMap } : {}) });
         const s = getSettings();
+        // The renderer gets the run's per-session map (run.map), never the shared case map.
         cleanup = start(run, new Scene(container, run.map, opts.current.duo, { reducedMotion: s.reducedMotion, lowGraphics: s.lowGraphics }));
         setPhase('ready');
       } catch (err) {
@@ -166,8 +234,8 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
     function start(run: MysteryRunLike, scene: MysterySceneLike): () => void {
       runRef.current = run;
       sceneRef.current = scene;
-      const s = getSettings();
-      const input = new MysteryInputController({ sensitivity: s.lookSensitivity, invertY: s.invertY, crouchToggle: s.crouchToggle }, ctrlCrouchEnabled);
+      const s0 = getSettings();
+      const input = new MysteryInputController({ sensitivity: s0.lookSensitivity, invertY: s0.invertY, crouchToggle: s0.crouchToggle }, ctrlCrouchEnabled);
       inputRef.current = input;
 
       const n = nightshadeDef(run.duo.characterId);
@@ -175,6 +243,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       const power: AbilityMeta = { def: n.power, name: n.power.name, art: opts.current.characterArt, cooldownS: n.power.cooldownS, denied: null };
       const move: AbilityMeta = { def: p.move, name: p.move.name, art: opts.current.pokemonArt, cooldownS: p.move.cooldownS, denied: null };
       const abilityName = (key: 'F' | 'Q') => (key === 'F' ? power.name : move.name);
+      const hasSwitch = [n.power, p.move].some((a) => a.effects.some((e) => e.kind === 'power_switch'));
       // Phase 4: the game-wide analytics session (identical for every duo). LOCAL DEMO: batches stay in the collector
       // (no network, no "unsynced" noise). LIVE station: liveRun.ts uploads pendingBatch() → mystery-append-events.
       const analytics = createMysteryAnalytics(run as unknown as MysteryRun, {
@@ -182,13 +251,22 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       });
       analyticsRef.current = analytics;
       liveRef.current?.runStarted(run, analytics);
+      // Overhaul live feed (fullstack-developer): feature-detected so the HUD degrades if the API is missing.
+      const liveApi = analytics as unknown as LiveApi;
+      const hasLive = typeof liveApi.live === 'function';
+      const geometry = mapGeometry(run.map);
+      const world = run.map.world ?? null;
+      const los = lineOfSightOf(run);
       const riskHold = new RiskHold();
       let lastAdvice: Advice | null = null;
       let nextLiveAt = 0;
+      let nextStatusAt = 0;
 
       const noise = new NoiseMeter();
       const captions = new CaptionLog();
-      const thing = new ThingDirector();
+      const stack = new ThingStack();
+      const ladder = new HintLadder();
+      const tracker = new OddsDeltaTracker();
       const threat = new ThreatHold();
       let realT = 0;
       let lastStatus = run.status;
@@ -197,106 +275,215 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       let prevPowerReady = true;
       let prevMoveReady = true;
       let lastHudAt = 0;
-      let eggLowSaid = false;
-      let pendingCount: number | null = null;
-      let threatK = 0;
-      let hintK = 0;
-      let hintObjective: string | null = null;
-      let lastHintAt = -Infinity;
       let deniedSeq = 0;
       let toastSeq = 0;
       let toast: { t: Toast; until: number } | null = null;
-      let evidenceToast: { t: Toast; until: number } | null = null;
       let catchFlashSeq = 0;
       let bot: BotLike | null = null;
       let botEvery = 1;
       let botStep = 0;
       let botHeld: MysteryFrameInput = IDLE_INPUT;
-      let lastPose: ThingLineState['pose'] | null = null;
+      let lastPose: Parameters<NonNullable<MysterySceneLike['setThingPose']>>[0] = null;
+      // ---- overhaul HUD state
+      let liveA: LiveAnalytics | null = null;
+      let inv: InvestigationState = investigationOf(run);
+      let emerged = hydeEmergedOf(run, inv);
+      let hydeVisible = false;
+      let nextSlowAt = 0;
+      let nextOddsAt = 0;
+      let obsEpoch = 0;
+      let odds: OddsView = { phase: 'hidden', groups: [], footer: [] };
+      let clueCard: { v: Omit<ClueCardView, 'leaving'>; shownAt: number; until: number } | null = null;
+      let examine: { v: ExamineToastView; until: number; trace: { siteId: string; before: number | undefined; label: string } | null } | null = null;
+      let lastEmptyToastAt = -Infinity;
+      let hintShow: { level: 2 | 3; areaId: string | null; target: MapTarget | null; until: number } | null = null;
+      let adviceTarget: (MapTarget & { until: number }) | null = null;
+      let heard: { bearing: number; until: number } | null = null;
+      let route: { pts: Vec2[]; key: string; at: number } | null = null;
+      const seenHazards = new Set<string>();
+      let leverSeen = false;
+      const visitedAreas = new Set<string>();
+      const areaDoneAt: Record<string, number> = {};
+      const flashes: PublicMapState['flashes'][number][] = [];
+      let knownSites = new Set<string>(Object.values(inv.knownClueSites).filter((x): x is string => !!x));
+      let eggSeenWas = inv.eggSeenAt;
+      const shimmerSaid = new Set<string>();
+      let shimmer = 0;
+      let firstCarryTip = false;
+      // nav feed: one build per frame at most, and none while its content key is unchanged (canvases then skip too)
+      let feedCache: { realT: number; simT: number; feed: NavFeed } | null = null;
+      let seenArr: string[] = [];
+      let visitedArr: string[] = [];
+      let flashArr: PublicMapState['flashes'][number][] = [];
+      let flashLast: PublicMapState['flashes'][number] | undefined;
+      // React HUD: setState only when something visible changed (or every 0.5 s as a safety net)
+      let lastHudKey = '';
+      let lastHudSetAt = -Infinity;
+      // reused every frame (no per-frame object literal for the idle-ladder rule)
+      const ladderIn: Parameters<typeof ladderPaused>[0] = { status: '', emerged: false, hydeMode: '', objective: '', interacting: null };
+      let lastCardId: string | null = null;
+      // ---- Joseph Crackstone (null = this case has none: nothing of him runs or renders)
+      const crack = crackstoneOf(run);
+      const crackHold = new CrackThreatHold();
+      const telegraph = new TelegraphTracker();
+      const limiter = new AlertLimiter();
+      let tele: TelegraphOutput = { banner: null, cursedLeftS: null, announce: [], log: null };
+      let crackAnnouncedAt: number | null = null;
+      let crackIntroAt: number | null = null;
+      let heardCrack: { bearing: number; until: number } | null = null;
+      let crackEscapes = 0;
+      let crackChases = 0;
+      let hydeChases = 0;
+      let lastEdge: MysteryHudModel['threatEdge'] = null;
 
       const showToast = (t: Omit<Toast, 'id'>, s: number) => {
         toast = { t: { ...t, id: ++toastSeq }, until: realT + s };
       };
       const bearing = () => run.hydeBearing?.() ?? null;
-
-      thing.say(script.duoIntro({ character: opts.current.characterName, pokemon: opts.current.pokemonName }), 0, { priority: 2 });
-
-      const sayAdvice = (a: Advice, priority: number) => {
-        lastAdvice = a;
-        thing.say({ id: 'advice_' + a.t, text: a.text, pose: a.target ? 'point' : 'tap' }, realT, { priority, key: 'advice_' + a.t + '_' + a.action, why: a.reason });
+      /** Every stack item passes the §6 limiter (Crackstone P5 ≤ 1 / 20 s, same code ≥ 45 s, alerts ≤ 4 / min). */
+      const say = (item: Omit<StackItem, 't'> & { t?: number }) => {
+        if (!limiter.allow(item, realT)) return;
+        stack.push({ ...item, t: item.t ?? realT }, realT);
+      };
+      const crackHunting = () => !!crack && crack.active() && (crack.rt.mode === 'CHASE' || crack.rt.mode === 'ATTACK');
+      /** Caption direction toward Crackstone (only used for the public telegraph / sighting / nearby-rustle captions). */
+      const crackDir = () => {
+        const b = crack?.bearing() ?? null;
+        return b ? { dir: directionOf(b.angle), distanceM: b.distanceM, angle: b.angle } : null;
+      };
+      const crackCaption = (text: string, tone: 'info' | 'warn' | 'danger' | 'good', directional: boolean) => {
+        const d = directional ? crackDir() : null;
+        captions.push({ text, tone, dir: d?.dir ?? null }, realT);
+        if (d) heardCrack = { bearing: heardBearing(run.player.yaw, d.angle), until: realT + HEARD_HYDE_S };
+      };
+      const sayLog = (id: string, text: string, auto = true) => say({ id, kind: 'log', head: "THING'S LOG", text, priority: 0, auto });
+      const fromMsg = (m: LiveMessage, auto = true, priority = m.priority): Omit<StackItem, 't'> => ({
+        id: m.id, kind: stackKindOf(m.kind), head: m.title, text: m.text, why: m.why ?? null, ...(m.basis ? { basis: m.basis } : {}), priority, auto, target: m.target ?? null,
+      });
+      const threatNow = () => (emerged && (run.hyde.mode === 'INVESTIGATE_SOUND' || run.hyde.mode === 'SEARCH' || run.hyde.mode === 'CHASE')) || crackHunting();
+      const towerTarget: MapTarget = { x: run.map.tower.x, z: run.map.tower.z, label: 'Iago Tower', kind: 'tower' };
+      const areaIdNear = (t: { x: number; z: number }) => world?.areas.find((a) => Math.hypot(a.x - t.x, a.z - t.z) <= a.radiusM + 1)?.id ?? null;
+      const flash = (f: PublicMapState['flashes'][number]) => {
+        flashes.push(f);
+        while (flashes.length > 8) flashes.shift();
       };
 
+      /** Legacy-advice adapter (analytics without live()): a prescriptive Advice as a THING'S ADVICE card. */
+      const sayAdvice = (a: Advice, priority: number, auto: boolean) => {
+        lastAdvice = a;
+        say({ id: `advice_${a.t}_${a.action}`, kind: 'advice', head: "THING'S ADVICE", text: a.text, why: a.reason, priority, auto, target: a.target ? { ...a.target, label: '' } : null });
+      };
+
+      // ---------------------------------------------------------------------------------------- hint ladder (R7)
+      const fallbackHint = (level: 1 | 2 | 3): LiveMessage | null => {
+        const ob = run.objective();
+        if (level === 1) return { id: `hint1_${realT}`, kind: 'log', title: "THING'S LOG", text: ob === 'find_egg' ? 'Find the egg. Check the odds.' : run.caseDef.thing.whereHint, t: run.t, priority: 0 };
+        const f = liveA?.forecasts;
+        if (ob === 'find_clues' && f?.clueAreas?.areas.length) {
+          const top = [...f.clueAreas.areas].sort((a, b) => b.p - a.p)[0]!;
+          return { id: `hint${level}_${realT}`, kind: 'advice', title: "THING'S ADVICE", text: `Try the ${top.name}. Clue chance ${Math.round(top.p * 20) * 5}%.`, why: f.clueAreas.label, t: run.t, priority: 2, target: { x: top.x, z: top.z, label: top.name } };
+        }
+        if (ob === 'find_egg' && f?.egg?.sites.length) {
+          const top = [...f.egg.sites].filter((s) => !s.ruledOut).sort((a, b) => b.p - a.p)[0];
+          if (top) return { id: `hint${level}_${realT}`, kind: 'advice', title: "THING'S ADVICE", text: `Search the ${top.label}. The egg is most likely there.`, why: f.egg.label, t: run.t, priority: 2, target: { x: top.x, z: top.z, label: top.label } };
+        }
+        return null;
+      };
+      const showHint = (level: 1 | 2 | 3, requested: boolean) => {
+        let msg: LiveMessage | null = null;
+        if (hasLive && typeof liveApi.hint === 'function') {
+          try {
+            msg = liveApi.hint(level, { requested });
+          } catch (err) {
+            console.warn('[mystery] analytics.hint failed', err);
+          }
+        }
+        msg ??= fallbackHint(level);
+        if (!msg) return;
+        say({ ...fromMsg(msg, !requested, requested ? Math.max(4, msg.priority) : msg.priority) });
+        if (level === 1 && world) {
+          for (const a of world.areas) flash({ kind: 'reveal', x: a.x, z: a.z, t0: run.t });
+        }
+        if (level >= 2 && msg.target) {
+          const lvl = level as 2 | 3;
+          hintShow = { level: lvl, areaId: areaIdNear(msg.target), target: { ...msg.target, kind: lvl === 2 ? 'area' : 'site' }, until: realT + HINT_SHOW_S[lvl] };
+          route = null;
+          if (lvl === 3) scene.pointThing?.({ x: msg.target.x, z: msg.target.z });
+        }
+      };
+
+      // ---------------------------------------------------------------------------------------- events
       const handle = (events: StampedEvent[], advice: Advice | null) => {
-        // Context advice (Hyde alert / egg drop, analytics-paced): shown unless something more urgent is speaking.
-        if (advice && !events.some((e) => e.type === 'hint_requested')) sayAdvice(advice, 2);
+        // Without the live feed: context advice from the prescriptive service (analytics-paced).
+        if (!hasLive && advice && !events.some((e) => e.type === 'hint_requested')) sayAdvice(advice, threatNow() ? 4 : 2, true);
+        if (hasLive && advice) lastAdvice = advice;
         for (const e of events) {
           const b = bearing();
           const cap = captionFor(e, abilityName, b ? directionOf(b.angle) : null, b?.distanceM ?? Math.hypot(run.hyde.x - run.player.x, run.hyde.z - run.player.z));
-          if (cap) captions.push(cap, realT); // captions are always on (UX §7), muted or not
+          if (cap) {
+            captions.push(cap, realT); // captions are always on (UX §7), muted or not
+            if (e.type === 'hyde_mode' && b && cap.dir) heard = { bearing: heardBearing(run.player.yaw, b.angle), until: realT + HEARD_HYDE_S };
+          }
+          if (crack) crackEvent(e, events);
           switch (e.type) {
             case 'hyde_mode':
+              if (e.to === 'CHASE') hydeChases++;
               if (e.to === 'CHASE') {
                 audio.play('growl');
                 announce('The Hyde is chasing you!', 'alert');
-                thing.say(script.threat('CHASE', threatK++), realT, { priority: 3 });
+                if (!hasLive) say({ id: `chase_${e.seq}`, kind: 'why', head: 'HYDE ALERT', text: 'It sees you! Break its line of sight!', priority: 5 });
               } else if (e.to === 'INVESTIGATE_SOUND') {
                 audio.play('sting');
                 announce('The Hyde heard a noise.');
-                thing.say(script.threat('INVESTIGATE_SOUND', threatK++), realT, { priority: 2 });
               } else if (e.to === 'SEARCH') {
                 announce('The Hyde is searching.');
-                thing.say(script.threat('SEARCH', threatK++), realT, { priority: 2 });
-              } else if (e.to === 'COOLDOWN' && e.from === 'CHASE') {
-                thing.say(script.threat('COOLDOWN', threatK++), realT, { priority: 1 });
+              } else if (e.to === 'COOLDOWN' && e.from === 'CHASE' && !hasLive) {
+                sayLog(`lost_${e.seq}`, 'Hyde lost you.');
               }
               break;
             case 'catch':
               audio.play(e.blocked ? 'clean' : 'rescue');
               catchFlashSeq++;
-              if (e.blocked) {
-                showToast({ tone: 'success', icon: 'shieldCheck', headline: `BLOCKED — no damage. Catch still counts: ${e.catchNumber} of 2`, sub: null }, 2);
-                thing.say(script.catchBlocked(), realT, { priority: 3 });
-              } else if (e.catchNumber === 1) {
-                showToast({ tone: 'danger', icon: 'claw', headline: `CAUGHT — 1 of 2 · −${Math.round(e.hpLost)} HP`, sub: 'Released at a safe spot. Next catch ends the run.' }, 2);
-                thing.say(script.catchFirst(), realT, { priority: 3 });
-              }
+              if (e.blocked) showToast({ tone: 'success', icon: 'shieldCheck', headline: `BLOCKED — no damage. Catch still counts: ${e.catchNumber} of 2`, sub: null }, 2);
+              else if (e.catchNumber === 1) showToast({ tone: 'danger', icon: 'claw', headline: `CAUGHT — 1 of 2 · −${Math.round(e.hpLost)} HP`, sub: 'Released at a safe spot. Next catch ends the run.' }, 2);
               announce(e.blocked ? `Grab blocked. The catch still counts: ${e.catchNumber} of 2.` : `Caught! ${e.catchNumber} of 2.`, 'alert');
-              break;
-            case 'clue_search_start':
-              thing.say(script.searchStart(), realT, { priority: 1, once: true });
               break;
             case 'clue_found': {
               audio.play('chime');
-              const title = clueTitle(run, e.clueId);
-              evidenceToast = { t: { id: ++toastSeq, tone: 'lantern', icon: CLUE_ICON[e.clueId], headline: title, sub: 'Tab to read' }, until: realT + 3.5 };
-              thing.say(script.clueFound(run.caseDef, e.clueId), realT, { priority: 3 });
-              pendingCount = e.cluesFound;
-              announce(`Clue found: ${title}. ${e.cluesFound} of ${run.caseDef.clues.length}.`);
+              audio.play('paper');
+              const c = clueCardContent(run.caseDef, e.clueId);
+              clueCard = { v: { id: ++toastSeq, clueId: e.clueId, ...c }, shownAt: realT, until: realT + CLUE_CARD_S };
+              announce(`Clue found: ${c.fullTitle}. ${c.short}${c.meaning ? ` Meaning: ${c.meaning}` : ''}`);
+              if (!hasLive) sayLog(`clues_${e.cluesFound}`, `${e.cluesFound} of ${run.caseDef.clues.length} clues found.`);
+              ladder.progress();
+              hintShow = null;
+              obsEpoch++;
               break;
             }
             case 'egg_pickup':
               audio.play('clean');
-              thing.say(script.eggPickup(), realT, { priority: 2, once: true });
+              ladder.progress();
+              hintShow = null;
+              // With live analytics the first carrying advice is "Take the egg to Iago Tower." and the centre prompt already
+              // shows "Hold E: set the egg down", so this tip is only the fallback.
+              if (!firstCarryTip && !hasLive) {
+                firstCarryTip = true;
+                say({ id: 'tip_carry', kind: 'advice', head: "THING'S ADVICE", text: 'Hold E: set the egg down', why: 'Heavy egg: you are slower and louder.', priority: 2 });
+              }
               break;
             case 'egg_drop':
               audio.play('thud');
-              if (e.reason === 'manual') thing.say(script.eggSetDown(), realT, { priority: 2 });
-              else {
-                thing.say(script.eggForcedDrop(), realT, { priority: 3 });
-                announce('You dropped the egg.', 'alert');
-              }
-              break;
-            case 'egg_damage':
-              if (e.security < 40 && !eggLowSaid) {
-                eggLowSaid = true;
-                thing.say(script.eggLow(), realT, { priority: 2 });
-              }
+              if (e.reason !== 'manual') announce('You dropped the egg.', 'alert');
               break;
             case 'egg_delivered':
               audio.play('fanfare');
+              if (!hasLive) sayLog('egg_secured', 'Egg secured.');
               break;
             case 'ability_used':
               audio.play('whoosh');
+              if (e.success && e.kinds.includes('power_switch') && run.map.powerSwitch && run.isWallOpen(run.map.powerSwitch.gateWallId)) {
+                examine = { v: { id: ++toastSeq, kind: 'switch', head: 'GATE POWERED', text: 'The shortcut gate is open.', odds: null }, until: realT + EXAMINE_TOAST_S, trace: null };
+              }
               break;
             case 'ability_denied': {
               audio.play('denied');
@@ -305,24 +492,64 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
               meta.denied = { seq: ++deniedSeq, at: realT, text: e.reason === 'no_target' ? 'No Hyde in range' : `Not ready · ${Math.ceil(st.cooldownLeftS)} s` };
               break;
             }
-            case 'hint_requested': {
-              // V: the prescriptive service's feasible advice (text + Why); only when it has nothing to add, the
-              // designer's generic hint lines (never invented text).
-              if (advice) sayAdvice(advice, 4);
-              else {
-                const ob = run.objective();
-                if (hintObjective !== ob) hintK = 0;
-                hintObjective = ob;
-                thing.say(script.hint(ob, hintK++, run.caseDef), realT, { priority: 4, key: 'hint_' + realT });
-              }
+            case 'examined': {
+              const ex = world?.examines.find((x) => x.id === e.examineId);
+              examine = { v: { id: ++toastSeq, kind: 'examine', head: null, text: ex?.text ?? 'You look closely.', odds: null }, until: realT + EXAMINE_TOAST_S, trace: null };
+              ladder.progress();
               break;
             }
+            case 'trace_found': {
+              const site = world?.eggSites.find((x) => x.id === e.siteId);
+              const trace = { siteId: e.siteId, before: tracker.lastPct(`egg:${e.siteId}`), label: site?.label ?? 'egg' };
+              if (examine && examine.v.kind === 'examine' && realT < examine.until) examine.trace = trace;
+              else examine = { v: { id: ++toastSeq, kind: 'examine', head: null, text: site?.traceText ?? 'A trace of the egg.', odds: null }, until: realT + EXAMINE_TOAST_S, trace };
+              obsEpoch++;
+              break;
+            }
+            case 'site_checked':
+              obsEpoch++;
+              ladder.progress();
+              if (!e.found && realT - lastEmptyToastAt >= EMPTY_TOAST_GAP_S && !(examine && realT < examine.until)) {
+                lastEmptyToastAt = realT;
+                examine = {
+                  v: { id: ++toastSeq, kind: 'empty', head: null, text: e.site === 'clue' ? 'Nothing here.' : 'Not here.', odds: e.site === 'clue' ? 'Clue odds updated.' : 'Egg odds updated.' },
+                  until: realT + EXAMINE_TOAST_S, trace: null,
+                };
+                if (e.site === 'egg') sayLog(`egg_empty_${e.siteId}`, 'Not here. Odds updated.');
+              }
+              break;
+            case 'passage_opened': {
+              const ps = world?.passage;
+              examine = { v: { id: ++toastSeq, kind: 'passage', head: 'PASSAGE OPEN', text: ps?.text ?? 'A hidden passage opens.', odds: null }, until: realT + EXAMINE_TOAST_S, trace: null };
+              const dir = ps ? relDir({ x: ps.leverX, z: ps.leverZ }) : null;
+              captions.push({ text: '[Stone grinds open]', tone: 'info', dir }, realT);
+              sayLog('passage_open', 'Hidden passage open.');
+              audio.play('grind');
+              announce('Hidden passage open.');
+              if (ps) flash({ kind: 'passage', wallId: ps.wallId, x: ps.leverX, z: ps.leverZ, t0: run.t });
+              break;
+            }
+            case 'hazard_triggered': {
+              const hz = world?.hazards.find((h) => h.id === e.hazardId);
+              const text = !hz ? '[A loud noise]' : hz.kind === 'searchlight' ? '[Searchlight hums]'
+                : hz.look === 'glass' ? '[Glass crunches]' : hz.look === 'boards' ? '[Boards creak]' : hz.look === 'rubble' ? '[Rubble shifts]' : '[Water splashes]';
+              captions.push({ text, tone: 'warn', dir: null }, realT);
+              if (hz) seenHazards.add(hz.id);
+              break;
+            }
+            case 'hyde_emerged':
+              emerged = true;
+              announce('The Hyde has emerged.', 'alert');
+              audio.play('sting');
+              break;
+            case 'hyde_sighted':
+              obsEpoch++;
+              break;
             case 'dnf':
               if (!ending) ending = { outcome: 'dnf', at: realT };
               catchFlashSeq++;
               audio.play('toll');
               showToast({ tone: 'danger', icon: 'claw', headline: 'Dragged into the fog.', sub: null }, 3);
-              thing.say(script.dnf(e.reason), realT, { priority: 5 });
               break;
             case 'finish':
               if (!ending) ending = { outcome: 'finished', at: realT };
@@ -333,57 +560,379 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         }
       };
 
+      /** Caption direction of a world point relative to the facing. */
+      const relDir = (pt: Vec2) => directionOf((-relBearingDeg(run.player.yaw, run.player, pt) * Math.PI) / 180);
+
+      // ---------------------------------------------------------------------------------------- Crackstone events
+      const crackEvent = (e: StampedEvent, batch: readonly StampedEvent[]) => {
+        if (!crack) return;
+        const cfg = crack.tuning;
+        switch (e.type) {
+          case 'crackstone_mode': {
+            nextOddsAt = 0; // rebuild the odds row now so a stale "Hunting you" fact clears with the plaque, not a second later
+            if (e.reason === 'deferred') return; // he yielded to a Hyde chase (R6): say nothing
+            if (encounterStart(e)) {
+              crackChases++;
+              announce('Crackstone is hunting you!', 'alert');
+              // with the live feed the analytics layer writes the CRACKSTONE items (liveMessages.ts); this is the fallback
+              const why = CHASE_WHY[e.reason];
+              if (!hasLive && why) say({ id: `crack_chase_${e.reason}_${e.seq}`, kind: 'why', head: CRACK_HEAD, text: why, priority: 5, basis: 'rule' });
+              if (!hasLive) say({ id: `crack_advice_hide_${e.seq}`, kind: 'advice', head: "THING'S ADVICE", text: 'Get behind a wall or hide.', why: 'He hunts by sight, not sound.', priority: 4 });
+            } else if ((e.from === 'CHASE' || e.from === 'ATTACK') && e.to === 'SEARCH' && ESCAPE_WHY[e.reason]) {
+              crackEscapes++;
+              if (!hasLive) {
+                say({ id: `crack_escape_${e.reason}_${e.seq}`, kind: 'why', head: CRACK_HEAD, text: ESCAPE_WHY[e.reason]!, priority: 3, basis: 'rule' });
+                sayLog(`crack_lost_${e.seq}`, `Crackstone lost you. Escapes: ${crackEscapes}.`);
+              }
+              announce('Crackstone lost you.');
+            } else if (e.to === 'PATROL') {
+              const d = crackDir();
+              if (d && d.distanceM <= CRACK_RUSTLE_M) crackCaption('[Cloak rustles]', 'info', true);
+            }
+            return;
+          }
+          case 'crackstone_sighted':
+            audio.play('knell');
+            crackCaption('[A bell tolls]', 'danger', true);
+            return;
+          case 'crackstone_scan': {
+            const d = crackDir();
+            const near = !!d && d.distanceM <= CRACK_CHANT_M;
+            if (e.phase === 'warning') {
+              if (near) {
+                audio.play('chant', { durS: cfg.scanWarnS });
+                crackCaption('[Crackstone chants]', 'warn', true);
+              }
+            } else if (near || e.hit) {
+              audio.play('pulse');
+              crackCaption('[A cold wave passes]', e.hit ? 'danger' : 'info', false);
+            }
+            return;
+          }
+          case 'curse':
+            if (e.phase === 'cast') {
+              audio.play('curseCast', { durS: cfg.curseWindupS });
+              crackCaption('[A curse hisses]', 'danger', false);
+            } else if (e.phase === 'hit') {
+              if (e.blocked) {
+                audio.play('curseFizzle');
+                audio.play('clean');
+                crackCaption('[The curse fizzles]', 'good', false);
+                announce('Curse blocked. No damage.', 'alert');
+              } else {
+                audio.play('curseHit');
+                crackCaption('[The curse strikes you]', 'danger', false);
+                announce(`Cursed! Minus ${Math.round(e.hpLost)} HP. You are slowed.`, 'alert');
+                if (!hasLive) say({ id: `crack_curse_hit_${e.seq}`, kind: 'why', head: CRACK_HEAD, text: 'The curse hit: you stayed in the ring.', priority: 5, basis: 'rule' });
+              }
+            } else {
+              audio.play('curseFizzle');
+              crackCaption('[The curse fizzles]', 'info', false);
+              // a dodge (not a cancellation by a stun / lure / the Hyde's chase in the same step)
+              const cancelled = batch.some((x) => x.type === 'crackstone_mode' && (x.reason === 'stunned' || x.reason === 'lured' || x.reason === 'deferred'))
+                || run.effects().crackstoneStunned;
+              if (!hasLive && !cancelled) say({ id: `crack_curse_dodged_${e.seq}`, kind: 'why', head: CRACK_HEAD, text: 'Curse dodged: you left the ring in time.', priority: 3, basis: 'rule' });
+            }
+            return;
+          default:
+            return;
+        }
+      };
+
       const watchStatus = () => {
         if (run.status === lastStatus) return;
         const prev = lastStatus;
         lastStatus = run.status;
-        if (prev === 'tutorial' && run.status === 'playing') thing.say(script.objective(run.objective(), run.caseDef), realT, { priority: 2, once: true, key: 'case_open' });
+        if (prev === 'tutorial' && run.status === 'playing') {
+          sayLog('go', 'Go. Tab shows your evidence.', false);
+          if (crack) crackIntroAt = realT + CRACK_INTRO_DELAY_S;
+        }
         if (run.status === 'accusing') {
-          const n = run.cluesFound.length;
-          const total = run.caseDef.clues.length;
-          thing.say(n < total ? script.towerFewClues(n, total) : script.towerDeposit(), realT, { priority: 4 });
           liveRef.current?.flushNow('deposit');
           opts.current.onDeposited();
         }
         if ((run.status === 'finished' || run.status === 'dnf') && !ending) ending = { outcome: run.status, at: realT };
       };
 
-      const hudSnapshot = (): MysteryHudModel => {
-        if (pendingCount !== null && thing.current === null) {
-          thing.say(script.clueCount(pendingCount), realT, { priority: 2 });
-          pendingCount = null;
+      // ---------------------------------------------------------------------------------------- slow tick (4 Hz)
+      const slowTick = () => {
+        inv = investigationOf(run);
+        emerged = hydeEmergedOf(run, inv);
+        hydeVisible = emerged && hydeVisibleOf(run);
+        const me = { x: run.player.x, z: run.player.z };
+        // seen hazards / lever (≤ 12 m with line of sight) or outlined by a reveal power
+        const fx = run.effects();
+        for (const h of world?.hazards ?? []) {
+          if (seenHazards.has(h.id)) continue;
+          const pts = h.kind === 'searchlight' ? [{ x: h.x, z: h.z }] : h.polygon;
+          const near = pts.some((q) => Math.hypot(q.x - me.x, q.z - me.z) <= (fx.revealHazards ? 25 : SEEN_M) && (fx.revealHazards || los(me, q)));
+          if (near) seenHazards.add(h.id);
         }
-        const tl = thing.update(realT);
-        // The in-world Thing mirrors the caption's gesture (null = its own idle).
-        const pose = run.status === 'tutorial' ? null : tl?.pose ?? null;
+        const ps = world?.passage;
+        if (ps && !leverSeen && Math.hypot(ps.leverX - me.x, ps.leverZ - me.z) <= SEEN_M && los(me, { x: ps.leverX, z: ps.leverZ })) leverSeen = true;
+        // visited areas + "nothing left" times
+        for (const a of world?.areas ?? []) {
+          if (Math.hypot(a.x - me.x, a.z - me.z) <= a.radiusM) visitedAreas.add(a.id);
+          if (areaDoneAt[a.id] === undefined && areaIsDone(a.id)) areaDoneAt[a.id] = run.t;
+        }
+        // reveal pulses: a clue site / the egg just became known
+        const known = new Set(Object.values(inv.knownClueSites).filter((x): x is string => !!x));
+        for (const id of known) {
+          if (knownSites.has(id)) continue;
+          const st = world?.clueSites.flatMap((g) => g.sites).find((x) => x.id === id);
+          if (st) flash({ kind: 'reveal', x: st.x, z: st.z, t0: run.t });
+        }
+        knownSites = known;
+        if (inv.eggSeenAt && inv.eggSeenAt !== eggSeenWas) {
+          const st = world?.eggSites.find((x) => x.id === inv.eggSeenAt);
+          if (st) flash({ kind: 'reveal', x: st.x, z: st.z, t0: run.t });
+        }
+        eggSeenWas = inv.eggSeenAt;
+        // proximity shimmer: only near a KNOWN (seen) uncollected clue site — never the hidden truth
+        let best: { d: number; pt: Vec2; area: string } | null = null;
+        for (const [clueId, siteId] of Object.entries(inv.knownClueSites)) {
+          if (!siteId || run.cluesFound.includes(clueId as ClueId)) continue;
+          const st = world?.clueSites.flatMap((g) => g.sites).find((x) => x.id === siteId);
+          if (!st) continue;
+          const d = Math.hypot(st.x - me.x, st.z - me.z);
+          if (!best || d < best.d) best = { d, pt: st, area: st.areaId };
+        }
+        const level = run.status === 'playing' && best ? (best.d >= SHIMMER_FAR_M ? 0 : best.d <= SHIMMER_NEAR_M ? 1 : (SHIMMER_FAR_M - best.d) / (SHIMMER_FAR_M - SHIMMER_NEAR_M)) : 0;
+        shimmer = level;
+        const pan = best ? Math.max(-1, Math.min(1, relBearingDeg(run.player.yaw, me, best.pt) / 90)) : 0;
+        audio.setShimmer(level, pan);
+        if (best && level > 0 && !shimmerSaid.has(best.area)) {
+          shimmerSaid.add(best.area);
+          captions.push({ text: '[Faint shimmer]', tone: 'good', dir: relDir(best.pt) }, realT);
+        }
+      };
+      const areaIsDone = (areaId: string): boolean => {
+        if (!world) return false;
+        const open = world.clueSites.filter((g) => !run.cluesFound.includes(g.clueId));
+        if (open.length === 0) return true;
+        return !open.some((g) => {
+          const known = inv.knownClueSites[g.clueId];
+          return g.sites.some((s) => s.areaId === areaId && (known ? known === s.id : !inv.checkedClueSites.includes(s.id)));
+        });
+      };
+
+      /**
+       * Crackstone items from the analytics feed: scan / curse warnings never enter the stack (the banner owns them), a
+       * deferral says nothing; other Crackstone diagnostics carry the CRACKSTONE headword. null = not about him.
+       */
+      const CRACK_SILENT = new Set([THING.crackstone.scanWarn.text, THING.crackstone.curseWarn.text, THING.crackstone.deferred.text]);
+      const crackMessage = (m: LiveMessage): 'drop' | 'crack' | null => {
+        const about = /crack|curse/i.test(m.id) || /crackstone/i.test(m.title);
+        if (!about) return null;
+        if (CRACK_SILENT.has(m.text) || /scan_?warn|curse_?warn|deferred/i.test(m.id)) return 'drop';
+        return 'crack';
+      };
+
+      // ---------------------------------------------------------------------------------------- live tick (~3 Hz)
+      const liveTick = () => {
+        if (!hasLive) return;
+        try {
+          liveA = liveApi.live!();
+        } catch (err) {
+          console.warn('[mystery] analytics.live failed', err);
+          return;
+        }
+        for (const m of liveA.messages) {
+          const cm = crackMessage(m);
+          if (cm === 'drop') continue;
+          if (/crackstone_area/.test(m.id) && crackAnnouncedAt === null) crackAnnouncedAt = run.t; // label promoted 30 s
+          if (m.kind === 'advice' && m.target) adviceTarget = { ...m.target, kind: 'advice', until: realT + ADVICE_TARGET_S };
+          const item = fromMsg(m);
+          say(cm === 'crack' && item.kind === 'why' ? { ...item, head: CRACK_HEAD } : item);
+        }
+        const prevLatest = tracker.latest;
+        tracker.update(liveA.forecasts, inv, obsEpoch, realT);
+        const nl = tracker.latest;
+        if (nl && nl !== prevLatest) {
+          // an observation moved an egg / clue estimate by ≥ 10 points: glass tick; ≥ 20 points is announced politely
+          audio.play('glass');
+          if (Math.abs(nl.to - nl.from) >= 20) announce(`${nl.id.startsWith('egg:') ? 'Egg' : 'Clue'} odds: ${nl.name} ${nl.from} to ${nl.to} percent.`);
+        }
+        if (examine?.trace && examine.v.odds === null) {
+          const after = tracker.lastPct(`egg:${examine.trace.siteId}`);
+          const before = examine.trace.before;
+          examine.v = { ...examine.v, odds: before !== undefined && after !== undefined && before !== after ? `Egg odds: ${examine.trace.label} ${deltaText(before, after)}` : 'Egg odds updated.' };
+        }
+      };
+
+      // ---------------------------------------------------------------------------------------- nav feed (≤ 30 Hz)
+      const objectiveTarget = (): MapTarget | null => {
+        const ob = run.objective();
+        if (ob === 'deliver_egg' || ob === 'accuse') return towerTarget;
+        if (ob === 'retrieve_egg' && run.egg.state === 'dropped') return { x: run.egg.x, z: run.egg.z, label: 'Dropped egg', kind: 'egg' };
+        if (hintShow && realT < hintShow.until && hintShow.target) return hintShow.target;
+        if (adviceTarget && realT < adviceTarget.until) return adviceTarget;
+        return null;
+      };
+      const routeFor = (target: MapTarget | null): Vec2[] | null => {
+        const ob = run.objective();
+        const want = ob === 'deliver_egg' || ob === 'retrieve_egg' || (hintShow?.level === 3 && realT < hintShow.until);
+        if (!want || !target) return null;
+        const key = `${target.x.toFixed(1)},${target.z.toFixed(1)}`;
+        if (!route || route.key !== key || realT - route.at > 1) {
+          route = { pts: routeOf(run, run.player, target) ?? [{ x: run.player.x, z: run.player.z }, target], key, at: realT };
+        }
+        return route.pts;
+      };
+      const mapState = (): PublicMapState => {
+        const fx = run.effects();
+        const egg = run.egg;
+        const chase = emerged && run.hyde.mode === 'CHASE';
+        const target = objectiveTarget();
+        return {
+          t: run.t,
+          geometry,
+          world,
+          investigation: inv,
+          forecasts: liveA?.forecasts ?? null,
+          cluesFound: run.cluesFound,
+          objective: run.objective(),
+          player: {
+            x: run.player.x, z: run.player.z, yaw: run.player.yaw, stance: run.player.stance, crouched: run.player.crouched,
+            noiseRadiusM: run.noiseRadiusM?.() ?? 0, noiseBand: noiseBand(noise.value),
+          },
+          eggState: egg.state,
+          // dropped: the player saw it fall; resting: only while a reveal power shows it (power-justified)
+          eggMarker: egg.state === 'dropped' ? { x: egg.x, z: egg.z, kind: 'dropped' } : egg.state === 'resting' && fx.revealEgg ? { x: egg.x, z: egg.z, kind: 'revealed' } : null,
+          // R4 for both enemies: visible, chasing, or shown by an enemy reveal effect in range
+          hyde: emerged && (hydeVisible || chase || revealedByEffect(fx, Math.hypot(run.hyde.x - run.player.x, run.hyde.z - run.player.z)))
+            ? { x: run.hyde.x, z: run.hyde.z, mode: chase ? 'chase' : 'visible' } : null,
+          crack: crack ? crackMapState(crack, fx, run.player, crackAnnouncedAt) : null,
+          openWalls: [world?.passage?.wallId, run.map.powerSwitch?.gateWallId].filter((id): id is string => !!id && run.isWallOpen(id)),
+          seenHazards: seenArr.length === seenHazards.size ? seenArr : (seenArr = [...seenHazards]),
+          leverSeen,
+          showSwitch: hasSwitch,
+          hint: hintShow && realT < hintShow.until ? { level: hintShow.level, areaId: hintShow.areaId, target: hintShow.target } : { level: 0, areaId: null, target: null },
+          target,
+          route: routeFor(target),
+          visitedAreas: visitedArr.length === visitedAreas.size ? visitedArr : (visitedArr = [...visitedAreas]),
+          areaDoneAt,
+          flashes: flashArr.length === flashes.length && flashLast === flashes[flashes.length - 1] ? flashArr : ((flashLast = flashes[flashes.length - 1]), (flashArr = [...flashes])),
+        };
+      };
+      const navFeed = (): NavFeed | null => {
+        if (feedCache && feedCache.realT === realT && feedCache.simT === run.t) return feedCache.feed; // same frame
+        const st = getSettings();
+        const s = mapState();
+        const o = {
+          heardHydeBearing: heard && realT < heard.until ? heard.bearing : null,
+          heardCrackBearing: heardCrack && realT < heardCrack.until ? heardCrack.bearing : null,
+          showPredictions: st.showRisk, highContrast: st.highContrast, reducedMotion: st.reducedMotion, lowGraphics: st.lowGraphics,
+        };
+        const key = mapFeedKey(s, o) + (st.lowGraphics ? '|L' : '');
+        if (feedCache && feedCache.feed.key === key) {
+          // nothing the minimap / compass show has changed: keep the built layers + markers (and the canvases skip)
+          feedCache.realT = realT;
+          feedCache.simT = run.t;
+          return feedCache.feed;
+        }
+        const feed = buildNavFeed(s, o, key);
+        feedCache = { realT, simT: run.t, feed };
+        return feed;
+      };
+
+      // ---------------------------------------------------------------------------------------- HUD snapshot (15 Hz)
+      const stackBlocked = () => run.status !== 'playing' || (!!clueCard && realT - clueCard.shownAt < CLUE_CARD_BLOCK_S) || (!!toast && toast.t.tone === 'danger');
+      const stackView = (sh: { item: StackItem } | null): StackView | null => sh && {
+        id: sh.item.id, kind: sh.item.kind, head: sh.item.head, text: sh.item.text, why: sh.item.why ?? null, basis: sh.item.basis ?? null, priority: sh.item.priority,
+      };
+      const hudSnapshot = (): MysteryHudModel => {
+        const shown = stack.update(realT, stackBlocked());
+        // The in-world Thing mirrors the card's gesture (null = its own idle).
+        const card = shown.card?.item ?? null;
+        if (card && card.id !== lastCardId) {
+          lastCardId = card.id;
+          // UX §6 sounds: ADVICE double knock; POWER STATUS soft rise; INVESTIGATION page flip (Hyde alerts: the sting already played)
+          if (card.kind === 'advice') audio.play('knock');
+          else if (card.head === 'POWER STATUS') audio.play('rise');
+          else if (card.head === 'INVESTIGATION') audio.play('page');
+        }
+        const pose = run.status === 'tutorial' || !card ? null : card.kind === 'advice' ? 'point' : card.head === 'HYDE ALERT' ? 'fist' : 'tap';
         if (pose !== lastPose) {
           scene.setThingPose?.(pose);
           lastPose = pose;
         }
+        if (card?.kind === 'advice' && card.target) adviceTarget = { ...card.target, kind: 'advice', until: Math.max(adviceTarget?.until ?? 0, realT + ADVICE_TARGET_S) };
         if (toast && realT > toast.until) toast = null;
-        if (evidenceToast && realT > evidenceToast.until) evidenceToast = null;
+        if (clueCard && realT > clueCard.until) clueCard = null;
+        if (examine && realT > examine.until) examine = null;
+        if (realT >= nextOddsAt) {
+          nextOddsAt = realT + ODDS_EVERY_S;
+          const crackNearM = crack ? distToPolygon(crack.area.polygon, run.player.x, run.player.z) : null;
+          odds = buildOdds(oddsPhase(run.status, run.objective(), liveA?.forecasts ?? null), liveA?.forecasts ?? null, inv, tracker.active, crackNearM);
+        }
+        // ---- Crackstone: plaque (0.5 s hold; CHASE / ATTACK bypass), edge candidates (R4-gated), banner, CURSED row
+        let crackView: MysteryHudModel['crack'] = null;
+        let crackEdge: HudExtras['crackEdge'] = null;
+        if (crack && crack.active()) {
+          const fx = run.effects();
+          crackView = crackHudView(crack, crackHold.update(crackPillKey(crack.rt), realT), fx, run.t);
+          const kind = crackMarkerKind(crack, fx, run.player);
+          const b = crack.bearing();
+          const scr = (scene as { getCrackstoneScreen?: () => { onScreen: boolean; ndcX: number; ndcY: number; behind: boolean } }).getCrackstoneScreen?.() ?? null;
+          const at = kind === 'chase' || kind === 'attack' ? threatEdgePoint(scr, b) : null;
+          let curseAt: { x: number; y: number; rot: number } | null = null;
+          const cu = crack.rt.curse;
+          if (cu) {
+            const rel = relBearingDeg(run.player.yaw, run.player, cu);
+            if (curseEdgeWanted(cu, run.player, rel)) {
+              const d = Math.hypot(cu.x - run.player.x, cu.z - run.player.z);
+              // under the camera: a downward chevron in the free gap beside the bottom stack
+              curseAt = d < 1.5 ? { x: 0.25, y: 0.93, rot: Math.PI } : threatEdgePoint(null, { angle: (-rel * Math.PI) / 180, distanceM: d });
+            }
+          }
+          crackEdge = { chase: kind === 'chase' ? at : null, attack: kind === 'attack' ? at : null, curse: curseAt };
+        }
         const shownMode = threat.update(run.hyde.mode, realT);
         const r = analytics.currentRisk();
         const risk = riskHold.update(r && run.status === 'playing' ? { p: r.p, band: r.band, source: r.source, label: r.label, detectedNow: r.detectedNow } : null, realT);
         const model = buildHud(run, {
           now: realT, noise: noise.value, shownMode, power, move,
-          // Thing never talks over the tutorial panel (UX §4 advisory rule).
-          thing: run.status === 'tutorial' ? null : tl,
-          captions: captions.prune(realT), toast: toast?.t ?? null, evidenceToast: evidenceToast?.t ?? null, catchFlashSeq,
-          hintCooldownS: Math.max(0, Math.ceil(HINT_COOLDOWN_S - (realT - lastHintAt))),
+          captions: captions.prune(realT), toast: toast?.t ?? null, catchFlashSeq,
+          hintCooldownS: ladder.cooldownLeftS(realT), hintLevel: hintShow && realT < hintShow.until ? hintShow.level : ladder.level,
           noiseRadiusM: run.noiseRadiusM?.() ?? 0, bearing: bearing(), hydeScreen: scene.getHydeScreen?.() ?? null,
-          risk: run.status === 'playing' ? risk : null,
+          risk: run.status === 'playing' && emerged ? risk : null,
+          investigation: inv, hydeEmerged: emerged,
+          clueCard: clueCard ? { ...clueCard.v, leaving: clueCard.until - realT <= 0.3 } : null,
+          examineToast: examine?.v ?? null,
+          stack: { log: stackView(shown.log), card: stackView(shown.card) },
+          odds,
+          standStill: input.isHeld('KeyE') && run.player.speed > 0.5,
+          areaName: feedCache?.feed.areaName ?? null,
+          crack: crackView,
+          banner: tele.banner,
+          cursedLeftS: tele.cursedLeftS,
+          crackEdge,
         });
+        lastEdge = model.threatEdge;
         if (model.power.ready && !prevPowerReady) audio.play('ready');
         if (model.move.ready && !prevMoveReady) audio.play('ready');
         prevPowerReady = model.power.ready;
         prevMoveReady = model.move.ready;
-        if (model.prompt?.kind === 'tower') thing.say(script.towerApproach(), realT, { priority: 1, once: true });
-        if (model.prompt?.kind === 'egg' && run.egg.state === 'resting') thing.say(script.eggSeen(), realT, { priority: 1, once: true });
         return model;
       };
 
       const live = () => run.status === 'tutorial' || run.status === 'playing';
+
+      const requestHint = () => {
+        // During a threat V gives the best feasible action now (P4); otherwise it climbs the ladder. Either way the
+        // 10 s V cooldown starts (ladder.press), so repeated presses cannot stack advice cards.
+        const threatAdvice = threatNow() && (hasLive ? !!liveA?.advice : !!lastAdvice);
+        const r = ladder.press(realT, threatAdvice);
+        if (!r) return;
+        if (r.kind === 'level') {
+          showHint(r.level, true);
+          return;
+        }
+        // a scan / curse companion card never enters the stack (the banner owns it)
+        if (hasLive && liveA?.advice && crackMessage(liveA.advice) !== 'drop' && !/take_cover|leave_curse/.test(liveA.advice.id) && !(tele.banner && /scan|curse/i.test(liveA.advice.id))) say({ ...fromMsg(liveA.advice, false, 4), id: `${liveA.advice.id}_v${realT}` });
+        else if (lastAdvice) sayAdvice(lastAdvice, 4, false);
+      };
 
       const nextInput = (dt: number): MysteryFrameInput => {
         const fromKeys = input.consume(dt);
@@ -400,9 +949,9 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         if (!opts.current.inputEnabled) return IDLE_INPUT;
         let frameInput = fromKeys;
         if (frameInput.hint) {
-          // V: one hint per 10 s (UX §4); a press during the cooldown does nothing.
-          if (realT - lastHintAt < HINT_COOLDOWN_S || run.status !== 'playing') frameInput = { ...frameInput, hint: false };
-          else lastHintAt = realT;
+          // V: one ladder step per 10 s (UX §5); the sim still logs hint_requested for telemetry.
+          if (run.status !== 'playing' || ladder.cooldownLeftS(realT) > 0) frameInput = { ...frameInput, hint: false };
+          else requestHint();
         }
         return frameInput;
       };
@@ -412,6 +961,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         if (opts.current.paused) {
           input.consume(dt); // drop edges pressed while paused
           audio.calm();
+          audio.setShimmer(0, 0);
           if (draw) scene.render(run, [], 0);
           return [];
         }
@@ -420,22 +970,72 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         const events = live() ? run.update(dt, frameInput) : [];
         const out = analytics.frame(run as unknown as MysteryRun, events);
         noise.update(events, dt);
+        for (let i = 0; i < events.length; i++) {
+          if (INV_EVENTS.has(events[i]!.type)) {
+            inv = investigationOf(run);
+            break;
+          }
+        }
         handle(events, out.advice);
         watchStatus();
+        if (crack) {
+          tele = telegraph.update(crack, events, run.effects(), run.t, realT);
+          for (const line of tele.announce) announce(line, 'alert');
+          if (tele.log && !hasLive) sayLog('crack_scan_blocks', tele.log);
+          // a banner owns the slot: a toast waits with its full duration
+          if (tele.banner && toast) toast.until += dt;
+          // the live feed sends its own area intro (advice:crackstone_area); this is the fallback
+          if (crackIntroAt !== null && realT >= crackIntroAt && run.status === 'playing' && !hasLive) {
+            crackIntroAt = null;
+            crackAnnouncedAt = run.t;
+            const l = thingLines.crackArea(crack.area.name);
+            say({ id: 'crack_intro', kind: 'advice', head: "THING'S ADVICE", text: l.text, why: 'He hunts by sight, not sound.', priority: 2 });
+            announce(l.text);
+          }
+        }
+        if (realT >= nextSlowAt) {
+          nextSlowAt = realT + SLOW_EVERY_S;
+          slowTick();
+        }
         if (realT >= nextLiveAt) {
-          nextLiveAt = realT + 1;
+          nextLiveAt = realT + LIVE_EVERY_S;
+          liveTick();
+        }
+        if (realT >= nextStatusAt) {
+          nextStatusAt = realT + STATUS_EVERY_S;
           const status = liveStatus();
           writeLive(browserStorage(), status);
           liveRef.current?.status(status);
         }
+        // idle hint ladder: paused in SEARCH / CHASE (overlays stop this function), only while something is to be found
+        ladderIn.status = run.status;
+        ladderIn.emerged = emerged;
+        ladderIn.hydeMode = crackHunting() ? 'CHASE' : run.hyde.mode;
+        ladderIn.objective = run.objective();
+        ladderIn.interacting = run.player.interacting;
+        const paused = ladderPaused(ladderIn);
+        const reached = ladder.tick(dt, paused);
+        if (reached) showHint(reached, false);
         if (draw) scene.render(run, events, dt);
-        if (run.status === 'playing') {
+        if (run.status === 'playing' && (emerged || (crack && crack.active()))) {
+          // ONE drone + heartbeat: threat = max of both; level = max; the enemy with the higher level drives the timbre
           const h = run.hyde;
-          audio.setThreat(h.suspicion, h.mode === 'CHASE' || h.grabbing ? 2 : h.mode === 'INVESTIGATE_SOUND' || h.mode === 'SEARCH' ? 1 : 0);
+          const hT = emerged ? h.suspicion : 0;
+          const hL = emerged ? (h.mode === 'CHASE' || h.grabbing ? 2 : h.mode === 'INVESTIGATE_SOUND' || h.mode === 'SEARCH' ? 1 : 0) : 0;
+          let cT = 0;
+          let cL = 0;
+          if (crack && crack.active()) {
+            const m = crack.rt.mode;
+            cT = Math.min(1, crack.rt.suspicion / crack.tuning.chaseAt);
+            cL = m === 'CHASE' || m === 'ATTACK' ? 2 : m === 'INVESTIGATE' || m === 'SEARCH' || tele.banner?.kind === 'scan' && tele.banner.exposure === 'exposed' ? 1 : 0;
+          }
+          const source: ThreatSource = cL > hL || (cL === hL && cT > hT) ? 'crackstone' : 'hyde';
+          audio.setThreat(Math.max(hT, cT), Math.max(hL, cL) as 0 | 1 | 2, source);
         } else audio.calm();
         if (ending && !reported && realT - ending.at >= END_DELAY_S[ending.outcome]) {
           reported = true;
           audio.calm();
+          audio.setShimmer(0, 0);
           const status = liveStatus();
           writeLive(browserStorage(), status);
           liveRef.current?.status(status);
@@ -445,19 +1045,41 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         return events;
       };
 
-      const liveStatus = () => {
+      const insights = (): LiveStatusWithInsights['insights'] => {
+        const hb = (analytics as unknown as { heartbeat?: () => LiveStatusWithInsights['insights'] }).heartbeat;
+        if (typeof hb !== 'function') return null;
+        try {
+          return hb.call(analytics);
+        } catch {
+          return null;
+        }
+      };
+      const liveStatus = (): LiveStatusWithInsights => {
         const phase: LivePhase = run.status === 'tutorial' ? 'tutorial' : run.status === 'accusing' ? 'accusing' : run.status === 'dnf' ? 'dnf'
           : run.status === 'finished' ? 'results' : run.egg.state === 'carried' ? 'carrying' : 'investigating';
         const cr = analytics.currentRisk();
+        const lastCard = stack.history.at(-1);
         return {
           stationId: opts.current.stationId, phase, nickname: opts.current.nickname, duo: run.duo, caseId: run.caseDef.id, clues: run.cluesFound.length,
           egg: { state: run.egg.state, tier: run.egg.state === 'resting' ? null : run.egg.tier, security: Math.round(run.egg.security) },
-          hp: Math.round(run.player.hp), catches: run.player.catches, hydeMode: run.status === 'playing' ? run.hyde.mode : null,
+          hp: Math.round(run.player.hp), catches: run.player.catches, hydeMode: run.status === 'playing' && emerged ? run.hyde.mode : null,
+          // Joseph Crackstone (UX_ENEMIES §8): his mode only (never his position) + chases by enemy
+          crackstonePresent: !!crack, crackstoneMode: crack && run.status === 'playing' ? crack.rt.mode : null, chasesHyde: hydeChases, chasesCrack: crackChases,
           risk: cr ? { p: Math.round(cr.p * 100) / 100, label: cr.label } : null,
-          advice: lastAdvice ? { text: lastAdvice.text, followed: analytics.adviceRecords.at(-1)?.followed ?? null } : null,
+          advice: lastAdvice ? { text: lastAdvice.text, followed: analytics.adviceRecords.at(-1)?.followed ?? null }
+            : lastCard?.kind === 'advice' ? { text: lastCard.text, followed: null } : null,
           activeTimeS: Math.round(run.t * 10) / 10, updatedAt: Date.now(),
+          // Laptop 1 demo card: chases, tower %, egg odds, newest Thing item (public numbers only)
+          insights: run.status === 'tutorial' ? null : insights(),
         };
       };
+
+      // Tutorial-free runs (tutorial=0 / reloads) start in play: same opening log.
+      if (run.status === 'playing') {
+        sayLog('go', 'Go. Tab shows your evidence.', false);
+        if (crack) crackIntroAt = realT + CRACK_INTRO_DELAY_S;
+      }
+      slowTick();
 
       api.current = {
         handle,
@@ -470,6 +1092,9 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
           botStep = 0;
           botEvery = b ? Math.max(1, Math.round(60 / b.o.decisionHz)) : 1;
         },
+        nav: navFeed,
+        mapState,
+        live: () => liveA,
       };
 
       let raf = 0;
@@ -485,9 +1110,15 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
           setPhase('error');
           return;
         }
-        if (now - lastHudAt > HUD_INTERVAL_MS) {
+        if (now - lastHudAt > (getSettings().lowGraphics ? HUD_INTERVAL_LOW_MS : HUD_INTERVAL_MS)) {
           lastHudAt = now;
-          setHud(hudSnapshot());
+          const model = hudSnapshot();
+          const k = hudRenderKey(model);
+          if (k !== lastHudKey || realT - lastHudSetAt >= HUD_FORCE_S) {
+            lastHudKey = k;
+            lastHudSetAt = realT;
+            setHud(model);
+          }
         }
         raf = requestAnimationFrame(loop);
       };
@@ -497,7 +1128,11 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       advanceRef.current = (ms: number) => {
         const steps = Math.max(1, Math.round(ms / (1000 / 60)));
         const all: StampedEvent[] = [];
-        for (let i = 0; i < steps; i++) all.push(...frame(1 / 60, false));
+        for (let i = 0; i < steps; i++) {
+          all.push(...frame(1 / 60, false));
+          // keep the stack's slot rules honest under fast-forward (cards expire on the same clock)
+          if (i % 4 === 3) stack.update(realT, stackBlocked());
+        }
         scene.render(run, all, 1 / 60);
         setHud(hudSnapshot());
       };
@@ -506,6 +1141,8 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         const r = (v: number) => Math.round(v * 100) / 100;
         const pl = run.player;
         const h = run.hyde;
+        const feed = navFeed();
+        const shownCard = stack.card?.item ?? null;
         return {
           coords: 'metres, XZ ground plane; yaw 0 faces -Z, positive yaw turns left',
           duo: run.duo,
@@ -516,6 +1153,12 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
           objective: run.objective(),
           player: { x: r(pl.x), z: r(pl.z), yaw: r(pl.yaw), pitch: r(pl.pitch), stance: pl.stance, speed: r(pl.speed), hp: Math.round(pl.hp), catches: pl.catches, hidden: pl.hidden, roomId: pl.roomId, interacting: pl.interacting },
           hyde: { mode: h.mode, shownMode: threat.shown, x: r(h.x), z: r(h.z), suspicion: r(h.suspicion), canSeePlayer: h.canSeePlayer, distance: r(Math.hypot(h.x - pl.x, h.z - pl.z)) },
+          // test hook (like `hyde` above): Crackstone's truth for scripted checks; the HUD itself only uses the R4 slice
+          crackstone: crack ? {
+            mode: crack.rt.mode, shownKey: crackHold.shown, x: r(crack.rt.x), z: r(crack.rt.z), suspicion: r(crack.rt.suspicion), canSeePlayer: crack.rt.canSeePlayer,
+            distance: r(Math.hypot(crack.rt.x - pl.x, crack.rt.z - pl.z)), active: crack.active(), visible: crack.visible(),
+            scan: crack.rt.scan, curse: crack.rt.curse, scanExposure: crack.scanExposure(), curseExposure: crack.curseExposure(),
+          } : null,
           egg: { ...run.egg, x: r(run.egg.x), z: r(run.egg.z) },
           cluesFound: run.cluesFound,
           power: run.powerStatus(),
@@ -524,7 +1167,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
           boardAllowed: run.boardAllowed?.() ?? run.hyde.mode !== 'CHASE',
           noise: r(noise.value),
           noiseRadiusM: run.noiseRadiusM?.() ?? null,
-          thing: thing.current?.text ?? null,
+          thing: shownCard?.text ?? null,
           captions: captions.items.map((c) => c.text),
           toast: toast?.t.headline ?? null,
           input: { ...input.counts, crouching: input.crouching, ctrlCrouch: ctrlCrouchEnabled() },
@@ -539,11 +1182,54 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
             const b = analytics.pendingBatch();
             return b ? { events: b.events.length, forecasts: b.forecasts.length, recommendations: b.recommendations.length } : null;
           })(),
-          hintCooldownS: Math.max(0, Math.ceil(HINT_COOLDOWN_S - (realT - lastHintAt))),
+          hintCooldownS: ladder.cooldownLeftS(realT),
           ending: ending?.outcome ?? null,
           result: run.result(),
           logLength: run.log.length,
           scene: scene.getDebugState?.(run) ?? null,
+          // ---- public HUD state (overhaul): what the visitor can see — never the hidden layout
+          hud: {
+            objectiveText: objectiveText(run),
+            compassHeading: Math.round(headingDeg(pl.yaw)),
+            compassMarkers: feed?.markers.map((m) => ({ kind: m.kind, lantern: m.lantern, name: m.name ?? null, pct: m.pct ?? null })) ?? [],
+            areaName: feed?.areaName ?? null,
+            odds: odds.groups.map((g) => ({
+              group: g.id, title: g.title ?? g.tag, source: g.source,
+              rows: g.rows.map((row) => ({ name: row.name, text: row.cell.text, band: row.cell.band, delta: row.delta?.text ?? null })),
+            })),
+            oddsPhase: odds.phase,
+            oddsFooter: odds.footer,
+            thing: {
+              card: shownCard && { kind: shownCard.kind, head: shownCard.head, text: shownCard.text, why: shownCard.why ?? null },
+              log: stack.log?.item.text ?? null,
+              recent: stack.history.slice(-8),
+            },
+            clueCard: clueCard && { title: clueCard.v.title, short: clueCard.v.short, meaning: clueCard.v.meaning },
+            examineToast: examine && { kind: examine.v.kind, head: examine.v.head, text: examine.v.text, odds: examine.v.odds },
+            hint: { level: ladder.level, idleS: r(ladder.idleS), showing: hintShow && realT < hintShow.until ? hintShow.level : 0 },
+            investigation: {
+              checkedClueSites: inv.checkedClueSites.length, knownClueSites: Object.keys(inv.knownClueSites).length, checkedEggSites: inv.checkedEggSites.length,
+              eggSeen: inv.eggSeenAt ? world?.eggSites.find((e) => e.id === inv.eggSeenAt)?.label ?? inv.eggSeenAt : null,
+              traces: inv.traces.length, examined: inv.examined.length, passageOpen: inv.passageOpen,
+            },
+            hydeEmerged: emerged,
+            emergesInS: inv.hydeEmergesInS,
+            hydeVisible,
+            interactable: run.interactable()?.kind ?? null,
+            shimmer: r(shimmer),
+            liveAnalytics: hasLive,
+            crack: crack ? {
+              key: crackHold.shown,
+              marker: feed?.map.crack?.marker?.kind ?? null,
+              banner: tele.banner && { kind: tele.banner.kind, head: tele.banner.head, text: tele.banner.text, exposure: tele.banner.exposure },
+              cursedLeftS: tele.cursedLeftS,
+              edge: lastEdge && { enemy: lastEdge.enemy, icon: lastEdge.icon, x: r(lastEdge.at.x), y: r(lastEdge.at.y) },
+              screen: (scene as { getCrackstoneScreen?: () => unknown }).getCrackstoneScreen?.() ?? null,
+              areaName: crack.area.name,
+              announced: crackAnnouncedAt !== null,
+              chases: crackChases, escapes: crackEscapes,
+            } : null,
+          },
         };
       };
 
@@ -551,6 +1237,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         cancelAnimationFrame(raf);
         scene.dispose();
         audio.calm();
+        audio.setShimmer(0, 0);
         runRef.current = null;
         inputRef.current = null;
         sceneRef.current = null;
@@ -607,7 +1294,11 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       return true;
     },
     analytics: () => analyticsRef.current,
+    nav: () => api.current?.nav() ?? null,
+    mapState: () => api.current?.mapState() ?? null,
+    liveAnalytics: () => api.current?.live() ?? null,
     debug: () => debugRef.current?.() ?? (phase === 'missing' ? { missing, integration: integrationStatus() } : null),
     advance: (ms) => advanceRef.current?.(ms),
   };
 }
+

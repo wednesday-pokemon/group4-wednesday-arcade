@@ -4,6 +4,9 @@ import * as THREE from 'three';
 import type { CoverDef, MapDef, WallDef } from '../../mystery/types.ts';
 import { MeshBuilder } from '../util.ts';
 import { mergeAll } from '../action/geom.ts';
+import type { GlowEntry } from '../action/fx.ts';
+import type { Theme } from './look.ts';
+import { QuadSet, addCoverAccent, addCoverStyled, addStyledWall, type StyledOut } from './wallStyles.ts';
 import { BOX, CONE4, CONE5, CONE6, CYL5, CYL6, CYL8, ICO0, ICO1, PAL, PRISM, seeded } from './common.ts';
 
 const STONE_TOP = '#3b4180';
@@ -256,14 +259,51 @@ function addCover(mb: MeshBuilder, c: CoverDef, rand: () => number, low: boolean
 const CONE8_STATUE = new THREE.CylinderGeometry(0.55, 1.0, 1, 7, 1);
 const CONE8 = new THREE.ConeGeometry(1, 1, 8, 1);
 
-export function buildWallsAndCover(map: MapDef, low: boolean, skipWalls: ReadonlySet<string>): THREE.BufferGeometry | null {
+export interface WallBuild {
+  lit: THREE.BufferGeometry | null;
+  em: THREE.BufferGeometry | null;
+  glass: THREE.BufferGeometry | null;
+  /** textured bookshelf faces */
+  shelf: THREE.BufferGeometry | null;
+  glows: GlowEntry[];
+}
+
+function finishOut(o: StyledOut): WallBuild {
+  return { lit: mergeAll([o.lit.build()]), em: mergeAll([o.em.build()]), glass: mergeAll([o.glass.build()]), shelf: o.shelf.build(), glows: o.glows };
+}
+
+function newOut(rand: () => number): StyledOut {
+  return { lit: new MeshBuilder(rand), em: new MeshBuilder(rand), glass: new MeshBuilder(rand), shelf: new QuadSet(), glows: [] };
+}
+
+/**
+ * All static walls + cover as merged geometry. The case's own extra walls / cover (CaseWorldDef) get the theme's skin
+ * (bookshelf rows, rubble, patrol fences ...); `skipWalls` (the shortcut gate, the passage wall) are drawn dynamically elsewhere.
+ */
+export function buildWallsAndCover(map: MapDef, low: boolean, skipWalls: ReadonlySet<string>, theme: Theme): WallBuild {
   const rand = seeded('walls:' + map.id);
-  const mb = new MeshBuilder(rand);
+  const o = newOut(rand);
+  const extraW = new Set((map.world?.extraWalls ?? []).map((w) => w.id));
+  const extraC = new Set((map.world?.extraCover ?? []).map((c) => c.id));
   for (const w of map.walls) {
     if (skipWalls.has(w.id)) continue;
-    addWall(mb, w, rand, low);
+    if (extraW.has(w.id) && addStyledWall(o, w, theme, rand)) continue;
+    addWall(o.lit, w, rand, low);
   }
-  for (const c of map.cover) addCover(mb, c, rand, low);
+  for (const c of map.cover) {
+    if (extraC.has(c.id) && addCoverStyled(o, c, theme, rand)) continue;
+    addCover(o.lit, c, rand, low);
+    if (extraC.has(c.id)) addCoverAccent(o, c, theme, rand);
+  }
   void CYL5; void ICO0;
-  return mergeAll([mb.build()]);
+  return finishOut(o);
+}
+
+/** The geometry of one (extra) wall in the case's style: the passage wall, which slides away when the lever is pulled. */
+export function buildWallParts(map: MapDef, w: WallDef, theme: Theme): WallBuild {
+  const rand = seeded('wall:' + w.id);
+  const o = newOut(rand);
+  if (!addStyledWall(o, w, theme, rand)) addWall(o.lit, w, rand, false);
+  void map;
+  return finishOut(o);
 }

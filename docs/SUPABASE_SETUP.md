@@ -50,7 +50,7 @@ What you will deploy:
 cd /d/PokemonDay
 npx supabase login                                  # browser login, or export SUPABASE_ACCESS_TOKEN=...
 npx supabase link --project-ref <ref>               # prompts for the database password
-npx supabase db push --dry-run                      # should list the 4 migrations 20261021000100..400
+npx supabase db push --dry-run                      # should list the 4 migrations 20261021000100..400 (v2.5; the mystery ones: §12.2)
 npx supabase db push
 ```
 
@@ -237,10 +237,11 @@ Use `VITE_SUPABASE_URL=http://127.0.0.1:54321` and the local anon key from `npx 
 | Atomic RPCs (service role only) | `supabase/migrations/20261021000700_mystery_rpcs.sql` |
 | Realtime (adds `mystery_station_status`, `mystery_results` only) | `supabase/migrations/20261021000800_mystery_realtime.sql` |
 | Three cases: case per session (per-station bag), widened clue CHECKs, evidence/deduction, per-case views, column privileges (§12.6) | `supabase/migrations/20261022000100_mystery_cases.sql` |
+| Overhaul: six telemetry event types + four live-forecast targets (two CHECK supersets, nothing else) (§12.7) | `supabase/migrations/20261023000100_mystery_overhaul.sql` |
 | Edge Functions | `supabase/functions/{mystery-create-session,mystery-get-session,mystery-select-duo,mystery-append-events,mystery-finalize}`; `admin-reset` extended (`scope`) |
 | Server rules (pure, unit-tested) | `supabase/functions/_shared/{mystery-events,mystery-rules,mystery-validation,mystery-db}.ts` |
 | Generated copies of the browser's pure modules | `supabase/functions/_shared/mystery/**` and `_shared/mystery-registry.generated.ts` ← `npm run sync:shared` |
-| Tests | `supabase/tests/004_*`, `005_*`, `006_mystery_cases` (pgTAP), `supabase/tests/unit/{mystery,shared-identity}.test.ts`, `supabase/tests/offline/mystery-roundtrip.ts` |
+| Tests | `supabase/tests/004_*`, `005_*`, `006_mystery_cases`, `007_mystery_overhaul` (pgTAP), `supabase/tests/unit/{mystery,mystery-overhaul,mystery-sim-contract,shared-identity}.test.ts`, `supabase/tests/offline/mystery-roundtrip.ts` |
 
 Tables (all RLS-enabled; no client role can INSERT/UPDATE/DELETE anything):
 
@@ -268,11 +269,24 @@ DNFs unranked, longest survival first; `standing_group` 0/1; `rank` combined, `c
 ```bash
 npm run sync:shared                       # copies src/mystery pure modules + data; fails on impure/out-of-tree imports
 npm run typecheck:functions && npm run test:supabase-unit && npm run test:db:offline && npm run test:db:roundtrip
-npx supabase db push --dry-run            # must list ONLY the mystery migrations not applied yet: 20261021000500..800 and 20261022000100_mystery_cases
+npx supabase db push --dry-run            # must list ONLY these migrations, in this order (the v2.5 ones are already applied):
+#   20261021000500_mystery_schema.sql
+#   20261021000600_mystery_rls_and_grants.sql
+#   20261021000700_mystery_rpcs.sql
+#   20261021000800_mystery_realtime.sql
+#   20261022000100_mystery_cases.sql      <- three cases (case bag, evidence, column privileges)
+#   20261023000100_mystery_overhaul.sql   <- overhaul telemetry + forecast targets (§12.7)  [applied 2026-10-24]
+#   20261024000100_mystery_crackstone.sql <- Joseph Crackstone telemetry + curse rule event + crackstone_risk (§12.8)
 npx supabase db push
+# ALL mystery functions in ONE command (they share _shared/ and the deployed case versions; see §12.7 "Deploy order"):
 npx supabase functions deploy --use-api \
   mystery-create-session mystery-get-session mystery-select-duo mystery-append-events mystery-finalize admin-reset
+# only now: build + publish the frontend (npm run build) and hard-reload the three laptops
 ```
+
+**Order matters: database → all functions → frontend, between visitors.** A new browser build against old functions has
+every run rejected (`EVENT_REJECTED: type` for the overhaul telemetry → "unverified"); mixing old and new mystery
+functions answers `409 CASE_OUTDATED` (case versions 1 vs 2). Details and rollback: §12.7.
 
 No new secrets are required. Optional: `npx supabase secrets set MYSTERY_ALLOW_TEST_SEEDS=true` lets
 `mystery-create-session` accept a `testSeed` (operator seed-reuse tests) and, together with it, a `testCase` (one of
@@ -302,7 +316,7 @@ it. Errors: `{ "error": { "code", "message", "retryable", "details?" }, "request
 | 1 | `mystery-create-session` | `{ actionId, nickname, testSeed?, testCase? }` | `201` new / `200` + `x-idempotent-replay` → `MysterySessionEnvelope` (with the assigned `caseId`; a replay returns the SAME case) | 422 INVALID_INPUT, 403 TEST_SEED_FORBIDDEN, 409 ACTION_ID_CONFLICT, 429 RATE_LIMITED (6 creates/min/station) |
 | 2 | `mystery-get-session` | `{ sessionId? }` | `200` → envelope, or `{session:null,offer:null,result:null}` when nothing is open | 404 SESSION_NOT_FOUND (also for another station's id) |
 | 3 | `mystery-select-duo` | `{ sessionId, characterId, pokemonId }` | `200` → envelope (`status: "playing"`); same choice again = replay | 422 DUO_NOT_OFFERED, 409 ALREADY_SELECTED, 409 SESSION_CLOSED |
-| 4 | `mystery-append-events` | `{ sessionId, events: StampedEvent[≤500], forecasts?: [≤50], recommendations?: [≤50] }` (≤ 256 KB) | `200` → `{ sessionId, accepted, duplicates, lastSeq, lastT, eventCount, terminal, progress, forecastsInserted, recommendationsUpserted }` | 422 EVENT_REJECTED `{seq, rule}` (e.g. `clue_unknown` for a clue of another case, `accusation_duplicate`), 409 SEQ_CONFLICT `{seq, lastSeq}`, 409 NOT_SELECTED, 409 SESSION_CLOSED, 422 TOO_MANY_EVENTS (20 000/session), 409 CASE_OUTDATED |
+| 4 | `mystery-append-events` | `{ sessionId, events: StampedEvent[≤500], forecasts?: [≤50], recommendations?: [≤50] }` (≤ 256 KB) | `200` → `{ sessionId, accepted, duplicates, lastSeq, lastT, eventCount, terminal, progress, forecastsInserted, recommendationsUpserted, forecastsDropped, recommendationsDropped }` (an invalid forecast / recommendation record is dropped and counted, never a rejection — §12.7) | 422 EVENT_REJECTED `{seq, rule}` (e.g. `clue_unknown` for a clue of another case, `accusation_duplicate`), 409 SEQ_CONFLICT `{seq, lastSeq}`, 409 NOT_SELECTED, 409 SESSION_CLOSED, 422 TOO_MANY_EVENTS (20 000/session), 409 CASE_OUTDATED, 422 INVALID_INPUT (malformed body: not an array, > 50 records, unknown top-level key) |
 | 5 | `mystery-finalize` | `{ sessionId, clientResult? }` (`clientResult` = the browser `RunResult`, audit only) | `201` → `{ sessionId, result: MysteryResultView, rank, reveal }` (`reveal = { culprit, resolution }` for a finished run, `null` for a DNF); every later call `200` + replay with the **same** result + reveal | 409 RUN_NOT_FINISHED, 409 NOT_SELECTED, 409 SESSION_CLOSED, 409 CASE_OUTDATED |
 | – | `admin-reset` (operator) | `{ stationId, reason, actionId, scope?: "all" \| "legacy" \| "mystery" }` | `200` → `{ stationId, scope, abandonedSessionIds, abandonedMysterySessionIds, notice: "operator_reset" }` | as v2.5 |
 
@@ -326,7 +340,9 @@ it. Errors: `{ "error": { "code", "message", "retryable", "details?" }, "request
 //   sightings, hintsUsed, nickname, stationId, isTest, claimMatches, verified: true, finalizedAt };
 //   duo = { characterId, pokemonId }; score null for DNF. Returned to the OWNING station only.
 // accusation event payload = { suspectId: SuspectId|null, correct, cluesFound, evidence: string[≤5], deductionCorrect }
-// forecasts[i]       = { forecastNo, t, target: "detection_15s"|"extraction"|"eta_s", value, modelLabel: "ml"|"rule_based", modelVersion?, features: {name: number|bool|string|null} }
+// forecasts[i]       = { forecastNo, t, target: "detection_15s"|"extraction"|"eta_s"|"egg_site"|"clue_area"|"hyde_zone"|"hyde_spawn",
+//                        value (probability 0..1; eta_s seconds 0..100000), modelLabel: "ml"|"rule_based", modelVersion?,
+//                        features: {name ≤ 40 chars: number|bool|string ≤ 40 chars|null} (≤ 40 entries, flat) }
 // recommendations[i] = { recNo, t, action: "snake_id", advice: "≤240 chars", trigger?: "hint"|"context", accepted?: bool|null, outcome?: "snake_id"|null }
 ```
 
@@ -342,7 +358,8 @@ Adapter flow (station kiosk):
    request in flight**; on network failure resend the same batch (duplicates are ignored). Cosmetic events (e.g. footstep
    `noise`) may be thinned client-side — seq gaps are allowed — but **every** `clue_found`, `egg_*`, `catch`,
    `accusation`, `finish`, `dnf`, `hyde_sighted`, `hint_requested` must be sent. Forecasts/recommendations ride along in
-   the same calls. On `409 SEQ_CONFLICT` / `STALE_EVENTS`: `mystery-get-session`, drop everything ≤ `lastSeq`, resend
+   the same calls (best-effort: an invalid record comes back in `forecastsDropped` / `recommendationsDropped`, the
+   events are still stored). On `409 SEQ_CONFLICT` / `STALE_EVENTS`: `mystery-get-session`, drop everything ≤ `lastSeq`, resend
    the rest. On `422 EVENT_REJECTED`: stop syncing that run and show it as **unverified** (local result only).
 5. **Run over** (`finish` or `dnf` acknowledged, `terminal` non-null): send any last recommendation outcomes, then
    `mystery-finalize { sessionId, clientResult: run.result() }`; display the **server** `result` and `rank`.
@@ -356,9 +373,9 @@ Adapter flow (station kiosk):
 
 | Suite | Command | Covers |
 |---|---|---|
-| pgTAP `004_mystery_structure_rls` (109) + `005_mystery_rpcs` (64) + `006_mystery_cases` (24) | `npm run test:db:offline` (or `npx supabase test db`) | RLS/privileges per role (incl. column privileges: anon/stations cannot select `accused`/`evidence`/`client_claim`), constraints (case ids, widened clue ids, solved ⇒ correct ∧ deduction ∧ 3 clues, evidence ≤ 5 ids), duplicate seq rejected, single terminal, idempotent create/select/finalize, supersede, rate limit, leaderboard with negative scores above DNFs, operator reset, v2.5 rows untouched; case bag: 6 creates → each case exactly twice, never twice in a row, replay keeps the case, stations independent, forced test cases, per-case standings |
-| Unit (Vitest) | `npm run test:supabase-unit` | parsers (incl. `testCase`, accusation evidence), every event-order rule (clue ids of the session's case only), resend dedupe, verdict/score/evidence/deduction recomputation with the server's answer keys for all three cases, forged evidence dropped, lying claims overruled, `CASE_OUTDATED`, reveal, SQL score-CHECK parity, offer determinism + sanity, shared-copy identity + registry binding |
-| TS ↔ SQL round-trip | `npm run test:db:roundtrip` | 150 random mystery sessions through the real modules + RPCs (cases from the bag; replay keeps the case; per-station case counts never differ by more than one) + for EACH case: solved / wrong suspect / forged evidence, second finalize = same row, second accusation refused (plus the 300 v2.5 races) |
+| pgTAP `004_mystery_structure_rls` (109) + `005_mystery_rpcs` (64) + `006_mystery_cases` (24) + `007_mystery_overhaul` (40) | `npm run test:db:offline` (or `npx supabase test db`) | RLS/privileges per role (incl. column privileges: anon/stations cannot select `accused`/`evidence`/`client_claim`), constraints (case ids, widened clue ids, solved ⇒ correct ∧ deduction ∧ 3 clues, evidence ≤ 5 ids), duplicate seq rejected, single terminal, idempotent create/select/finalize, supersede, rate limit, leaderboard with negative scores above DNFs, operator reset, v2.5 rows untouched; case bag: 6 creates → each case exactly twice, never twice in a row, replay keeps the case, stations independent, forced test cases, per-case standings; overhaul: the six telemetry types + `hazard` noise + `gave_up` and the four new forecast targets through the real append RPC, unknown type/target and out-of-range probabilities refused, telemetry never touches projections / clue rows / station status, anon + other station cannot read it, DNF with telemetry finalized exactly once, v2 case version stored |
+| Unit (Vitest) | `npm run test:supabase-unit` | parsers (incl. `testCase`, accusation evidence), every event-order rule (clue ids of the session's case only), resend dedupe, verdict/score/evidence/deduction recomputation with the server's answer keys for all three cases, forged evidence dropped, lying claims overruled, `CASE_OUTDATED`, reveal, SQL score-CHECK parity, offer determinism + sanity, shared-copy identity + registry binding; **overhaul** (`mystery-overhaul.test.ts`): telemetry payload schemas, telemetry never changes the result, drift guards (server enums == synced `types.ts` unions, == latest SQL CHECK lists; client `FORECAST_TARGETS` ⊆ server), best-effort analytics records, case-world ids, v2 resolution; **sim contract** (`mystery-sim-contract.test.ts`): 48 real bot episodes (3 cases × 8 seeds × 2 profiles) uploaded through the parser + rules, server result == the browser's `RunResult` |
+| TS ↔ SQL round-trip | `npm run test:db:roundtrip` | 150 random mystery sessions through the real modules + RPCs (cases from the bag; replay keeps the case; per-station case counts never differ by more than one; overhaul telemetry in the streams; forecasts of every target stored exactly once despite resends) + for EACH case: solved / wrong suspect / forged evidence, second finalize = same row, second accusation refused (plus the 300 v2.5 races) |
 | Integration (fake project) | `npx vitest run tests/integration` | kiosk ↔ functions ↔ board end to end: case assigned at create and identical after restore / refresh / replayed create, own bag per station, forged evidence dropped, wrong accusation claimed as correct overruled, one-shot accusation, finalize `reveal`, board per-case standings, no secret column on any public read or Realtime payload |
 
 ### 12.5 Event-day operations (mystery)
@@ -368,7 +385,9 @@ Adapter flow (station kiosk):
   `mystery_station_status` shows `idle` + `notice: operator_reset`. One `operator_audit` row lists all abandoned ids.
 * **Offensive nickname:** `delete from public.mystery_results where session_id = '<id>';` (results cannot be edited).
 * **Function errors:** logs carry `fn`, `requestId`, `status`, `durationMs` plus `mystery_events_appended`,
-  `mystery_finalized` (`claimMatches=false` is logged at `warn`: the browser's own score/verdict differed from the server's).
+  `mystery_finalized` (`claimMatches=false` is logged at `warn`: the browser's own score/verdict differed from the server's)
+  and `mystery_analytics_dropped` (`warn`: a forecast / recommendation record failed validation and was left out — the
+  run is unaffected; the `reasons` field names the field, e.g. `forecasts[3].value`).
 
 ### 12.6 Three cases (migration `20261022000100_mystery_cases.sql`, 2026-10-22)
 
@@ -405,6 +424,117 @@ Verify after `db push`:
 select station_id, bag, last_case from public.mystery_case_bags;          -- rows appear with the first create per station
 select case_id, count(*) from public.mystery_sessions group by 1;          -- even per station
 select has_column_privilege('anon', 'public.mystery_results', 'accused', 'SELECT');   -- false
+```
+
+### 12.7 Overhaul: case worlds, telemetry, live forecasts (migration `20261023000100_mystery_overhaul.sql`, 2026-10-23)
+
+Contract: `docs/overhaul/OVERHAUL_CONTRACT.md`. Rules version stays `mystery-v3.1`; case content versions go to **2**
+(`CaseDef.version` + `CaseSolution.version`; answers unchanged). **DEPLOYED 2026-10-24** by the owner (migrations 0500–0800,
+20261022000100, 20261023000100 + the 5 mystery functions and admin-reset; verified with `migration list --linked` and
+`functions list`).
+
+**What changes on the server**
+
+| Layer | Change |
+|---|---|
+| SQL | `mystery_events_type_check` and `mystery_forecasts_target_check` replaced by strict supersets (drop + add in one `ALTER TABLE` each; existing rows re-validated). No table, column, row, view, policy, grant, RPC or Realtime change. |
+| `_shared/mystery-events.ts` | six telemetry types (below), noise source `hazard`, `hyde_mode` reason `gave_up` (**bug fix**: the sim already emitted it and the server rejected the batch → run unverified). Telemetry is NOT in `RULE_EVENT_TYPES`: fingerprint, finalize replay and `computeResult` are unchanged. |
+| `_shared/mystery-validation.ts` | `FORECAST_TARGETS` + the four new targets; forecasts / recommendations are **best-effort**: an invalid record is dropped (`forecastsDropped` / `recommendationsDropped` in the ack, warn log `mystery_analytics_dropped`) instead of rejecting the call — before, one NaN posterior made the whole run unverified. Events stay strict. |
+| `_shared/mystery/data/caseWorlds.ts` | generated copy (it lives under `data/**`); no function reads it. |
+
+**Telemetry payloads** (exact; ids match `^[a-z][a-z0-9_]{0,39}$`, coordinates finite within ±1000 m; like every
+non-rule type, up to 6 extra short primitive keys are tolerated; all declared keys are required):
+
+| `type` | payload |
+|---|---|
+| `hyde_emerged` | `{ spawnId: id, x: number, z: number }` |
+| `site_checked` | `{ site: "clue" \| "egg", siteId: id, found: boolean }` |
+| `trace_found` | `{ sourceId: id (clue or examine id), siteId: id (egg site) }` |
+| `examined` | `{ examineId: id }` |
+| `passage_opened` | `{ passageId: id }` |
+| `hazard_triggered` | `{ hazardId: id }` |
+| `noise` / `hyde_heard` | `source` may now be `"hazard"` (searchlight alarm) |
+
+**Forecast targets**: `detection_15s`, `extraction`, `eta_s` (seconds), and the probabilities `egg_site`, `clue_area`,
+`hyde_zone`, `hyde_spawn`. Each overhaul row is the probability of ONE candidate whose id rides in a flat feature
+(`{ site: "e_shed" }`, `{ area: … }`, `{ zone: … }`, `{ spawn: … }`); `model_label` stays honest (`rule_based` for the
+Bayesian / zone-filter estimates unless a trained model produced the value).
+
+**No positions on the server.** The per-session layout (clue sites, egg site, traces, Hyde spawn) is drawn by the browser
+sim from the seed (`src/mystery/layout.ts`, PRF keys `site:<clueId>`, `site:egg`, `trace:<id>`, `hyde:spawn`; the egg tier
+keeps `egg:tier`). The server validates clue ids against the session's `CaseDef`, the tier against the seed, and recomputes
+verdict + score; it never needs a coordinate, so `layout.ts` is deliberately not shipped to the functions
+(`supabase/tests/unit/mystery-sim-contract.test.ts` proves the server reproduces the browser result for real runs).
+
+**Deploy order and risks** (owner runs §12.2 between visitors):
+
+1. **Database first.** The migration is additive and harmless to the old functions. (Functions first: the new
+   telemetry would hit the old CHECK → 500; the kiosk retries and the run stalls "offline" until the migration lands.)
+2. **All mystery functions together, in one `functions deploy` command.** They share `_shared/` and the case versions:
+   an old `mystery-create-session` (stores v1) with a new `mystery-append-events` (expects v2), or the reverse, answers
+   `409 CASE_OUTDATED` for every new session → every run unverified.
+3. **Frontend last.** A new browser build against old functions sends `hyde_emerged` / `site_checked` / … → `422
+   EVENT_REJECTED: type` → every run unverified. Hard-reload all three laptops after publishing (an old cached bundle
+   still verifies against the new functions — same clue ids and answers — but plays the old layout).
+4. **No session open across the switch.** A session created before the function deploy (v1) cannot be verified after it
+   (`409 CASE_OUTDATED`, by design). Operator → Reset station on both kiosks first (`admin-reset`), or deploy when idle.
+5. **Rollback** = previous frontend + previous functions together (the migration needs no rollback: it is a superset).
+
+Verify after `db push` (SQL Editor):
+
+```sql
+select pg_get_constraintdef(oid) from pg_constraint where conname in ('mystery_events_type_check', 'mystery_forecasts_target_check');
+-- both lists include the new names (hyde_emerged … hazard_triggered; egg_site, clue_area, hyde_zone, hyde_spawn)
+select type, count(*) from public.mystery_events group by 1 order by 1;   -- after the first live run: telemetry rows appear
+select target, count(*) from public.mystery_forecasts group by 1 order by 1;
+```
+
+### 12.8 Joseph Crackstone: second enemy (migration `20261024000100_mystery_crackstone.sql`, 2026-10-24)
+
+Contract: `docs/overhaul/ENEMY_CONTRACT.md` ("Server", rule R7). Rules version stays `mystery-v3.1`. **NOT DEPLOYED YET.**
+Applied to the repo from `docs/overhaul/drafts/backend/` (record + apply steps in its README).
+
+**What changes on the server**
+
+| Layer | Change |
+|---|---|
+| SQL | `mystery_events_type_check` + 5 types; `mystery_forecasts_target_check` + `crackstone_risk` (strict supersets, drop-if-exists + add); partial index `mystery_events_rule_idx` rebuilt with `curse` (drop-if-exists + create). Re-runnable. No table, column, policy, grant, RPC, view or Realtime change. |
+| `_shared/mystery-events.ts` | telemetry `crackstone_mode`, `crackstone_sighted`, `crackstone_lost`, `crackstone_scan`; RULE event `curse` (in `RULE_EVENT_TYPES`); progress gains `curses`; `hpLost` + `curses` join `ruleFingerprint`; a dnf `hp_depleted` now needs recorded HP loss (catch + curse hits) ≥ max HP. |
+| `_shared/mystery-rules.ts` | `rulesContext()` carries `maxHp` (= shared `DEFAULT_TUNING.player.maxHp`, 100). |
+| `_shared/mystery-validation.ts` | `FORECAST_TARGETS` + `crackstone_risk` (probability, rule-based). |
+
+**Payloads** (exact keys; telemetry tolerates ≤ 6 extra short primitives, `curse` is strict like every rule event):
+
+| `type` | payload |
+|---|---|
+| `crackstone_mode` | `{ from, to: PATROL\|INVESTIGATE\|CHASE\|ATTACK\|SEARCH\|RETURN, reason: saw_player\|sensed_player\|scan_hit\|lost_sight\|leash\|reached_target\|gave_up\|search_timeout\|returned\|curse_cast\|curse_done\|curse_missed\|stunned\|lured\|deferred }` |
+| `crackstone_sighted` | `{ via: sight\|proximity\|scan, distanceM: 0..1000 }` — not a Hyde sighting (`sightings` unchanged) |
+| `crackstone_lost` | `{}` |
+| `crackstone_scan` | `{ phase: warning\|pulse, radiusM: 0..100, hit: boolean }` |
+| `curse` | `{ phase: cast\|hit\|miss, hpLost: 0..100, blocked: boolean }` — `cast` / `miss`: hpLost 0; `hit`: adds hpLost (0 when `blocked`), counts in `curses`, never a catch, refused after the deposit |
+
+**Deploy order** (the hosted project already runs the overhaul functions from §12.7; do this between visitors):
+
+1. `npm run sync:shared` and the four test commands of §12.2 (all must pass).
+2. `npx supabase db push --dry-run` must list ONLY `20261024000100_mystery_crackstone.sql`; then `npx supabase db push`.
+   Harmless to the running (overhaul) functions: they never send the new types.
+3. Redeploy **all six** functions in ONE command (every one bundles `_shared/`):
+   `npx supabase functions deploy --use-api mystery-create-session mystery-get-session mystery-select-duo mystery-append-events mystery-finalize admin-reset`
+4. Only then publish the Crackstone frontend (`npm run build`) and **hard-reload every laptop**.
+
+**A Crackstone client must NOT run against the old server.** The overhaul functions reject `crackstone_*` / `curse` with
+`422 EVENT_REJECTED: type` → the kiosk stops uploading → every run with a Crackstone encounter is "unverified". Functions
+before migration is equally wrong (a `curse` row would hit the old CHECK → 500, the run stalls offline). Sessions left open
+across step 3 still verify (their stored progress has no curses; it restores as `curses: 0`), unless the game data also
+bumped a case version (then `409 CASE_OUTDATED`, §12.7 point 4: reset both stations first). Rollback = previous frontend +
+previous functions together; the migration needs none.
+
+Verify after `db push` (SQL Editor):
+
+```sql
+select pg_get_constraintdef(oid) from pg_constraint where conname in ('mystery_events_type_check', 'mystery_forecasts_target_check');
+-- lists include crackstone_mode … curse and crackstone_risk
+select indexdef from pg_indexes where indexname = 'mystery_events_rule_idx';   -- ends with …, 'hint_requested', 'curse'
 ```
 
 ### 12.4 Client notes (live mystery client, 2026-10-21)

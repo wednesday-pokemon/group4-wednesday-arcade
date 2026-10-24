@@ -12,7 +12,7 @@ const MARKER_MAT = new THREE.MeshBasicMaterial({ color: '#ffe08a' });
 export class ClueProp {
   readonly root = new THREE.Group();
   readonly inner = new THREE.Group();
-  /** small gold diamond that hovers above the prop (shared geometry / material, never disposed per prop) */
+  /** small gold diamond that hovers above the item (shared geometry / material, never disposed per prop) */
   readonly marker: THREE.Mesh;
   private readonly geos: THREE.BufferGeometry[] = [];
   private readonly mats: THREE.Material[] = [];
@@ -29,18 +29,10 @@ export class ClueProp {
     const em2 = basicVC();
     this.mats.push(lm, em2);
     this.inner.add(new THREE.Mesh(lg, lm), new THREE.Mesh(eg, em2));
-    this.inner.scale.setScalar(1.5);
+    this.inner.scale.setScalar(1.3);
     this.marker = new THREE.Mesh(MARKER_GEO, MARKER_MAT);
-    this.marker.position.y = 1.35;
+    this.marker.position.y = 0.55;
     this.root.add(this.inner, this.marker);
-  }
-
-  /** Yaw that turns the prop's readable face toward the island centre (the player approaches from the paths). */
-  faceYaw(x: number, z: number): number {
-    const base = Math.atan2(x, z);
-    if (this.clueId === 'alarm_override') return base + Math.PI; // operator side is +Z
-    if (this.clueId === 'watchtower_signal') return base + Math.PI / 2; // lens points along +X
-    return base;
   }
 
   dispose(): void {

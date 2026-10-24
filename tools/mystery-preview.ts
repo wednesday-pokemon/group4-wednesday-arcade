@@ -3,6 +3,7 @@
 // Run:  node node_modules/vite/bin/vite.js --port 5210   then open /tools/mystery-preview.html
 // Query flags: ?manual=1 (no auto RAF; drive with __m.advance)  ?low=1  ?reduced=1  ?shot=1 (hide the bar)  ?real=1
 //              ?case=poisoned_archive|crypt_last_witness|midnight_signal  ?character=wednesday  ?pokemon=gengar  ?w=1280&h=720  ?emblems=1 (Thing pose contact sheet)  ?scenedebug
+//              ?mock=1|0 (staging world: rich candidate sites / examines / lever / hazards / extra walls; default = only while the real world is the one-site stub)  ?layout=second (session layout = each group's 2nd site)
 // Console / Playwright API: window.__m
 import * as THREE from 'three';
 import { MysteryScene } from '../src/three/mystery/MysteryScene.ts';
@@ -13,8 +14,9 @@ import { caseById, isCaseId } from '../src/mystery/data/cases.ts';
 import { MysteryRun } from '../src/mystery/run.ts';
 import { Bot } from '../src/mystery/bot.ts';
 import { createHydeRuntime } from '../src/mystery/hyde.ts';
+import { applyLayout, applyMockWorld } from './mystery-preview-mock.ts';
 import type {
-  ActiveEffects, ClueId, Duo, EggRuntime, GameEvent, HydeRuntime, MapDef, NightshadeId, Objective, PlayerState, PokemonId, RunStatus, StampedEvent,
+  ActiveEffects, ClueId, CrackstoneRuntime, Duo, EggRuntime, GameEvent, HydeRuntime, InvestigationState, MapDef, NightshadeId, Objective, PlayerState, PokemonId, RunStatus, StampedEvent,
 } from '../src/mystery/types.ts';
 
 const q = new URLSearchParams(location.search);
@@ -51,11 +53,24 @@ class FakeRun implements RenderableMysteryRun {
   status: RunStatus = 'playing';
   t = 10;
   fx: ActiveEffects = { ...NO_EFFECTS };
-  interact: { kind: 'clue' | 'egg' | 'tower' | 'switch'; id: string; label: string; progress: number } | null = null;
+  interact: { kind: 'clue' | 'egg' | 'tower' | 'switch' | 'practice' | 'examine' | 'lever'; id: string; label: string; progress: number } | null = null;
+  hydeEmerged = true;
+  inv: InvestigationState = { checkedClueSites: [], knownClueSites: {}, checkedEggSites: [], eggSeenAt: null, traces: [], examined: [], passageOpen: false, hydeEmerged: true, hydeEmergedAt: 0, hydeEmergesInS: null, lastHydeSighting: null };
   open = new Set<string>();
   obj: Objective = 'find_clues';
   walk = false;
   hydeWalk = false;
+  /** scripted Joseph Crackstone (null = none in this case) */
+  crackstone: CrackstoneRuntime | null = null;
+  crackVisual: 'petrify' | 'pin' | null = null;
+  crackWalk = false;
+  /** 'loop': he walks a rectangular loop with look-around pauses and scans every ~14 s */
+  crackScript: 'off' | 'loop' = 'off';
+  crackLoopIdx = 0;
+  crackPause = 0;
+  crackNextScan = 8;
+  curseHit = true;
+  crackstoneVisual() { return this.crackVisual; }
   constructor(map: MapDef) {
     this.map = map;
     const s = map.playerStart;
@@ -68,6 +83,7 @@ class FakeRun implements RenderableMysteryRun {
   interactable() { return this.interact; }
   isWallOpen(id: string): boolean { return this.open.has(id); }
   objective(): Objective { return this.obj; }
+  investigation(): InvestigationState { return { ...this.inv, hydeEmerged: this.hydeEmerged, passageOpen: [...this.open].some((id) => id === this.map.world?.passage?.wallId) }; }
 }
 
 const characterId = (q.get('character') ?? 'wednesday') as NightshadeId;
@@ -76,7 +92,11 @@ const duo: Duo = { characterId, pokemonId };
 const caseParam = q.get('case');
 const caseDef = caseById(isCaseId(caseParam) ? caseParam : 'poisoned_archive');
 const map = buildIsland(caseDef);
+const mockQ = q.get('mock');
+if (q.get('real') !== '1' && (mockQ === '1' || (mockQ !== '0' && (map.world?.examines.length ?? 0) === 0))) applyMockWorld(map, caseDef.id, q.get('layout') === 'second' ? 'second' : 'first');
+else if (q.get('layout') === 'second') applyLayout(map, 'second');
 const fake = new FakeRun(map);
+fake.egg.x = map.eggSpawn.x; fake.egg.z = map.eggSpawn.z;
 let real: MysteryRun | null = null;
 let bot: Bot | null = null;
 let current: RenderableMysteryRun = fake;
@@ -104,6 +124,46 @@ function renderFrames(n: number, dt: number): void {
   }
 }
 
+function createCrack(x: number, z: number, yaw = 0): CrackstoneRuntime {
+  return { mode: 'PATROL', modeT: 0, x, z, yaw, speed: 0, suspicion: 0, canSeePlayer: false, lastKnown: null, target: null, path: [], stunnedUntil: 0, slowedUntil: 0, slowMult: 1, distractedUntil: 0, scan: null, curse: null };
+}
+
+/** Scripted Crackstone: optional patrol loop, scan warning -> pulse and curse resolution, all in sim time (fake.t). */
+function stepCrack(dt: number): void {
+  const c = fake.crackstone;
+  if (!c) return;
+  c.modeT += dt;
+  if (fake.crackScript === 'loop' && !c.scan && !c.curse) {
+    const loop = [[-8, 38], [8, 38], [8, 50], [-8, 50]];
+    if (fake.crackPause > 0) { fake.crackPause -= dt; c.speed = 0; }
+    else {
+      const w = loop[fake.crackLoopIdx % loop.length];
+      const dx = w[0] - c.x, dz = w[1] - c.z, d = Math.hypot(dx, dz);
+      if (d < 0.3) { fake.crackLoopIdx++; fake.crackPause = 2.5; c.speed = 0; }
+      else {
+        const want = Math.atan2(-dx, -dz);
+        let dy = want - c.yaw; while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
+        c.yaw += dy * Math.min(1, dt * 4);
+        c.speed = 1.5;
+        c.x += (dx / d) * c.speed * dt; c.z += (dz / d) * c.speed * dt;
+      }
+    }
+    if (fake.t > fake.crackNextScan) { api.crackScan(9, 2.2); fake.crackNextScan = fake.t + 14; }
+  } else if (fake.crackWalk && !c.scan && !c.curse) {
+    c.x += -Math.sin(c.yaw) * c.speed * dt; c.z += -Math.cos(c.yaw) * c.speed * dt;
+  }
+  if (c.scan) {
+    c.speed = 0;
+    if (c.scan.phase === 'warning' && fake.t >= c.scan.pulseAt) { c.scan.phase = 'pulse'; pending.push(stamp({ type: 'crackstone_scan', phase: 'pulse', radiusM: c.scan.radiusM, hit: false })); }
+    else if (c.scan.phase === 'pulse' && fake.t >= c.scan.pulseAt + 0.7) c.scan = null;
+  }
+  if (c.curse && fake.t >= c.curse.landsAt) {
+    pending.push(stamp({ type: 'curse', phase: fake.curseHit ? 'hit' : 'miss', hpLost: fake.curseHit ? 25 : 0, blocked: false }));
+    c.curse = null;
+    if (c.mode === 'ATTACK') c.mode = fake.curseHit ? 'RETURN' : 'CHASE';
+  }
+}
+
 function stepFake(dt: number): void {
   fake.t += dt;
   const p = fake.player;
@@ -111,6 +171,7 @@ function stepFake(dt: number): void {
     p.x += -Math.sin(p.yaw) * p.speed * dt;
     p.z += -Math.cos(p.yaw) * p.speed * dt;
   }
+  stepCrack(dt);
   if (fake.hydeWalk) {
     fake.hyde.x += -Math.sin(fake.hyde.yaw) * fake.hyde.speed * dt;
     fake.hyde.z += -Math.cos(fake.hyde.yaw) * fake.hyde.speed * dt;
@@ -127,10 +188,57 @@ const api = {
   /** Merge fields into the scripted player / hyde / egg / effects. */
   setPlayer(o: Partial<PlayerState>) { Object.assign(fake.player, o); },
   setHyde(o: Partial<HydeRuntime>) { Object.assign(fake.hyde, o); },
+  /** Create / merge the scripted Crackstone (null removes him). */
+  setCrack(o: Partial<CrackstoneRuntime> | null) {
+    if (o === null) { fake.crackstone = null; return; }
+    if (!fake.crackstone) fake.crackstone = createCrack(o.x ?? 0, o.z ?? 40, o.yaw ?? 0);
+    Object.assign(fake.crackstone, o);
+  },
+  setCrackFlags(o: { walk?: boolean; script?: 'off' | 'loop'; visual?: 'petrify' | 'pin' | null; curseHit?: boolean }) {
+    if (o.walk !== undefined) fake.crackWalk = o.walk;
+    if (o.script !== undefined) { fake.crackScript = o.script; fake.crackNextScan = fake.t + 6; }
+    if (o.visual !== undefined) fake.crackVisual = o.visual;
+    if (o.curseHit !== undefined) fake.curseHit = o.curseHit;
+  },
+  /** Put Crackstone `dist` m from the player along (yaw + rel), facing the player. */
+  crackAt(dist: number, rel: number, mode: CrackstoneRuntime['mode'], opts: { speed?: number; faceAway?: boolean; face?: number } = {}) {
+    const p = fake.player;
+    const a = p.yaw + rel;
+    if (!fake.crackstone) fake.crackstone = createCrack(0, 0);
+    const c = fake.crackstone;
+    c.x = p.x - Math.sin(a) * dist; c.z = p.z - Math.cos(a) * dist;
+    const toPlayer = Math.atan2(-(p.x - c.x), -(p.z - c.z));
+    c.yaw = opts.face ?? (opts.faceAway ? toPlayer + Math.PI : toPlayer);
+    c.mode = mode;
+    c.speed = opts.speed ?? (mode === 'CHASE' ? 3.8 : mode === 'PATROL' ? 1.5 : mode === 'INVESTIGATE' ? 2.4 : mode === 'RETURN' ? 1.8 : mode === 'SEARCH' ? 1.2 : 0);
+    c.suspicion = mode === 'PATROL' ? 0 : mode === 'CHASE' ? 1 : 0.6;
+    c.canSeePlayer = mode === 'CHASE';
+    c.lastKnown = mode === 'PATROL' ? null : { x: p.x, z: p.z };
+    c.scan = null; c.curse = null;
+  },
+  /** Start a scan warning now (sim time): ring grows to `radius` over `warnS`, then pulses. */
+  crackScan(radius = 9, warnS = 2.2) {
+    const c = fake.crackstone;
+    if (!c) return;
+    c.scan = { phase: 'warning', startedAt: fake.t, pulseAt: fake.t + warnS, radiusM: radius };
+    pending.push(stamp({ type: 'crackstone_scan', phase: 'warning', radiusM: radius, hit: false }));
+  },
+  /** Cast a curse circle at (x,z): fills over `windupS`, then lands (hit / miss per setCrackFlags). */
+  castCurse(x: number, z: number, radius = 3, windupS = 1.6) {
+    const c = fake.crackstone;
+    if (!c) return;
+    c.mode = 'ATTACK'; c.speed = 0;
+    c.curse = { x, z, radiusM: radius, startedAt: fake.t, landsAt: fake.t + windupS };
+    pending.push(stamp({ type: 'curse', phase: 'cast', hpLost: 0, blocked: false }));
+  },
   setEgg(o: Partial<EggRuntime>) { Object.assign(fake.egg, o); },
   setEffects(o: Partial<ActiveEffects>) { fake.fx = { ...NO_EFFECTS, ...o }; },
   setOpen(id: string, v: boolean) { if (v) fake.open.add(id); else fake.open.delete(id); },
   setClues(ids: ClueId[]) { fake.cluesFound = ids; },
+  /** Merge fields into the scripted InvestigationState (known / checked sites, examined ...). */
+  setInv(o: Partial<InvestigationState>) { Object.assign(fake.inv, o); },
+  setHydeEmerged(v: boolean) { fake.hydeEmerged = v; },
+  setT(t: number) { fake.t = t; },
   setInteract(i: FakeRun['interact']) { fake.interact = i; },
   setObjective(o: Objective) { fake.obj = o; },
   setStatus(s: RunStatus) { fake.status = s; },
@@ -178,6 +286,7 @@ const api = {
   cam(c: Parameters<MysteryScene['setDebugCamera']>[0]) { scene.setDebugCamera(c); },
   debug() { return scene.getDebugState(current); },
   hydeScreen() { return scene.getHydeScreen(); },
+  crackScreen() { return scene.getCrackstoneScreen(); },
   setLow(v: boolean) { scene.setOptions({ lowGraphics: v }); },
   setReduced(v: boolean) { scene.setOptions({ reducedMotion: v }); },
   thingPose(p: Parameters<MysteryScene['setThingPose']>[0]) { scene.setThingPose(p); },

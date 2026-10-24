@@ -1,6 +1,7 @@
 // Grid navigation: a ~0.5 m occupancy grid rasterised from walls + movement-blocking cover, inflated by the agent radius
 // (a cell is walkable iff a circle of that radius at the cell centre touches no solid). 8-connected A* without corner
-// cutting, octile heuristic, then greedy string-pulling. Grids are cached per (map, radius, open gates).
+// cutting, octile heuristic, then greedy string-pulling. Grids are cached per (walls + cover arrays, bounds, radius, open
+// gates), so session maps sharing a case map's geometry share its grids.
 import { World } from './geometry.ts';
 import type { MapDef, Vec2 } from './types.ts';
 
@@ -368,22 +369,40 @@ export function pathLength(from: Vec2, path: readonly Vec2[]): number {
   return total;
 }
 
-const cache = new WeakMap<MapDef, Map<string, NavGrid>>();
+/**
+ * Grid cache keyed on the map's GEOMETRY ARRAYS (walls, then cover) rather than the MapDef object, so per-session maps
+ * that share the case map's arrays (layout.ts sessionMap) reuse one set of grids per process. Bounds are part of the key.
+ */
+const cache = new WeakMap<object, WeakMap<object, Map<string, NavGrid>>>();
+
+let gridsBuilt = 0;
+
+/** Number of grids built by navGridFor so far in this process (tests / perf probes). */
+export function navGridsBuilt(): number {
+  return gridsBuilt;
+}
 
 /**
- * Cached grid for (map, agent radius, open gates, cell size, low-cover rule). The World passed in supplies the
+ * Cached grid for (map geometry, agent radius, open gates, cell size, low-cover rule). The World passed in supplies the
  * current gate state; grids are immutable once built.
  */
 export function navGridFor(map: MapDef, world: World, radius: number, cellM: number, lowCoverBlocks = false): NavGrid {
-  let byKey = cache.get(map);
+  let byCover = cache.get(map.walls);
+  if (!byCover) {
+    byCover = new WeakMap();
+    cache.set(map.walls, byCover);
+  }
+  let byKey = byCover.get(map.cover);
   if (!byKey) {
     byKey = new Map();
-    cache.set(map, byKey);
+    byCover.set(map.cover, byKey);
   }
-  const key = `${radius.toFixed(3)}|${cellM}|${lowCoverBlocks ? 1 : 0}|${world.openKey()}`;
+  const b = map.bounds;
+  const key = `${b.minX},${b.maxX},${b.minZ},${b.maxZ}|${radius.toFixed(3)}|${cellM}|${lowCoverBlocks ? 1 : 0}|${world.openKey()}`;
   let grid = byKey.get(key);
   if (!grid) {
     grid = new NavGrid(world, radius, cellM);
+    gridsBuilt++;
     byKey.set(key, grid);
   }
   return grid;

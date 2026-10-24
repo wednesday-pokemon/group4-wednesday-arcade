@@ -5,7 +5,16 @@ export type Sfx =
   // v3 real-time cues
   | 'heartbeat' | 'whoosh' | 'rescue' | 'horn' | 'denied' | 'ready' | 'clean' | 'bump'
   // case-file reveal: a paper slide, a riffle of shuffled files, the ASSIGNED stamp
-  | 'paper' | 'shuffle' | 'stamp';
+  | 'paper' | 'shuffle' | 'stamp'
+  // overhaul HUD (UX_OVERHAUL §5–§7): odds glass tick (−24 dB), Thing's double knock (ADVICE, −20 dB), POWER STATUS soft
+  // rise (−22 dB), INVESTIGATION page flip (−24 dB), a hidden passage grinding open
+  | 'glass' | 'knock' | 'rise' | 'page' | 'grind'
+  // Joseph Crackstone (UX_ENEMIES §7): a high single bell when he spots you (distinct from the low DNF toll), the scan
+  // chant (bandpass sweep over the warning) + its pulse, the curse cast / hit / fizzle
+  | 'knell' | 'chant' | 'pulse' | 'curseCast' | 'curseHit' | 'curseFizzle';
+
+/** Which enemy drives the drone: the Hyde's growl drone or Crackstone's organ fifth (crossfade 0.6 s). */
+export type ThreatSource = 'hyde' | 'crackstone';
 
 const AMBIENT_LEVEL = 0.05;
 const SFX_LEVEL = 0.5;
@@ -14,6 +23,8 @@ const MUSIC_DUCK = 0.65; // at full threat the music drops to 35 % of its level 
 const PAD_LEVEL = 0.06;
 const PAD_FADE_TC = 0.8; // setTargetAtTime constant: ~2.5 s to silence, so the prologue pad melts into the island
 const VOICE_DUCK = 0.45; // music level while a narration clip plays
+const CHANT_DUCK = 0.7; // the scan chant ducks the music a further 30 %
+const SOURCE_FADE_TC = 0.2; // setTargetAtTime constant: ≈ 0.6 s crossfade between the two drones
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -23,6 +34,9 @@ class AudioEngine {
   private muted = false;
   private droneGain: GainNode | null = null;
   private droneFilter: BiquadFilterNode | null = null;
+  private organGain: GainNode | null = null;
+  private source: ThreatSource = 'hyde';
+  private chantUntil = 0;
   private threat = 0;
   private nextBeatAt = 0;
   private musicSrc: string | null = null;
@@ -92,7 +106,8 @@ class AudioEngine {
     if (this.master && this.ctx) this.master.gain.setTargetAtTime(muted ? 0 : 1, this.ctx.currentTime, 0.05);
   }
 
-  play(name: Sfx): void {
+  /** `durS`: length of the sweeping cues (`chant` = the scan warning, `curseCast` = the curse wind-up). */
+  play(name: Sfx, o: { durS?: number } = {}): void {
     const ctx = this.ctx;
     if (!ctx || !this.master || this.muted) return;
     const t = ctx.currentTime + 0.01;
@@ -120,22 +135,160 @@ class AudioEngine {
         this.thud(t);
         return this.noiseBurst(t, 'highpass', 1800, 0.08, 0.3);
       }
+      // dB levels relative to the SFX bus: −20 dB ≈ 0.1, −22 dB ≈ 0.08, −24 dB ≈ 0.063
+      case 'glass': return this.tone(2637, 'sine', t, 0.25, 0.063);
+      case 'knock': return [0, 0.13].forEach((d) => this.noiseBurst(t + d, 'lowpass', 900, 0.07, 0.1));
+      case 'rise': return [523.25, 784].forEach((f, i) => this.tone(f, 'sine', t + i * 0.09, 0.35, 0.08));
+      case 'page': return this.noiseBurst(t, 'bandpass', 2800, 0.14, 0.063);
+      case 'grind': return [0, 0.25, 0.5].forEach((d) => this.noiseBurst(t + d, 'lowpass', 260 + d * 120, 0.32, 0.35));
+      // Crackstone (−14 dB ≈ 0.2, −16 dB ≈ 0.16, −12 dB ≈ 0.25, −10 dB ≈ 0.32, −24 dB ≈ 0.063)
+      case 'knell': return [1, 2, 2.76, 5.4].forEach((k, i) => this.tone(523.25 * k, 'sine', t, 1.6 - i * 0.3, 0.2 / (i + 1)));
+      case 'chant': return this.chant(t, Math.max(0.5, o.durS ?? 2));
+      case 'pulse': {
+        const osc = ctx.createOscillator();
+        osc.frequency.setValueAtTime(60, t);
+        osc.frequency.exponentialRampToValueAtTime(38, t + 0.45);
+        osc.connect(this.envelope(t, 0.5, 0.25));
+        osc.start(t);
+        osc.stop(t + 0.55);
+        return this.whoosh(t);
+      }
+      case 'curseCast': return this.curseCast(t, Math.max(0.4, o.durS ?? 1.4));
+      case 'curseHit': {
+        [185, 262].forEach((f) => this.tone(f, 'sawtooth', t, 0.55, 0.32, 1200));
+        return this.noiseBurst(t, 'highpass', 2200, 0.12, 0.32);
+      }
+      case 'curseFizzle': return this.noiseBurst(t, 'highpass', 4200, 0.4, 0.063);
     }
   }
 
+  /** Two detuned saws through a bandpass sweeping 400 → 900 Hz over the scan warning, rising to −16 dB. */
+  private chant(t: number, dur: number): void {
+    const ctx = this.ctx!;
+    this.chantUntil = t + dur;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.16 * SFX_LEVEL, t + dur * 0.92);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.15);
+    g.connect(this.master!);
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.Q.value = 3;
+    f.frequency.setValueAtTime(400, t);
+    f.frequency.exponentialRampToValueAtTime(900, t + dur);
+    f.connect(g);
+    for (const hz of [146.8, 148.1]) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = hz;
+      osc.connect(f);
+      osc.start(t);
+      osc.stop(t + dur + 0.2);
+    }
+  }
+
+  /** 330 → 311 Hz triangle glide + a whisper of noise over the curse wind-up (−16 dB). */
+  private curseCast(t: number, dur: number): void {
+    const ctx = this.ctx!;
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(330, t);
+    osc.frequency.linearRampToValueAtTime(311, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.16 * SFX_LEVEL, t + 0.08);
+    g.gain.setValueAtTime(0.16 * SFX_LEVEL, t + dur - 0.1);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.1);
+    g.connect(this.master!);
+    osc.connect(g);
+    osc.start(t);
+    osc.stop(t + dur + 0.15);
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    src.loop = true;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'bandpass';
+    hp.frequency.value = 3000;
+    hp.Q.value = 0.7;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, t);
+    ng.gain.linearRampToValueAtTime(0.06 * SFX_LEVEL, t + dur * 0.8);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.1);
+    src.connect(hp).connect(ng).connect(this.master!);
+    src.start(t, Math.random());
+    src.stop(t + dur + 0.15);
+  }
+
   /**
-   * Threat-driven ambience (0 calm … 1 about to catch): a low drone that swells with the threat, and a heartbeat
-   * whose rate follows the danger level (call every frame; level 0 = silent, 1 ≈ 1 Hz, 2 ≈ 2 Hz).
+   * Proximity shimmer near a KNOWN (already seen) uncollected clue: a soft high loop whose level follows `level` (0 at
+   * 6 m … 1 at 2 m ≈ −20 dB) and pans with the clue's bearing (−1 left … 1 right). Call ~4 Hz; 0 fades it out. Mute
+   * covers it (master gain). Created lazily on first use.
    */
-  setThreat(threat: number, level: 0 | 1 | 2): void {
+  setShimmer(level: number, pan: number): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.master) return;
+    const lv = Math.max(0, Math.min(1, level));
+    if (!this.shimmerGain) {
+      if (lv <= 0) return;
+      this.startShimmer();
+    }
+    const t = ctx.currentTime;
+    this.shimmerGain!.gain.setTargetAtTime(this.muted ? 0 : lv * 0.1, t, 0.25);
+    this.shimmerPan?.pan.setTargetAtTime(Math.max(-1, Math.min(1, pan)), t, 0.2);
+  }
+
+  private shimmerGain: GainNode | null = null;
+  private shimmerPan: StereoPannerNode | null = null;
+
+  private startShimmer(): void {
+    const ctx = this.ctx!;
+    this.shimmerGain = ctx.createGain();
+    this.shimmerGain.gain.value = 0;
+    try {
+      this.shimmerPan = ctx.createStereoPanner();
+      this.shimmerGain.connect(this.shimmerPan).connect(this.master!);
+    } catch {
+      this.shimmerGain.connect(this.master!);
+    }
+    const trem = ctx.createOscillator();
+    trem.frequency.value = 5.5;
+    const depth = ctx.createGain();
+    depth.gain.value = 0.35;
+    trem.connect(depth);
+    for (const [f, lvl] of [[1760, 0.5], [2217.5, 0.35], [2637, 0.25]] as const) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = f;
+      const g = ctx.createGain();
+      g.gain.value = lvl;
+      depth.connect(g.gain);
+      osc.connect(g).connect(this.shimmerGain);
+      osc.start();
+    }
+    trem.start();
+  }
+
+  /**
+   * Threat-driven ambience (0 calm … 1 about to catch): a low drone that swells with the threat, and ONE shared
+   * heartbeat whose rate follows the danger level (call every frame; level 0 = silent, 1 ≈ 1 Hz, 2 ≈ 2 Hz). `source`
+   * picks the timbre: the Hyde's growl drone, or Crackstone's organ fifth (110 + 164.8 Hz) — crossfaded over ~0.6 s.
+   */
+  setThreat(threat: number, level: 0 | 1 | 2, source: ThreatSource = 'hyde'): void {
     const ctx = this.ctx;
     if (!ctx || !this.master) return;
     this.threat = Math.max(0, Math.min(1, threat));
     if (!this.droneGain) this.startDrone();
+    if (!this.organGain) this.startOrgan();
     const t = ctx.currentTime;
-    this.droneGain!.gain.setTargetAtTime(this.muted ? 0 : 0.015 + this.threat * 0.11, t, 0.4);
+    const switched = source !== this.source;
+    this.source = source;
+    const level0 = this.muted ? 0 : 0.015 + this.threat * 0.11;
+    const tc = switched ? SOURCE_FADE_TC : 0.4;
+    this.droneGain!.gain.setTargetAtTime(source === 'hyde' ? level0 : 0, t, tc);
+    this.organGain!.gain.setTargetAtTime(source === 'crackstone' ? level0 * 0.8 : 0, t, tc);
     this.droneFilter!.frequency.setTargetAtTime(160 + this.threat * 520, t, 0.4);
-    this.musicGain?.gain.setTargetAtTime(MUSIC_LEVEL * (1 - MUSIC_DUCK * this.threat), t, 0.6);
+    const chant = t < this.chantUntil ? CHANT_DUCK : 1;
+    this.musicGain?.gain.setTargetAtTime(MUSIC_LEVEL * (1 - MUSIC_DUCK * this.threat) * chant, t, 0.6);
     if (level > 0 && !this.muted && t >= this.nextBeatAt) {
       this.heartbeat(t + 0.01);
       this.nextBeatAt = t + (level === 2 ? 0.5 : 1.0);
@@ -246,6 +399,7 @@ class AudioEngine {
   calm(): void {
     this.threat = 0;
     if (this.ctx && this.droneGain) this.droneGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.3);
+    if (this.ctx && this.organGain) this.organGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.3);
     if (this.ctx && this.musicGain) this.musicGain.gain.setTargetAtTime(MUSIC_LEVEL, this.ctx.currentTime, 0.6);
   }
 
@@ -262,6 +416,24 @@ class AudioEngine {
       osc.type = type;
       osc.frequency.value = f;
       osc.connect(this.droneFilter);
+      osc.start();
+    }
+  }
+
+  /** Crackstone's drone: an organ fifth (110 + 164.8 Hz triangles, lowpass 900 Hz). */
+  private startOrgan(): void {
+    const ctx = this.ctx!;
+    this.organGain = ctx.createGain();
+    this.organGain.gain.value = 0;
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = 900;
+    f.connect(this.organGain).connect(this.master!);
+    for (const hz of [110, 164.8]) {
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = hz;
+      osc.connect(f);
       osc.start();
     }
   }

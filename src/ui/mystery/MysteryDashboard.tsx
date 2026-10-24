@@ -1,5 +1,8 @@
-// MysteryDashboard (UX_MYSTERY §8) — Laptop 1, LOCAL DEMO. 12-col grid:
-//   A  StationLiveCard (this station) · Station B (live backend) · StandingsPanel
+// MysteryDashboard (UX_MYSTERY §8, UX_OVERHAUL §10) — Laptop 1, LOCAL DEMO. Header KPI ribbon (Runs · Case solved ·
+// Extraction success · Median time · Hyde chases / run for the selected case scope; "—" at n = 0, "small sample" when
+// n < 10), then a 12-col grid:
+//   A  StationLiveCard (this station: phase + time, duo, case, progress track clues → egg → tower, HP / caught / chases /
+//      Hyde chip, risk · tower · egg odds with sources, newest Thing item, heartbeat age) · Station B · StandingsPanel
 //   K  CaseBoard: four selectable case tiles = the case filter (All / Case 01 / 02 / 03 by title) and the per-case
 //      summary (runs, mystery-solving accuracy, median time, extraction rate, all-clues share)
 //   B  ClueSolvePanel (clues of each case, within that case) · DetectionTrendPanel · DuoPopularityPanel
@@ -12,11 +15,13 @@ import { CASES } from '../../mystery/data/cases.ts';
 import { NIGHTSHADES } from '../../mystery/data/nightshades.ts';
 import { PARTNERS } from '../../mystery/data/partners.ts';
 import { CASE_IDS, type CaseId } from '../../mystery/types.ts';
-import type { LivePhase, LiveStatus, StoredRecord } from '../../app/mystery/records.ts';
+import type { LiveStatus, StoredRecord } from '../../app/mystery/records.ts';
 import { HeaderTools } from '../components/HeaderTools.tsx';
 import { ThingSigil } from '../components/ThingSigil.tsx';
 import { Icon } from '../Icon.tsx';
+import { characterArt, pokemonArt } from './duoView.ts';
 import { LAYERS } from './LayerPanels.tsx';
+import { curseCounts, kpiRibbon, stationViewFromLocal, type CurseCounts, type EggStep, type StationCardView } from './stationView.ts';
 
 export type CaseScope = CaseId | 'all';
 
@@ -42,25 +47,17 @@ const abilityName = (id: string) =>
   Object.values(NIGHTSHADES).find((n) => n.power.id === id)?.power.name ?? Object.values(PARTNERS).find((p) => p.move.id === id)?.move.name ?? id;
 const isCase = (v: unknown): v is CaseId => typeof v === 'string' && (CASE_IDS as readonly string[]).includes(v);
 
-const PHASE_TEXT: Record<LivePhase, string> = {
-  idle: 'Idle', name: 'Name entry', duo: 'Choosing duo', tutorial: 'Tutorial', investigating: 'Investigating',
-  carrying: 'Carrying egg', accusing: 'Accusing', results: 'Results', dnf: 'DNF',
-};
-const SIGNAL_LOST_MS = 15000;
-
 export function MysteryDashboard({ records, live, now, agg, scope, onScope, caseAware }: Props) {
   return (
-    <main className="mdash" data-testid="mystery-dashboard" data-scope={agg.scope}>
-      <header className="mdash__head">
-        <h1 className="display mdash__title">Nevermore · Control Center</h1>
-        <span className="mdash__chip">mystery-v3.1</span>
-        <span className="mdash__chip mdash__chip--demo">LOCAL DEMO · this browser only</span>
-        <span className="text-2 mdash__count">{records.length} session{records.length === 1 ? '' : 's'}</span>
+    <main className="mdash mdash--kpi" data-testid="mystery-dashboard" data-scope={agg.scope}>
+      <header className="mdash__head mdash__head--kpi">
+        <h1 className="display mdash__title" title={`Rules mystery-v3.1 · LOCAL DEMO: ${records.length} session${records.length === 1 ? '' : 's'} played in this browser`}>Nevermore · Control Center</h1>
+        <KpiRibbon agg={agg} curses={curseCounts(inScope(records, agg.scope).map((r) => r.record))} />
         <HeaderTools mode="local_demo" />
       </header>
 
-      <div className="mdash__grid mdash__grid--cases">
-        <StationLiveCard live={live} now={now} />
+      <div className="mdash__grid mdash__grid--cases mdash__grid--live">
+        <StationLiveCard view={stationViewFromLocal(live, now)} area="mdash-a1" testId="station-live" />
         <section className="mdash-card mdash-card--muted mdash-a2" aria-label="Station B">
           <p className="caps">Station B</p>
           <p className="text-2">Both stations appear here live once the Supabase backend is deployed (Realtime). This demo reads only the sessions played in this browser.</p>
@@ -82,6 +79,11 @@ export function MysteryDashboard({ records, live, now, agg, scope, onScope, case
   );
 }
 
+/** Records of a case scope (all = every record). */
+function inScope(records: StoredRecord[], scope: CaseScope): StoredRecord[] {
+  return scope === 'all' ? records : records.filter((r) => (r.record.caseId ?? r.record.result?.caseId) === scope);
+}
+
 /** Clue pips sized to the case's clue count (legacy / unknown case → 3). */
 export function CluePips({ found, caseId }: { found: number; caseId?: string | null }) {
   const total = clueCountFor(isCase(caseId) ? caseId : null);
@@ -92,43 +94,121 @@ export function CluePips({ found, caseId }: { found: number; caseId?: string | n
   );
 }
 
-function StationLiveCard({ live, now }: { live: LiveStatus | null; now: number }) {
-  if (!live) {
-    return (
-      <section className="mdash-card mdash-a1" data-testid="station-live">
-        <p className="caps">This station</p>
-        <p className="mdash-phase mdash-phase--idle">Idle</p>
-        <p className="text-2">No visitor yet.</p>
-      </section>
-    );
-  }
-  const age = Math.max(0, Math.round((now - live.updatedAt) / 1000));
-  const active = !['idle', 'results', 'dnf'].includes(live.phase);
-  const lost = active && now - live.updatedAt > SIGNAL_LOST_MS;
-  const liveCase = (live as LiveStatus & { caseId?: string | null }).caseId ?? null;
+// ----------------------------------------------------------------------------------------------------- station card
+
+const EGG_WORD: Record<EggStep, string> = {
+  unknown: 'Egg', resting: 'Egg not found', seen: 'Egg seen', carried: 'Egg carried', dropped: 'Egg dropped', delivered: 'Egg secured',
+};
+const SRC: Record<'ml' | 'rule', string> = { ml: 'ML', rule: 'Rule-based' };
+
+/**
+ * One station, live (UX_OVERHAUL §10). Presentational: the view comes from stationView.ts (local LiveStatus or a live
+ * BoardStation via stationViewFromBoard). Status always reads as icon + word; CHASE adds a red frame + "CHASING" chip,
+ * a lost signal a dashed frame. Never shows the culprit, the accused suspect or the true egg site.
+ */
+export function StationLiveCard({ view: v, area, testId }: { view: StationCardView; area: string; testId: string }) {
+  const state = v.lost ? 'lost' : v.chasing ? 'chase' : v.phase;
   return (
-    <section className="mdash-card mdash-a1" data-testid="station-live" data-phase={lost ? 'lost' : live.phase}>
-      <div className="mdash-row">
-        <p className="caps">This station</p>
-        <span className={`mdash-phase mdash-phase--${lost ? 'lost' : live.phase}`}>{lost ? 'Signal lost' : PHASE_TEXT[live.phase]}</span>
+    <section
+      className={`mdash-card ${area} mstation${v.chasing ? ' is-chase' : ''}${v.hunted ? ' is-hunted' : ''}${v.lost ? ' is-lost' : ''}${v.dnf ? ' is-dnf' : ''}`}
+      data-testid={testId} data-phase={v.lost ? 'lost' : v.phase} data-state={state} aria-label={v.label}
+    >
+      <div className="mstation__r1">
+        <p className="caps mstation__label">{v.label}</p>
+        <span className={`mdash-phase mdash-phase--${v.lost ? 'lost' : v.phase}`}><Icon name={v.phaseIcon} />{v.phaseText}</span>
+        {v.chasing && <span className="mstation__chasing" data-testid={`${testId}-chasing`}><Icon name="claw" />CHASING</span>}
+        {v.hunted && <span className="mstation__hunted" data-testid={`${testId}-hunted`}><Icon name="hat" />HUNTED</span>}
+        {v.timeText && <span className="mstation__time" data-testid={`${testId}-time`}>{v.timeText}</span>}
       </div>
-      <p className="mdash-station__who"><strong>{live.nickname || '—'}</strong>{live.duo && <> · {nameOfChar(live.duo.characterId)} &amp; {nameOfMon(live.duo.pokemonId)}</>}</p>
-      {isCase(liveCase) && <p className="mdash-small" data-testid="station-case">{caseLabel(liveCase)}</p>}
-      <dl className="mdash-kv">
-        <div><dt>Clues</dt><dd><CluePips found={live.clues} caseId={liveCase} /></dd></div>
-        <div><dt>Egg</dt><dd>{live.egg ? `${live.egg.tier ?? 'not found'}${live.egg.tier ? ` · ${live.egg.security}` : ''}` : '—'}</dd></div>
-        <div><dt>HP · caught</dt><dd className="num">{live.hp ?? '—'} · {live.catches ?? '—'}/2</dd></div>
-        <div><dt>Hyde</dt><dd>{live.hydeMode ?? '—'}</dd></div>
-        <div><dt>Risk</dt><dd className="num">{live.risk ? `${live.risk.p.toFixed(2)} · ${live.risk.label === 'ML estimate' ? 'ML' : 'Rule-based'}` : '—'}</dd></div>
-        <div><dt>Time</dt><dd className="num">{live.activeTimeS !== null ? `${live.activeTimeS.toFixed(1)} s` : '—'}</dd></div>
-      </dl>
-      {live.advice && (
-        <p className="mdash-advice">
-          <ThingSigil size={24} pose="point" /> “{live.advice.text}” {live.advice.followed === null ? '' : live.advice.followed ? '· followed' : '· not followed'}
-        </p>
+      {!v.active && !v.duo ? (
+        <p className="text-2 mstation__idle">{v.notice ?? 'No visitor yet.'}</p>
+      ) : (
+        <>
+          <div className="mstation__r2">
+            {v.duo && (
+              <span className="mstation__faces" aria-hidden="true">
+                <img src={characterArt(v.duo.characterId)} alt="" width={28} height={28} />
+                <img src={pokemonArt(v.duo.pokemonId)} alt="" width={28} height={28} />
+              </span>
+            )}
+            <strong className="mstation__nick">{v.nickname ?? '—'}</strong>
+            {v.duoText && <span className="mstation__duo">{v.duoText}</span>}
+          </div>
+          {v.caseText && <p className="mstation__case" data-testid={`${testId}-case`}>
+            <span className="mstation__casetext">{v.caseText}</span>
+            {v.chasesText && <span className="mstation__chases" data-testid={`${testId}-chases`}>{v.chasesText}</span>}
+          </p>}
+          <ProgressTrack v={v} testId={testId} />
+          <div className="mstation__r5">
+            <span className="mstation__hp" title="HP">
+              <Icon name="heart" />
+              <span className="mstation__hpbar" aria-hidden="true">
+                <span style={{ width: `${Math.max(0, Math.min(100, ((v.hp ?? 0) / v.maxHp) * 100))}%` }} className={(v.hp ?? 0) <= 50 ? 'is-low' : undefined} />
+              </span>
+              <b>{v.hp ?? '—'}</b>
+            </span>
+            <span>Caught <b>{v.catches ?? '—'}/2</b></span>
+            {v.hyde && <span className={`mstation__hyde${v.hyde.chase ? ' is-chase' : ''}`} data-testid={`${testId}-hyde`}><Icon name={v.hyde.icon} />{v.hyde.word}</span>}
+            {v.crack && <span className={`mstation__crack${v.crack.hunting ? ' is-hunting' : ''}`} data-testid={`${testId}-crack`} title="Joseph Crackstone"><Icon name={v.crack.icon} />{v.crack.word}</span>}
+          </div>
+          <p className="mstation__r6" data-testid={`${testId}-odds`}>
+            <span>Risk <b>{v.risk ? v.risk.band : '—'}</b>{v.risk && <span className="mstation__src"> · {SRC[v.risk.source]}</span>}</span>
+            <span>Tower <b>{v.tower ? `${v.tower.pct}%` : '—'}</b>{v.tower && <span className="mstation__src"> · {SRC[v.tower.source]}</span>}</span>
+            {v.eggOdds && <span>Egg: <b>{v.eggOdds.name} {v.eggOdds.pct}%</b><span className="mstation__src"> · Bayesian</span></span>}
+          </p>
+          <p className="mstation__r7" data-testid={`${testId}-thing`}>
+            <ThingSigil size={24} pose="point" />
+            {v.thing ? (
+              <>
+                <span className="mstation__head">{v.thing.head}</span>
+                <span className="mstation__text">{v.thing.text}</span>
+                {v.thing.followed && <span className="mstation__followed">{v.thing.followed}</span>}
+              </>
+            ) : <span className="mstation__text text-2">No Thing message yet.</span>}
+          </p>
+          {v.notice && <p className="mdash-advice">{v.notice}</p>}
+        </>
       )}
-      <p className="mdash-age text-2">updated {age} s ago</p>
+      {v.ageText && <p className="mdash-age text-2 mstation__age">{v.ageText}</p>}
     </section>
+  );
+}
+
+/** ◆◆◇ clues → egg → tower + objective word (icon + word, never colour alone). */
+function ProgressTrack({ v, testId }: { v: StationCardView; testId: string }) {
+  const done = v.clues >= v.cluesTotal;
+  const eggOn = v.egg === 'carried' || v.egg === 'delivered' || v.egg === 'seen' || v.egg === 'dropped';
+  const eggWord = EGG_WORD[v.egg].replace(/^Egg ?/, '') || '—';
+  return (
+    <div
+      className="mstation__track" data-testid={`${testId}-track`} role="img"
+      aria-label={`${v.clues} of ${v.cluesTotal} clues · ${EGG_WORD[v.egg]} · ${v.towerReached ? 'tower reached' : 'tower not reached'}${v.objectiveText ? ` · ${v.objectiveText}` : ''}`}
+    >
+      <span className={`mstation__step${done ? ' is-done' : ''}`}><CluePips found={v.clues} caseId={v.caseId} /></span>
+      <span className="mstation__arrow" aria-hidden="true">→</span>
+      <span className={`mstation__step mstation__egg is-${v.egg}${eggOn ? ' is-on' : ''}`}><Icon name="egg" /><span>{eggWord}</span></span>
+      <span className="mstation__arrow" aria-hidden="true">→</span>
+      <span className={`mstation__step mstation__tower${v.towerReached ? ' is-on' : ''}`}><Icon name="flag" /><span>Tower</span></span>
+      {v.objectiveText && <span className="mstation__obj">{v.objectiveText}</span>}
+    </div>
+  );
+}
+
+/** Header KPI ribbon for the selected case scope (stat tiles: label + value; "small sample" under n = 10). */
+export function KpiRibbon({ agg, curses = null }: { agg: DashboardAggregates; curses?: CurseCounts | null }) {
+  const scopeText = agg.scope === 'all' ? 'All cases' : `Case ${CASES[agg.scope].number}`;
+  return (
+    <dl className="mdash-kpis" data-testid="kpi-ribbon" aria-label={`Key numbers · ${scopeText}`} data-scope={agg.scope}>
+      {kpiRibbon(agg.descriptive, curses).map((k) => (
+        <div key={k.key} className="mdash-kpi" data-testid={`kpi-${k.key}`} title={k.title} data-n={k.n}>
+          <dt aria-label={k.label}>{k.short}</dt>
+          <dd>
+            <span className="mdash-kpi__v">{k.value}</span>
+            {k.small && <span className="mdash-kpi__small">small sample</span>}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -363,7 +443,7 @@ export function DescriptiveLayer({ agg }: { agg: DashboardAggregates }) {
         {(['crouch', 'walk', 'sprint', 'idle'] as const).map((k) => s[k] > 0 && <span key={k} className={`lp-stance__seg lp-stance__seg--${k}`} style={{ width: `${s[k] * 100}%` }} />)}
       </div>
       <p className="lp-legend">Crouch {pct(s.crouch)} · Walk {pct(s.walk)} · Sprint {pct(s.sprint)} · Still {pct(s.idle)}</p>
-      <p className="mdash-foot">Mean time {secs(d.meanTimeS)} · Top F/Q: {d.topAbilities.slice(0, 3).map((a) => `${abilityName(a.abilityId)} ×${a.uses}`).join(' · ') || '—'}</p>
+      <p className="mdash-foot">Mean time {secs(d.meanTimeS)} · Top powers &amp; moves: {d.topAbilities.slice(0, 3).map((a) => `${abilityName(a.abilityId)} ×${a.uses}`).join(' · ') || '—'}</p>
       {d.smallSample && <p className="mdash-small">Small sample — read with care.</p>}
     </section>
   );
@@ -377,7 +457,7 @@ export function DiagnosticLayer({ agg }: { agg: DashboardAggregates }) {
       <p className="mdash-sub">Why cases stayed unsolved ({d.unsolvedRuns} run{d.unsolvedRuns === 1 ? '' : 's'})</p>
       <ul className="mdash-list" data-testid="case-failures">
         {d.caseFailures.slice(0, 2).map((c) => <li key={`${c.code}:${c.ref ?? ''}`}><span className="lp-badge lp-badge--case">Case</span><span>{c.text}</span><span className="num">{c.count}</span></li>)}
-        {d.caseFailures.length === 0 && <li className="text-2">Every finished case was solved.</li>}
+        {d.caseFailures.length === 0 && <li className="text-2">{d.unsolvedRuns > 0 ? 'No rule-verified cause recorded yet.' : agg.descriptive.finished === 0 ? 'No finished runs yet.' : 'Every finished case was solved.'}</li>}
       </ul>
       <p className="mdash-sub">Rule-verified causes of catches / DNFs</p>
       <ul className="mdash-list">

@@ -27,6 +27,19 @@ export { duoFactorsFromRun, liveContext } from './state.ts';
 export { duoNumbers, type FeatureInput } from './features.ts';
 export { DETECTION_HORIZON_S } from './labels.ts';
 export { BUNDLED_MODEL };
+// ---- overhaul: live analytics during play (MysteryAnalytics.live() / hint(level) / heartbeat())
+export { LABEL_BAYES, LABEL_ML, LABEL_RULE, type HeartbeatAnalytics } from './live.ts';
+export { TITLES as LIVE_TITLES, P as LIVE_PRIORITY, ADVICE_MAX, WHY_MAX, LOG_MAX, DIAG_MAX } from './liveMessages.ts';
+export { eggPosterior, clueAreaProbabilities, clueSiteProbabilities } from './bayes.ts';
+export { spawnProbabilities, zoneIndexAt } from './hydeZones.ts';
+export { thingItemText } from './thingCodes.ts';
+export { UPLOAD_FORECAST_TARGETS } from './telemetry.ts';
+// ---- enemy contract: Joseph Crackstone (rule-based risk, public state, descriptive counts, message limits)
+export { CRACK_CELL_M, CRACK_HORIZON_S, CRACK_LABEL, CRACK_MODEL_VERSION } from './crackstoneRisk.ts';
+export { crackstoneOf, crackstoneModeOf, type CrackstonePublic, type CrackstonePoseKind } from './publicState.ts';
+export { crackstoneReport, type CrackstoneAggregate } from './descriptive.ts';
+export { CRACK_P5_GAP_S, ENEMY_ALERTS_PER_MINUTE, isCrackThreat } from './liveMessages.ts';
+export { CRACK_INTRO_AFTER_S } from './live.ts';
 
 /** Session analytics with the bundled model (falls back to the labelled rule-based estimate if it is unusable). */
 export function createMysteryAnalytics(run: MysteryRun, o: Omit<MysteryAnalyticsOptions, 'model'> & { model?: unknown | null } = {}): MysteryAnalytics {

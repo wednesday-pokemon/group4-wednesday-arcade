@@ -7,6 +7,9 @@
 //   + every src/mystery module those import (transitively, e.g. prf.ts)
 //                                          -> supabase/functions/_shared/mystery/       (mystery-v3.1, same layout)
 //
+// data/** is copied whole (incl. the overhaul's data/caseWorlds.ts). Sim-only modules such as layout.ts / hazards.ts are
+// NOT entries: the functions never need clue/egg positions (they validate ids, the seed's egg tier and recompute the
+// verdict + score). They are copied only if a data/entry module imports them (and then must pass the purity scan).
 // Shared mystery modules must be pure (docs/MYSTERY_CONTRACT.md): they may import only each other and src/game.
 // The script FAILS (exit 1) on a bare/out-of-tree import or on Math.random / Date / DOM use, because the Deno
 // functions could not run them (or would compute different offers/scores than the browser).

@@ -85,6 +85,7 @@ export const FEATURES: Record<string, FeatureFn> = {
   near10,
   near4,
   occluded: (x) => b(x.snapshot.hydeOccluded),
+  hydeVisible: (x) => b(x.snapshot.hydeVisible === true), // overhaul: the player can see the Hyde (public)
   visibleNear: (x) => near10(x) * (1 - b(x.snapshot.hydeOccluded)),
   suspicion: (x) => x.snapshot.hydeSuspicion,
   mode_investigate: (x) => b(x.snapshot.hydeMode === 'INVESTIGATE_SOUND'),
@@ -161,6 +162,7 @@ export function featureLabel(name: string, x: FeatureInput, raises: boolean): st
   switch (name) {
     case 'near10': case 'near4': return raises ? `Hyde ${d} m away` : `Hyde far away (${d} m)`;
     case 'occluded': return s.hydeOccluded ? 'A wall is between you' : 'Nothing blocks its view';
+    case 'hydeVisible': return s.hydeVisible ? 'You can see the Hyde' : 'The Hyde is out of sight';
     case 'visibleNear': case 'facingNear': return raises ? `Hyde ${d} m away with a clear view` : 'Out of its sight line';
     case 'suspicion': return `Hyde suspicion ${Math.round(s.hydeSuspicion * 100)}%`;
     case 'mode_investigate': return s.hydeMode === 'INVESTIGATE_SOUND' ? 'Hyde is investigating a noise' : 'Hyde is not investigating';

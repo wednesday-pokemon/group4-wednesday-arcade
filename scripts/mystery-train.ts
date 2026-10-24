@@ -7,6 +7,9 @@
 //   eta        — OLS, seconds to the next progress event, with a naive per-(case, objective) mean baseline
 // The data cover all three cases; features add `case_<id>` indicators (the per-case layout: where the clues and the
 // egg lie) and normalise the clue count by the case's own clue count. The answer key is never a feature.
+//   zone filter — (overhaul) the Hyde-zone HMM's β is COUNTED and its diffusion / alertFar rates are SELECTED by mean
+//                 log-loss on the TRAINING sessions only (scripts/mystery-zones.ts); the holdout scores it in evaluate
+// Detection rows exist only after the Hyde emerged (labels.ts / dataset.ts); `hydeVisible` (public) is a feature.
 // Writes src/mystery/analytics/model/mystery-model.json (metrics: null until `mystery:evaluate`) and data/mystery/split.json.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -16,6 +19,7 @@ import { featureInputFromRow, parseCsv, type Row } from '../src/mystery/analytic
 import { BASE_FEATURE_NAMES, ETA_EXTRA, featureVector } from '../src/mystery/analytics/features.ts';
 import { DETECTION_HORIZON_S } from '../src/mystery/analytics/labels.ts';
 import { logistic, MODEL_SCHEMA, type LinearPart, type ModelArtifact } from '../src/mystery/analytics/model.ts';
+import { groupSessions, selectZoneParams } from './mystery-zones.ts';
 
 function arg(name: string, def: string): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -117,11 +121,17 @@ function main(): void {
     }
   }
 
+  const tz = Date.now();
+  const zone = selectZoneParams(groupSessions(train));
+  const bestGrid = zone.grid.reduce((a, b) => (b.logLoss < a.logLoss ? b : a));
+  console.log(`  zone filter: β ${zone.params.beta} (${zone.betaRows} rows), diffusion ${zone.params.diffusionPerS}/s, alertFar ${zone.params.alertFarLikelihood} (train log-loss ${bestGrid.logLoss}) in ${((Date.now() - tz) / 1000).toFixed(1)} s`);
+
   const date = new Date();
   const ymd = date.toISOString().slice(0, 10).replace(/-/g, '');
   const artifact: ModelArtifact = {
     schema: MODEL_SCHEMA,
-    modelVersion: `det15-${ymd}-${manifest.seedPrefix}`.slice(0, 32),
+    // the generator generation is part of the version (same seeds, regenerated episodes ⇒ a different model)
+    modelVersion: `det15-${ymd}-${manifest.seedPrefix}${/-(\d+)$/.exec(manifest.generator)?.[1] ? `-g${/-(\d+)$/.exec(manifest.generator)![1]}` : ''}`.slice(0, 32),
     rulesVersion: 'mystery-v3.1',
     createdAt: date.toISOString(),
     modelType: 'logistic_regression',
@@ -144,6 +154,12 @@ function main(): void {
       l2,
       l2Extraction: exL2,
       l2ExtractionSelection: `inner session-grouped validation (prfUniform(seed, '${INNER_KEY}') < 0.25 of the training sessions), grid ${EXTRACTION_L2_GRID.join(', ')}`,
+    },
+    zoneFilter: {
+      params: zone.params,
+      selection: `β = P(player does not see the Hyde | it is in the player's zone, no chase), counted on the training sessions (${zone.betaRows} rows); diffusion ∈ {0.0025…0.08}/s × alertFar ∈ {0.15…1} by mean log-loss on the training sessions`,
+      betaRows: zone.betaRows,
+      grid: zone.grid,
     },
     metrics: null,
   };

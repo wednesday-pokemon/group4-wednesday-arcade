@@ -11,7 +11,8 @@ import {
   resolveCase, rulesContext, type SessionCase,
 } from '../../functions/_shared/mystery-rules.ts';
 import {
-  parseMysteryAppend, parseMysteryCreate, parseMysteryFinalize, parseMysteryGet, parseMysterySelect,
+  parseForecast, parseMysteryAppend, parseMysteryCreate, parseMysteryFinalize, parseMysteryGet, parseMysterySelect,
+  parseRecommendation,
 } from '../../functions/_shared/mystery-validation.ts';
 import { parseAdminReset } from '../../functions/_shared/validation.ts';
 import { round1, scoreFor } from '../../functions/_shared/mystery/scoring.ts';
@@ -21,9 +22,10 @@ const SID = '6f1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b';
 const ACT = 'a1b2c3d4-e5f6-4711-8899-aabbccddeeff';
 const SEED = '0123456789abcdef0123456789abcdef';
 
-// The real case 01 + the server's own answer key (generated registry). Clues: A = falsified_transfer,
-// B = botanical_residue, L = access_ledger; culprit thornhill; notes note_drain_mud / note_keys_jangling.
-const CASE: SessionCase = resolveCase('poisoned_archive', 1);
+// The real case 01 + the server's own answer key (generated registry), at its DEPLOYED version (v1 before the
+// overhaul, v2 after it). Clues: A = falsified_transfer, B = botanical_residue, L = access_ledger; culprit thornhill;
+// notes note_drain_mud / note_keys_jangling.
+const CASE: SessionCase = resolveCase('poisoned_archive', requireData().cases.poisoned_archive.version);
 const ALL = ['falsified_transfer', 'botanical_residue', 'access_ledger'];
 const CTX: RulesContext = {
   clueIds: ALL as RulesContext['clueIds'], suspectIds: ['thornhill', 'isaac', 'barry'],
@@ -239,7 +241,7 @@ describe('server-side result recomputation', () => {
   it('all clues + culprit + exactly the supporting evidence -> case_solved; score = round1(points x 100 - activeTimeS)', () => {
     const r = computeResult(run(solvedRun()), CASE, 'rare');
     expect(r).toMatchObject({ outcome: 'finished', verdict: 'case_solved', accused: 'thornhill', correct: true, eggTier: 'rare',
-      eggPoints: 3, activeTimeS: 245.7, score: 54.3, claimMatches: true, dnfReason: null, caseId: 'poisoned_archive', caseVersion: 1,
+      eggPoints: 3, activeTimeS: 245.7, score: 54.3, claimMatches: true, dnfReason: null, caseId: 'poisoned_archive', caseVersion: CASE.caseDef.version,
       deductionCorrect: true });
     expect([...r.evidence].sort()).toEqual([...ALL].sort());
   });
@@ -434,7 +436,7 @@ describe('mystery request bodies', () => {
       evidence: ['access_ledger', 'note_drain_mud'], deductionCorrect: false });
     expect(parseMysteryFinalize({ sessionId: SID, clientResult: { evidence: ['a', 'b', 'c', 'd', 'e', 'f'] } }).clientResult).toEqual({});
   });
-  it('append: events + forecasts + recommendations, strictly validated', () => {
+  it('append: events strict; each forecast / recommendation record strictly validated', () => {
     const body = parseMysteryAppend({
       sessionId: SID,
       events: [{ type: 'hint_requested', t: 1, seq: 0 }],
@@ -443,14 +445,44 @@ describe('mystery request bodies', () => {
     });
     expect(body.recommendations[0].advice).toBe('Crouch now');
     expect(body.forecasts[0].modelVersion).toBeNull();
+    expect(body.dropped).toEqual({ forecasts: 0, recommendations: 0, reasons: [] });
     expect(code(() => parseMysteryAppend({ sessionId: SID, events: [] }))).toBe('INVALID_INPUT:events');
     expect(parseMysteryAppend({ sessionId: SID, events: [], recommendations: [{ recNo: 0, t: 1, action: 'hide', advice: 'Hide', accepted: true, outcome: 'escaped' }] }).events).toEqual([]);
-    expect(code(() => parseMysteryAppend({ sessionId: SID, events: [], forecasts: [{ forecastNo: 0, t: 1, target: 'detection_15s', value: 1.5, modelLabel: 'ml', features: {} }] })))
+    // record-level validation (the same checks decide whether a record is kept)
+    expect(code(() => parseForecast({ forecastNo: 0, t: 1, target: 'detection_15s', value: 1.5, modelLabel: 'ml', features: {} }, 0)))
       .toBe('INVALID_INPUT:forecasts[0].value');
-    expect(code(() => parseMysteryAppend({ sessionId: SID, events: [], forecasts: [{ forecastNo: 0, t: 1, target: 'detection_15s', value: 0.5, modelLabel: 'neural', features: {} }] })))
+    expect(code(() => parseForecast({ forecastNo: 0, t: 1, target: 'detection_15s', value: 0.5, modelLabel: 'neural', features: {} }, 0)))
       .toBe('INVALID_INPUT:forecasts[0].modelLabel');
-    const rec = { recNo: 2, t: 1, action: 'hide', advice: 'Hide' };
-    expect(code(() => parseMysteryAppend({ sessionId: SID, events: [], recommendations: [rec, rec] }))).toBe('INVALID_INPUT:recommendations');
+    expect(code(() => parseRecommendation({ recNo: 0, t: 1, action: 'Hide Now', advice: 'Hide' }, 0))).toBe('INVALID_INPUT:recommendations[0].action');
+  });
+  it('append: an invalid analytics record is DROPPED and counted, never a rejection (the run stays verifiable)', () => {
+    const good = { forecastNo: 1, t: 1, target: 'egg_site', value: 0.5, modelLabel: 'rule_based', features: { site: 'e_shed' } };
+    const body = parseMysteryAppend({
+      sessionId: SID,
+      events: [{ type: 'clue_found', t: 2, seq: 0, clueId: 'access_ledger', cluesFound: 1 }],
+      forecasts: [
+        { ...good, forecastNo: 0, value: Number.NaN }, // e.g. a 0/0 posterior
+        good,
+        { ...good, forecastNo: 2, features: { label: 'x'.repeat(41) } },
+        { ...good, forecastNo: 3, target: 'tower_eta' }, // a target this deployment does not know yet
+        { ...good }, // repeated forecastNo 1
+      ],
+      recommendations: [{ recNo: 0, t: 1, action: 'hide', advice: 'Hide' }, { recNo: 0, t: 1, action: 'hide', advice: 'Hide' }, 'nonsense'],
+    });
+    expect(body.events).toHaveLength(1);
+    expect(body.forecasts.map((f) => f.forecastNo)).toEqual([1]);
+    expect(body.recommendations.map((r) => r.recNo)).toEqual([0]);
+    expect(body.dropped.forecasts).toBe(4);
+    expect(body.dropped.recommendations).toBe(2);
+    expect(body.dropped.reasons).toHaveLength(5); // capped for the log
+    expect(body.dropped.reasons[0]).toMatch(/^forecasts\[0\]\.value: /);
+    // an analytics-only call whose records were all dropped is still a valid (no-op) request
+    expect(parseMysteryAppend({ sessionId: SID, events: [], forecasts: [{ ...good, value: 2 }] })).toMatchObject({ events: [], forecasts: [], dropped: { forecasts: 1 } });
+    // the list itself must be well-formed, and events stay strict
+    expect(code(() => parseMysteryAppend({ sessionId: SID, events: [], forecasts: { 0: good } }))).toBe('INVALID_INPUT:forecasts');
+    expect(code(() => parseMysteryAppend({ sessionId: SID, events: [], forecasts: Array.from({ length: 51 }, (_, i) => ({ ...good, forecastNo: i })) })))
+      .toBe('INVALID_INPUT:forecasts');
+    expect(code(() => parseMysteryAppend({ sessionId: SID, events: [{ type: 'teleport', t: 1, seq: 0 }], forecasts: [good] }))).toBe('EVENT_REJECTED:type');
   });
   it('admin-reset scope defaults to all and is validated', () => {
     expect(parseAdminReset({ stationId: 'station_a', reason: 'stuck kiosk', actionId: ACT }).scope).toBe('all');

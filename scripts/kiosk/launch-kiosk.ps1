@@ -9,7 +9,8 @@
 
   Roles and URLs (see docs/OPERATOR_RUNBOOK.md section 2 and src/app/routing.ts):
     station_a / station_b   kiosk (--kiosk). Without -Live: "/" (mystery LOCAL DEMO).
-                            With -Live: $LiveStationPath (only once the live mystery mode has landed).
+                            With -Live: $LiveStationPath = the MYSTERY live station kiosk (station sign-in gate; the
+                            gate also offers "Play LOCAL DEMO (unverified)" when the backend is unreachable).
     dashboard               fullscreen app window. Without -Live: "/?mode=dashboard&demo=1" (mystery LOCAL DEMO board).
                             With -Live: "/?mode=dashboard".
   -Path overrides the URL path for any role (e.g. -Path "/?legacy=1").
@@ -18,7 +19,7 @@
 
 .EXAMPLE
   .\launch-kiosk.ps1 -Role station_a                       # LOCAL DEMO kiosk on http://localhost:4173/
-  .\launch-kiosk.ps1 -Role station_b -Live                 # live terminal (after deploy + live adapter)
+  .\launch-kiosk.ps1 -Role station_b -Live                 # live mystery station (Plan L, after the owner-run deploy)
   .\launch-kiosk.ps1 -Role dashboard -Live -BaseUrl https://raven.example.org
   .\launch-kiosk.ps1 -Role station_a -Window               # same profile, normal window (sign-in help, F12 export)
   .\launch-kiosk.ps1 -Role station_a -DryRun               # print the command only
@@ -50,8 +51,8 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-# VERIFY against src/app/routing.ts before the event. On 2026-10-21 this route still opens the LEGACY v2.5 race;
-# the mystery live terminal route lands with the live adapter (Phase 5). Change this one line if the route differs.
+# Verified against src/app/routing.ts on 2026-10-24: '/?mode=terminal&station=station_a|station_b' opens the MYSTERY
+# live station kiosk (add '&legacy=1' for the old v2.5 race terminal). Change this one line if the route ever differs.
 $LiveStationPath = '/?mode=terminal&station={0}'
 
 function Find-Browser([string]$which) {
@@ -159,7 +160,7 @@ Write-Host ("URL      : {0}" -f $url)
 Write-Host ("Browser  : {0} ({1})" -f $exe, $version)
 Write-Host ("Profile  : {0}" -f $profileDir)
 Write-Host ("Mode     : {0}" -f $mode)
-if ($Live -and $Role -ne 'dashboard') { Write-Host "NOTE     : -Live uses '$LiveStationPath' - verify it is the MYSTERY live terminal (src/app/routing.ts)." }
+if ($Live -and $Role -ne 'dashboard') { Write-Host "NOTE     : -Live = LIVE mystery station (needs the deployed mystery backend + this station's sign-in)." }
 if (-not $Live -and -not $Path) { Write-Host "NOTE     : LOCAL DEMO (unverified results, nothing reaches the verified leaderboard)." }
 if ($insecure) { Write-Host "NOTE     : plain-HTTP LAN host - treated as secure for $origin in this profile only." }
 

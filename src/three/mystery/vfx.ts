@@ -19,7 +19,7 @@ export class RingField {
   readonly mesh: THREE.InstancedMesh;
   private n = 0;
   private readonly geo = new THREE.RingGeometry(0.93, 1, 56, 1).rotateX(-Math.PI / 2);
-  private readonly mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false });
+  private readonly mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, fog: false });
 
   constructor(readonly capacity: number) {
     this.mesh = new THREE.InstancedMesh(this.geo, this.mat, capacity);
@@ -81,7 +81,7 @@ export class BoltField {
   private readonly pos: Float32Array;
   private readonly col: Float32Array;
   private v = 0;
-  private readonly mat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false });
+  private readonly mat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, fog: false });
   constructor(readonly maxQuads = 220) {
     this.pos = new Float32Array(maxQuads * 4 * 3);
     this.col = new Float32Array(maxQuads * 4 * 3);
@@ -150,7 +150,7 @@ export class BeamField {
   readonly mesh: THREE.InstancedMesh;
   private n = 0;
   private readonly geo: THREE.BufferGeometry;
-  private readonly mat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false });
+  private readonly mat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, fog: false });
   constructor(readonly capacity: number) {
     // open cylinder, y 0..1; vertex colour 1 at the base fading to 0 at the top
     const g = new THREE.CylinderGeometry(1, 1, 1, 10, 1, true).toNonIndexed();
@@ -188,6 +188,50 @@ export class BeamField {
   dispose(): void { this.geo.dispose(); this.mat.dispose(); this.mesh.dispose(); }
 }
 
+// ------------------------------------------------------------------------------------------------------ alarm beacon blades
+/** Rotating red alarm beacons: each blade is a vertical additive quad fading along its length (one draw call for all). */
+export class BeaconField {
+  readonly mesh: THREE.InstancedMesh;
+  private n = 0;
+  private readonly geo: THREE.BufferGeometry;
+  private readonly mat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, fog: false });
+  constructor(readonly capacity: number) {
+    // quad in the local XY plane: x from 0 (the lamp) to 1 (tip), y -0.5..0.5; vertex colour 1 at the lamp fading to 0 at the tip
+    const g = new THREE.BufferGeometry();
+    // 3 rows (bright centre line, dark edges) x 2 columns (lamp, tip)
+    g.setAttribute('position', new THREE.Float32BufferAttribute([0, -0.5, 0, 0, 0, 0, 0, 0.5, 0, 1, -0.5, 0, 1, 0, 0, 1, 0.5, 0], 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute([0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 3));
+    g.setIndex([0, 1, 4, 0, 4, 3, 1, 2, 5, 1, 5, 4]);
+    this.geo = g;
+    this.mesh = new THREE.InstancedMesh(g, this.mat, capacity);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 3;
+    this.mesh.count = 0;
+    this.mesh.setColorAt(0, _c.set(0, 0, 0));
+    this.mesh.instanceColor!.setUsage(THREE.DynamicDrawUsage);
+  }
+  begin(): void { this.n = 0; }
+  /** a blade at the lamp, pointing along yaw (0 faces -Z), `len` long and `wid` tall */
+  push(x: number, y: number, z: number, yaw: number, len: number, wid: number, color: THREE.ColorRepresentation, intensity: number): void {
+    if (this.n >= this.capacity || intensity <= 0.004) return;
+    // local +X -> world forward(yaw) = (-sin yaw, -cos yaw): rotate about Y by (yaw + PI/2)
+    _e.set(0, yaw + Math.PI / 2, 0);
+    _q.setFromEuler(_e);
+    _m.compose(_v.set(x, y, z), _q, _s.set(len, wid, 1));
+    this.mesh.setMatrixAt(this.n, _m);
+    _c.set(color).multiplyScalar(intensity);
+    this.mesh.setColorAt(this.n, _c);
+    this.n++;
+  }
+  end(): void {
+    this.mesh.count = this.n;
+    this.mesh.instanceMatrix.needsUpdate = true;
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    this.mesh.visible = this.n > 0;
+  }
+  dispose(): void { this.geo.dispose(); this.mat.dispose(); this.mesh.dispose(); }
+}
+
 // ------------------------------------------------------------------------------------------------------ instanced shapes
 /** Generic additive instanced shape with per-instance transform + colour (speed streaks, ghosts, coins). */
 export class ShapeField {
@@ -195,7 +239,7 @@ export class ShapeField {
   private n = 0;
   private readonly mat: THREE.MeshBasicMaterial;
   constructor(private readonly geo: THREE.BufferGeometry, readonly capacity: number, additive = true, order = 4) {
-    this.mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, side: THREE.DoubleSide, fog: false });
+    this.mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, side: THREE.DoubleSide, forceSinglePass: true, fog: false });
     this.mesh = new THREE.InstancedMesh(geo, this.mat, capacity);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = order;
@@ -304,7 +348,7 @@ export class HazardOutline {
     for (const h of map.hidingSpots) ring(h.x, h.z, h.radius + 0.1, h.radius + 0.55, hideC);
     this.geo = tb.build(false);
     this.mat = new THREE.ShaderMaterial({
-      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true, side: THREE.DoubleSide,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true, side: THREE.DoubleSide, forceSinglePass: true,
       uniforms: { uCenter: { value: new THREE.Vector2() }, uRadius: { value: 16 }, uOn: { value: 0 }, uTime: { value: 0 } },
       vertexShader: /* glsl */ `varying vec3 vCol; varying vec3 vW; void main(){ vCol = color; vec4 w = modelMatrix * vec4(position,1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
       fragmentShader: /* glsl */ `uniform vec2 uCenter; uniform float uRadius; uniform float uOn; uniform float uTime; varying vec3 vCol; varying vec3 vW;

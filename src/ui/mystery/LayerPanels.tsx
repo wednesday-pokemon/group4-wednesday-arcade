@@ -4,6 +4,7 @@
 // diagnostic panel leads with why the case was not solved (incorrect deduction, missed clues by case-file title) and
 // then the stealth causes. Shown after the accusation only; nothing here names a suspect.
 import type { DiagnosticItem, ResultsAnalytics, TimelineMark } from '../../mystery/analytics/index.ts';
+import { ABILITY_KEY_LABEL } from '../../mystery/types.ts';
 import { ThingSigil } from '../components/ThingSigil.tsx';
 import { Icon, type IconName } from '../Icon.tsx';
 
@@ -72,10 +73,19 @@ function Descriptive({ r }: { r: ResultsAnalytics }) {
         {segs.map(([k]) => share[k] > 0 && <span key={k} className={`lp-stance__seg lp-stance__seg--${k}`} style={{ width: `${share[k] * 100}%` }} />)}
       </div>
       <p className="lp-legend">{segs.filter(([k]) => share[k] > 0).map(([k, n]) => `${n} ${pct(share[k])}`).join(' · ')}</p>
-      <p className="lp-line">
-        <kbd className="kcap">F</kbd> {d.abilities.F.name ?? 'Power'} ×{d.abilities.F.uses} · <kbd className="kcap">Q</kbd> {d.abilities.Q.name ?? 'Move'} ×{d.abilities.Q.uses}
+      <p className="lp-line" data-testid="lp-abilities">
+        <AbilityUses slot="F" name={d.abilities.F.name ?? 'Power'} uses={d.abilities.F.uses} /> · <AbilityUses slot="Q" name={d.abilities.Q.name ?? 'Move'} uses={d.abilities.Q.uses} />
       </p>
     </div>
+  );
+}
+
+/** "Q Wolf Shift 2 uses" — the key the player pressed (ABILITY_KEY_LABEL), never the F slot id. */
+function AbilityUses({ slot, name, uses }: { slot: 'F' | 'Q'; name: string; uses: number }) {
+  return (
+    <span className="lp-ability">
+      <kbd className="kcap">{ABILITY_KEY_LABEL[slot]}</kbd> {name} <span className="num">{uses}</span> {uses === 1 ? 'use' : 'uses'}
+    </span>
   );
 }
 

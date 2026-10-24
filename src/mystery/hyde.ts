@@ -10,11 +10,34 @@
 // per second; ≥ chaseAt (or within instantM) → CHASE. Lost sight for chaseLossS → SEARCH (searchS around the last known
 // point) → COOLDOWN (cooldownS, reduced hearing, walks back to its loop) → PATROL. A landed grab → COOLDOWN
 // (cooldownAfterGrabS). Unreachable investigations give up after investigateMaxS (→ SEARCH, reason gave_up).
+//
+// Overhaul (docs/overhaul/OVERHAUL_CONTRACT.md "Sim rules" 6–7):
+// - Emergence: on case maps the Hyde is ABSENT (`active` false: no sight, no hearing, no movement) until the run calls
+//   `emerge()` at a drawn spawn (layout.ts drawHydeSpawn); maps without spawns keep the legacy `start()` at t = 0.
+// - SEARCH sweeps plausible spots around the search centre (≤ searchWanderRadiusM): it plans up to searchSpotsMax spots —
+//   each hiding spot (it stands on the near side at hidingSafeM = revealM + radius + SEARCH_ARRIVE_M + 0.4 m from the
+//   spot's centre and stares at it: even stopping SEARCH_ARRIVE_M short, with the player anywhere inside the spot, it
+//   stays beyond revealM, so a properly hidden player is NOT dragged out by the sweep itself) and the hiding place behind
+//   each cover piece (seen from the centre), which it checks from the SIDE (a flank point 2.5 m off, with a clear
+//   crouch-height line to it — a crouching, not hidden, player there is found) — visits them nearest-first, pausing and
+//   looking at each, then wanders randomly near the centre (never within hidingSafeM of a hiding spot) until searchS
+//   runs out. Stand points closer than hidingSafeM to any hiding spot are dropped.
+// - Calm window (contract rule 7 "after a chase ends"): whenever the Hyde leaves CHASE (lost sight → SEARCH, stun, lure,
+//   grab → COOLDOWN) it hears worse (× calmHearingMult) for calmAfterChaseS, so a player who just escaped is not
+//   re-acquired by the next footstep and encounters are not back-to-back. COOLDOWN's own reduced hearing still applies
+//   (the stronger reduction wins). Sight is unchanged. After COOLDOWN it walks back to the nearest patrol waypoint.
+//
+// Movement (nav travel + stuck guard) and the SEARCH spot planning live in enemyNav.ts, shared with Joseph Crackstone.
 import type { SimContext } from './context.ts';
+import {
+  hidingRevealAt, NavTraveller, pickSearchPoint, planSearchSpots, SEARCH_ARRIVE_M, type SearchSpot,
+} from './enemyNav.ts';
 import { dist, turnToward, wrapAngle, yawTo } from './geometry.ts';
 import { hear } from './noise.ts';
 import { canSee } from './sight.ts';
 import type { GameEvent, HydeMode, HydeRuntime, MapDef, NoiseSource, Vec2 } from './types.ts';
+
+export { hidingRevealAt, hidingSafeM } from './enemyNav.ts';
 
 export type ModeReason = Extract<GameEvent, { type: 'hyde_mode' }>['reason'];
 
@@ -51,29 +74,58 @@ export class HydeBrain {
   readonly stats = { heard: 0, sightings: 0, chases: 0, grabs: 0 };
   private preLureKnown: Vec2 | null = null;
   private searchPauseUntil = -Infinity;
-  private planGoal: Vec2 | null = null;
-  private lastPlanT = -Infinity;
-  private stuckRefX = 0;
-  private stuckRefZ = 0;
-  private stuckRefT = 0;
-  private lastTravelT = -Infinity;
+  private readonly mover = new NavTraveller();
   private glimpsed = false;
   private sweepDir = 1;
+  /** Planned SEARCH spots (nearest-first) and the one being looked at. */
+  private searchSpots: SearchSpot[] = [];
+  private searchLook: Vec2 | null = null;
+  /** Reduced hearing until this time (calm window after a chase). */
+  calmUntil = -Infinity;
 
   constructor(h: HydeRuntime) {
     this.h = h;
   }
 
-  /** Place the Hyde (≥ minSpawnM from the player) and start patrolling. */
+  /** Legacy start (maps without hydeSpawns): place the Hyde ≥ minSpawnM from the player and start patrolling. */
   start(ctx: SimContext): void {
-    const s = chooseSpawn(ctx.map, ctx.player, ctx.tuning.hyde.minSpawnM);
-    const snapped = ctx.hydeNav().nearestWalkable(s, 6) ?? s;
-    Object.assign(this.h, { x: snapped.x, z: snapped.z, yaw: s.yaw, mode: 'PATROL' as HydeMode, modeT: 0, path: [], target: null, speed: 0 });
+    this.emerge(ctx, chooseSpawn(ctx.map, ctx.player, ctx.tuning.hyde.minSpawnM));
+  }
+
+  /** Puts the Hyde at `s` (snapped to its nav grid) and starts patrolling from the nearest waypoint. Returns the spot. */
+  emerge(ctx: SimContext, s: { x: number; z: number; yaw: number }): Vec2 {
+    const snapped = ctx.hydeNav().nearestWalkable(s, 6) ?? { x: s.x, z: s.z };
+    Object.assign(this.h, {
+      x: snapped.x, z: snapped.z, yaw: s.yaw, mode: 'PATROL' as HydeMode, modeT: 0, path: [], target: null, speed: 0,
+    });
+    this.patrolMap = ctx.map;
     this.patrolIndex = this.nearestPatrolIndex();
     const pts = ctx.map.patrol;
     if (pts.length > 1 && dist(pts[this.patrolIndex], this.h) < 1) this.patrolIndex = (this.patrolIndex + 1) % pts.length;
+    this.mover.planGoal = null;
     this.active = true;
-    this.patrolMap = ctx.map;
+    return { x: snapped.x, z: snapped.z };
+  }
+
+  /**
+   * Drops the current nav plan so the next travel() replans from scratch (call whenever walls open or close: the old
+   * "empty path + same goal + planned < 0.5 s ago" shortcut would otherwise read as "arrived").
+   */
+  invalidatePath(): void {
+    this.mover.invalidate(this.h);
+  }
+
+  /** In the calm window after a chase (reduced hearing)? */
+  isCalm(t: number): boolean {
+    return t < this.calmUntil;
+  }
+
+  /** Hearing multiplier right now: COOLDOWN and the calm window both hear worse (the stronger reduction applies). */
+  hearingMult(ctx: SimContext): number {
+    let m = 1;
+    if (this.h.mode === 'COOLDOWN') m = Math.min(m, ctx.tuning.noise.cooldownHearingMult);
+    if (this.isCalm(ctx.t)) m = Math.min(m, ctx.tuning.hyde.calmHearingMult);
+    return m;
   }
 
   private patrolMap: MapDef | null = null;
@@ -120,9 +172,12 @@ export class HydeBrain {
     this.h.mode = to;
     this.h.modeT = 0;
     this.h.path = [];
-    this.planGoal = null;
+    this.mover.planGoal = null;
     this.glimpsed = false;
-    if (to === 'CHASE') this.stats.chases++;
+    if (to === 'CHASE') {
+      this.stats.chases++;
+      this.calmUntil = -Infinity;
+    } else if (from === 'CHASE') this.calmUntil = ctx.t + ctx.tuning.hyde.calmAfterChaseS;
     if (to === 'INVESTIGATE_SOUND') this.investigateSince = ctx.t;
     ctx.emit({ type: 'hyde_mode', from, to, reason });
   }
@@ -133,8 +188,10 @@ export class HydeBrain {
     this.searchPauseUntil = startAt + 0.6;
     this.h.target = null;
     this.h.path = [];
-    this.planGoal = null;
+    this.mover.planGoal = null;
     this.setMode(ctx, 'SEARCH', reason);
+    this.searchSpots = this.planSearchSpots(ctx, this.searchCenter);
+    this.searchLook = null;
   }
 
   private startCooldown(ctx: SimContext, seconds: number, reason: ModeReason): void {
@@ -187,7 +244,7 @@ export class HydeBrain {
     h.canSeePlayer = false;
     if (h.mode === 'INVESTIGATE_SOUND') {
       h.path = [];
-      this.planGoal = null;
+      this.mover.planGoal = null;
       this.investigateSince = ctx.t;
     } else this.setMode(ctx, 'INVESTIGATE_SOUND', 'lured');
     h.target = { x: point.x, z: point.z };
@@ -200,8 +257,7 @@ export class HydeBrain {
     if (!this.perceives(ctx) || this.isDistracted(ctx.t)) return;
     const h = this.h;
     const T = ctx.tuning;
-    const mult = h.mode === 'COOLDOWN' ? T.noise.cooldownHearingMult : 1;
-    const res = hear(ctx.world, T.noise, loudness, x, z, h.x, h.z, mult);
+    const res = hear(ctx.world, T.noise, loudness, x, z, h.x, h.z, this.hearingMult(ctx));
     if (!res.heard) return;
     this.stats.heard++;
     ctx.emit({ type: 'hyde_heard', source, loudness: round3(loudness), distanceM: round2(res.distanceM), occluded: res.occluded });
@@ -351,11 +407,21 @@ export class HydeBrain {
         }
         if (t < this.searchPauseUntil) {
           h.speed = 0;
-          h.yaw = wrapAngle(h.yaw + this.sweepDir * 1.6 * dt);
+          const look = this.searchLook;
+          if (look && Math.abs(wrapAngle(yawTo(h.x, h.z, look.x, look.z) - h.yaw)) > 0.05) {
+            h.yaw = turnToward(h.yaw, yawTo(h.x, h.z, look.x, look.z), T.hyde.turnRatePerS * dt); // stare at the spot
+          } else {
+            this.searchLook = null;
+            h.yaw = wrapAngle(h.yaw + this.sweepDir * 1.6 * dt);
+          }
           return;
         }
-        if (!h.target) h.target = this.pickSearchPoint(ctx);
-        if (this.travel(ctx, h.target, speed, dt, 0.6)) {
+        if (!h.target) {
+          const next = this.searchSpots.shift();
+          h.target = next ? next.at : this.pickSearchPoint(ctx);
+          this.searchLook = next ? next.look : null;
+        }
+        if (this.travel(ctx, h.target, speed, dt, SEARCH_ARRIVE_M)) {
           h.target = null;
           this.sweepDir = ctx.rng.chance(0.5) ? 1 : -1;
           this.searchPauseUntil = t + ctx.rng.range(0.8, 1.6);
@@ -399,7 +465,7 @@ export class HydeBrain {
     this.h.target = { x: wp.x, z: wp.z };
     if (this.travel(ctx, wp, speed, dt, ctx.tuning.hyde.waypointReachedM)) {
       this.patrolIndex = (this.patrolIndex + 1) % pts.length;
-      this.planGoal = null;
+      this.mover.planGoal = null;
     }
   }
 
@@ -408,17 +474,24 @@ export class HydeBrain {
     this.h.yaw = turnToward(this.h.yaw, yawTo(this.h.x, this.h.z, p.x, p.z), ctx.tuning.hyde.turnRatePerS * dt);
   }
 
+  /**
+   * Plausible spots around `center` a hiding player would use: near-side stand points of hiding spots (hidingSafeM out,
+   * so the sweep itself never reveals a properly hidden player) and flank points looking at the hiding place behind each
+   * cover piece (as seen from the centre). Snapped to the Hyde's component, never within hidingSafeM of any hiding spot,
+   * deduplicated (2 m), nearest-first greedy order, at most searchSpotsMax.
+   */
+  planSearchSpots(ctx: SimContext, center: Vec2): SearchSpot[] {
+    return planSearchSpots(ctx, ctx.hydeNav(), this.h, center, ctx.tuning.hyde.searchRadiusM, ctx.tuning.hyde.searchSpotsMax);
+  }
+
+  /** Remaining planned SEARCH spots (tests / debug). */
+  plannedSearchSpots(): Vec2[] {
+    return this.searchSpots.map((s) => ({ ...s.at }));
+  }
+
   private pickSearchPoint(ctx: SimContext): Vec2 {
     const c = this.searchCenter ?? { x: this.h.x, z: this.h.z };
-    const nav = ctx.hydeNav();
-    const comp = nav.componentAt(this.h, 2);
-    for (let i = 0; i < 6; i++) {
-      const a = ctx.rng.range(-Math.PI, Math.PI);
-      const r = ctx.rng.range(1.5, ctx.tuning.hyde.searchRadiusM);
-      const cand = nav.nearestWalkable({ x: c.x + Math.cos(a) * r, z: c.z + Math.sin(a) * r }, 2, comp);
-      if (cand) return cand;
-    }
-    return nav.nearestWalkable(c, 4, comp) ?? { x: this.h.x, z: this.h.z };
+    return pickSearchPoint(ctx, ctx.hydeNav(), ctx.rng, this.h, c, ctx.tuning.hyde.searchRadiusM);
   }
 
   /**
@@ -426,75 +499,8 @@ export class HydeBrain {
    * goal cannot be got closer to (unreachable / stuck).
    */
   private travel(ctx: SimContext, goal: Vec2, speed: number, dt: number, arrive: number, direct = false): boolean {
-    const h = this.h;
-    const t = ctx.t;
-    if (t - this.lastTravelT > dt * 2.5) {
-      this.stuckRefX = h.x;
-      this.stuckRefZ = h.z;
-      this.stuckRefT = t;
-    }
-    this.lastTravelT = t;
-    const d = Math.hypot(goal.x - h.x, goal.z - h.z);
-    if (d <= arrive) {
-      h.speed = 0;
-      return true;
-    }
-    const nav = ctx.hydeNav();
-    const goalMoved = !this.planGoal || Math.hypot(goal.x - this.planGoal.x, goal.z - this.planGoal.z) > 1.0;
-    const stale = h.mode === 'CHASE' && t - this.lastPlanT >= ctx.tuning.hyde.replanS;
-    if (direct && nav.lineWalkable(h, goal)) {
-      h.path = [{ x: goal.x, z: goal.z }];
-      this.planGoal = { x: goal.x, z: goal.z };
-    } else if (goalMoved || stale || h.path.length === 0) {
-      if (h.path.length === 0 && !goalMoved && !stale && t - this.lastPlanT < 0.5) {
-        h.speed = 0; // already at the closest reachable point to an unreachable goal
-        return true;
-      }
-      h.path = nav.findPath(h, goal) ?? [];
-      this.planGoal = { x: goal.x, z: goal.z };
-      this.lastPlanT = t;
-      if (h.path.length === 0) {
-        h.speed = 0;
-        return true;
-      }
-    }
-    let budget = speed * dt;
-    let moved = 0;
-    let guard = 0;
-    while (budget > 1e-6 && h.path.length > 0 && guard++ < 8) {
-      const wp = h.path[0];
-      const dx = wp.x - h.x;
-      const dz = wp.z - h.z;
-      const dd = Math.hypot(dx, dz);
-      if (dd < 0.05) {
-        h.path.shift();
-        continue;
-      }
-      const stepLen = Math.min(budget, dd);
-      const r = ctx.world.move(h.x, h.z, (dx / dd) * stepLen, (dz / dd) * stepLen, ctx.tuning.hyde.radius);
-      const actual = Math.hypot(r.x - h.x, r.z - h.z);
-      h.x = r.x;
-      h.z = r.z;
-      h.yaw = turnToward(h.yaw, yawTo(0, 0, dx, dz), ctx.tuning.hyde.turnRatePerS * dt);
-      moved += actual;
-      budget -= stepLen;
-      if (stepLen >= dd - 1e-6) h.path.shift();
-      if (actual < stepLen * 0.3) break;
-    }
-    h.speed = moved / Math.max(1e-6, dt);
-    if (t - this.stuckRefT >= 1.5) {
-      const progressed = Math.hypot(h.x - this.stuckRefX, h.z - this.stuckRefZ);
-      this.stuckRefX = h.x;
-      this.stuckRefZ = h.z;
-      this.stuckRefT = t;
-      if (progressed < 0.3 && speed > 0.3) {
-        h.path = [];
-        this.planGoal = null;
-        if (h.mode !== 'CHASE') return true;
-      }
-    }
-    if (h.path.length === 0 && Math.hypot(goal.x - h.x, goal.z - h.z) <= arrive + 0.3) return true;
-    return false;
+    const T = ctx.tuning.hyde;
+    return this.mover.travel(ctx, ctx.hydeNav(), this.h, { radius: T.radius, turnRatePerS: T.turnRatePerS, replanS: T.replanS }, goal, speed, dt, arrive, direct, this.h.mode === 'CHASE');
   }
 
   /**
@@ -538,11 +544,6 @@ export class HydeBrain {
     }
     return out;
   }
-}
-
-export function hidingRevealAt(ctx: SimContext, x: number, z: number): number | null {
-  for (const s of ctx.map.hidingSpots) if (Math.hypot(s.x - x, s.z - z) <= s.radius) return s.revealM;
-  return null;
 }
 
 function round2(x: number): number {

@@ -4,8 +4,11 @@
 //   const analytics = new MysteryAnalytics(run, { sessionId, stationId, offered, model });
 //   each frame:   const out = analytics.frame(run, run.update(dt, input));   // + the events returned by run.accuse()
 //                 out.risk   → HUD risk chip (≤ 1 Hz);  out.advice → Thing advisory (V or context trigger)
+//   live HUD:     analytics.live()        → LiveAnalytics (forecasts + new messages + current advice), 2–4 Hz
+//                 analytics.hint(level)   → the R7 hint ladder card (the frontend owns V and the idle timer)
 //   results:      analytics.report()      → four analytics panels
 //   Supabase:     analytics.pendingBatch() → body for mystery-append-events; analytics.ackBatch(batch) after 200
+//   Laptop 1:     analytics.heartbeat()   → the live numbers for the station heartbeat
 import type { MysteryRun } from '../run.ts';
 import type { CaseId, Duo, StampedEvent } from '../types.ts';
 import { clueCountFor, isCaseId } from './caseInfo.ts';
@@ -16,10 +19,15 @@ import { detectionTimes } from './labels.ts';
 import { PredictiveService, type ModelCard } from './predictive.ts';
 import { evaluateFollow, evaluateOutcome, PrescriptiveService, summariseAdvice, ENGINE_LABEL, type AdviceSummary, type FollowView } from './prescriptive.ts';
 import { duoFactorsFromRun, liveContext } from './state.ts';
-import { TelemetryCollector } from './telemetry.ts';
+import { TelemetryCollector, UPLOAD_FORECAST_TARGETS } from './telemetry.ts';
+import { LiveEngine, type HeartbeatAnalytics } from './live.ts';
+import { hydeEmergedOf, investigationOf, minSpawnM } from './publicState.ts';
+import { CRACK_MODEL_VERSION } from './crackstoneRisk.ts';
+import { pointInPolygon } from '../geometry.ts';
+import { spawnProbabilities, zoneIndexAt } from './hydeZones.ts';
 import type {
-  Advice, AdviceRecord, DiagnosticItem, DiagnosticReport, RiskBand, RiskEstimate, SessionRecord, SessionReport, SupabaseBatch,
-  TelemetrySample,
+  Advice, AdviceRecord, DiagnosticItem, DiagnosticReport, ForecastRecord, ForecastTarget, LiveAnalytics, LiveMessage, ProbabilityEstimate,
+  RiskBand, RiskEstimate, SessionRecord, SessionReport, SupabaseBatch, TelemetrySample,
 } from './types.ts';
 
 export interface MysteryAnalyticsOptions {
@@ -33,6 +41,8 @@ export interface MysteryAnalyticsOptions {
   autoAdvice?: boolean;
   /** Seconds between detection forecasts stored for Supabase (band changes are always stored). Default 5. */
   forecastEveryS?: number;
+  /** Forecast targets included in uploads (others are kept locally). Default UPLOAD_FORECAST_TARGETS. */
+  uploadForecastTargets?: readonly ForecastTarget[];
 }
 
 export interface FrameOutput {
@@ -65,6 +75,10 @@ export interface ResultsAnalytics {
 }
 
 const ALERT_TO = new Set(['INVESTIGATE_SOUND', 'SEARCH', 'CHASE']);
+/** Seconds after which an unchanged estimate is stored again (egg / clue odds only change on observations). */
+const REFRESH_FORECAST_S = 15;
+const r4 = (x: number) => Math.round(x * 10000) / 10000;
+const key40 = (prefix: string, id: string) => `${prefix}${id}`.slice(0, 40);
 
 export class MysteryAnalytics {
   readonly collector: TelemetryCollector;
@@ -78,11 +92,17 @@ export class MysteryAnalytics {
   private risk: RiskEstimate | null = null;
   private readonly series: RiskPoint[] = [];
   private readonly advice: AdviceRecord[] = [];
-  private lastAdviceT = -Infinity;
   private lastCatchT = -Infinity;
   private lastForecastT = -Infinity;
   private lastForecastBand: RiskBand | null = null;
   private ended = false;
+  private run: MysteryRun;
+  /** The live layer (forecasts, Thing's Log / WHY / advice messages, hint ladder). */
+  readonly engine: LiveEngine;
+  private readonly lastStored = new Map<ForecastTarget, { t: number; top: string; p: number }>();
+  private extractionEst: ProbabilityEstimate | null = null;
+  private lastHintCallT = -Infinity;
+  private lastLegacyHintT = -Infinity;
   private readonly roomNames: Map<string, string>;
   /** The case this session plays (from run.caseDef; null only for a run object without a case). */
   readonly caseId: CaseId | null;
@@ -90,6 +110,7 @@ export class MysteryAnalytics {
   private readonly clueTotal: number;
 
   constructor(run: MysteryRun, o: MysteryAnalyticsOptions = {}) {
+    this.run = run;
     this.roomNames = new Map(run.map.rooms.map((r) => [r.id as string, r.name]));
     const caseDef = (run as Partial<Pick<MysteryRun, 'caseDef'>>).caseDef;
     this.caseId = caseDef && isCaseId(caseDef.id) ? caseDef.id : null;
@@ -98,20 +119,23 @@ export class MysteryAnalytics {
     const factors = duoFactorsFromRun(run);
     this.collector = new TelemetryCollector({
       sessionId: o.sessionId ?? null, stationId: o.stationId ?? null, caseId: this.caseId, caseVersion: this.caseVersion, duo: { ...run.duo }, factors,
-    });
+    }, o.uploadForecastTargets ?? UPLOAD_FORECAST_TARGETS);
     this.duo = duoNumbers(factors);
     this.predictive = new PredictiveService(o.model ?? null);
     this.offered = (o.offered ?? []).map((d) => ({ ...d }));
     this.autoAdvice = o.autoAdvice !== false;
     this.forecastEveryS = o.forecastEveryS ?? 5;
     this.collector.syncFromLog(run.log);
+    this.engine = new LiveEngine(run, this.prescriptive, o.model ?? null);
   }
 
   /** Call every frame with the events of that frame (also with the events returned by `run.accuse()`). */
   frame(run: MysteryRun, events: readonly StampedEvent[]): FrameOutput {
+    this.run = run;
     this.collector.ingest(events);
     if (run.status === 'tutorial') return { risk: null, advice: null, sampled: false };
     for (const e of events) if (e.type === 'catch') this.lastCatchT = e.t;
+    this.engine.onEvents(run, events);
     let sampled = false;
     if (run.status === 'playing') {
       this.collector.trackPosition(run.player.x, run.player.z);
@@ -122,8 +146,24 @@ export class MysteryAnalytics {
       }
     }
     let advice: Advice | null = null;
-    if (events.some((e) => e.type === 'hint_requested')) advice = this.advise(run, 'hint');
-    else if (this.autoAdvice && run.status === 'playing' && this.contextTrigger(run, events)) advice = this.advise(run, 'context');
+    if (events.some((e) => e.type === 'hint_requested')) {
+      // legacy V path (the sim's hint event): the best feasible action now. Not recorded twice when the UI also asked
+      // for a ladder card via hint(level) at the same moment.
+      advice = this.prescriptive.recommend(run, this.engine.zones());
+      if (advice && Math.abs(run.t - this.lastHintCallT) > 1) {
+        this.record(run, advice, 'hint');
+        this.lastLegacyHintT = run.t;
+      }
+    } else if (this.autoAdvice && run.status === 'playing') {
+      const threat = this.contextTrigger(run, events);
+      // milestone: right after the pickup the next step (take the egg to Iago Tower) is the first carrying advice
+      const pickup = !threat && events.some((e) => e.type === 'egg_pickup');
+      const auto = threat ? this.engine.autoAdvice(run, true) : pickup ? this.engine.autoAdvice(run, false, true) : sampled ? this.engine.autoAdvice(run, false) : null;
+      if (auto) {
+        this.record(run, auto, 'context');
+        advice = auto;
+      }
+    }
     if (!this.ended && (run.status === 'finished' || run.status === 'dnf')) {
       this.ended = true;
       this.collector.setResult(run.result());
@@ -137,9 +177,34 @@ export class MysteryAnalytics {
     return this.risk;
   }
 
-  /** On-demand advice without a V event (e.g. a UI button). Records it like a hint. */
-  hint(run: MysteryRun): Advice | null {
-    return this.advise(run, 'hint');
+  /**
+   * The R7 hint ladder card for `level` (1 area line · 2 most probable area as a target · 3 most probable candidate site).
+   * `requested` = the visitor pressed V (P4, trigger 'hint'); false = the frontend's idle timer (P2, trigger 'context').
+   * Recorded as a recommendation (follow-up tracked) unless the same V press was already recorded from the sim event.
+   */
+  hint(level: 1 | 2 | 3, o: { requested?: boolean } = {}): LiveMessage | null {
+    const run = this.run;
+    const requested = o.requested !== false;
+    const out = this.engine.hint(run, level, requested);
+    if (!out) return null;
+    this.lastHintCallT = run.t;
+    if (!(requested && Math.abs(run.t - this.lastLegacyHintT) <= 1)) this.record(run, out.advice, requested ? 'hint' : 'context');
+    return out.msg;
+  }
+
+  /**
+   * Live analytics for the HUD (cheap; call at 2–4 Hz): the four forecasts (Bayesian egg / clue odds, Hyde spawn or zone
+   * odds, detection, extraction), the messages released since the last call (Thing's Log, WHY, automatic advice — already
+   * rate-limited) and the current best feasible action.
+   */
+  live(): LiveAnalytics {
+    const run = this.run;
+    return { t: Math.round(run.t * 1000) / 1000, forecasts: this.engine.forecasts(run), messages: this.engine.drain(), advice: this.engine.currentAdvice(run) };
+  }
+
+  /** Numbers for the Laptop 1 heartbeat (objective, chases, escapes, top egg site, Hyde zone, extraction, last Thing item). */
+  heartbeat(): HeartbeatAnalytics {
+    return this.engine.heartbeat(this.run);
   }
 
   private featureInput(sample: TelemetrySample, prev: TelemetrySample | null): FeatureInput {
@@ -151,8 +216,20 @@ export class MysteryAnalytics {
     const sample: TelemetrySample = { snapshot: run.snapshot(), context: liveContext(run, { objectivePath: false }) };
     this.collector.addSample(sample);
     const x = this.featureInput(sample, prev);
+    const emerged = hydeEmergedOf(run);
+    const extraction = this.predictive.extraction(x);
+    this.extractionEst = extraction;
+    if (!emerged) {
+      // the Hyde is absent: no detection risk to forecast (the HUD shows the spawn odds instead)
+      this.risk = null;
+      this.engine.onSample(run, null, extraction, sample.snapshot.hydeVisible);
+      this.storeLiveForecasts(run, sample);
+      return;
+    }
     const risk = this.predictive.detection(x);
     this.risk = risk;
+    this.engine.onSample(run, risk, extraction, sample.snapshot.hydeVisible);
+    this.storeLiveForecasts(run, sample);
     this.series.push({ t: risk.t, p: Math.round(risk.p * 1000) / 1000, band: risk.band, detectedNow: risk.detectedNow });
     if (!risk.detectedNow && (risk.t - this.lastForecastT >= this.forecastEveryS || risk.band !== this.lastForecastBand)) {
       this.lastForecastT = risk.t;
@@ -170,16 +247,77 @@ export class MysteryAnalytics {
     }
   }
 
-  private contextTrigger(run: MysteryRun, events: readonly StampedEvent[]): boolean {
-    if (run.t - this.lastAdviceT < 8 || run.t - this.lastCatchT < 2.5) return false;
-    if (events.some((e) => e.type === 'catch')) return false;
-    return events.some((e) => (e.type === 'hyde_mode' && ALERT_TO.has(e.to)) || e.type === 'egg_drop');
+  /**
+   * Stores the overhaul forecasts for Supabase (sampled): egg_site / clue_area on a meaningful change (top id changed or
+   * |Δp| ≥ 0.02) or every 15 s; hyde_spawn / hyde_zone / extraction every `forecastEveryS` (or on a change ≥ 0.05).
+   * `features` are flat primitives (site / zone ids as string values and `p_<id>` keys).
+   */
+  private storeLiveForecasts(run: MysteryRun, sample: TelemetrySample): void {
+    const t = sample.snapshot.t;
+    const f = this.engine.forecasts(run);
+    const inv = investigationOf(run);
+    const put = (target: ForecastTarget, top: string, p: number, label: ForecastRecord['modelLabel'], version: string | null, features: ForecastRecord['features'], everyS: number, minDelta: number) => {
+      const last = this.lastStored.get(target);
+      if (last && last.top === top && Math.abs(last.p - p) < minDelta && t - last.t < everyS) return;
+      this.lastStored.set(target, { t, top, p });
+      this.collector.addForecast({ t, target, value: r4(Math.min(1, Math.max(0, p))), modelLabel: label, modelVersion: version, features });
+    };
+    if (f.egg && f.egg.sites.length > 0) {
+      const top = f.egg.sites.reduce((a, b) => (b.p > a.p ? b : a));
+      const features: ForecastRecord['features'] = { method: 'bayes', site: top.siteId, traces: inv.traces.length, checked: inv.checkedEggSites.length, seen: inv.eggSeenAt !== null };
+      for (const s of f.egg.sites.slice(0, 12)) features[key40('p_', s.siteId)] = r4(s.p);
+      put('egg_site', top.siteId, top.p, 'rule_based', 'bayes-1', features, REFRESH_FORECAST_S, 0.02);
+    }
+    if (f.clueAreas && f.clueAreas.areas.length > 0) {
+      const top = f.clueAreas.areas.reduce((a, b) => (b.p > a.p ? b : a));
+      const features: ForecastRecord['features'] = { method: 'bayes', area: top.areaId, clues: run.cluesFound.length, checked: inv.checkedClueSites.length };
+      for (const a of f.clueAreas.areas.slice(0, 12)) features[key40('p_', a.areaId)] = r4(a.p);
+      put('clue_area', top.areaId, top.p, 'rule_based', 'bayes-1', features, REFRESH_FORECAST_S, 0.02);
+    }
+    if (f.hyde.phase === 'before_emergence') {
+      const spawns = f.hyde.spawns.length > 0 ? f.hyde.spawns : (this.engine.world ? spawnProbabilities(this.engine.world, run.player, minSpawnM(run)) : []);
+      if (spawns.length > 0) {
+        const top = spawns.reduce((a, b) => (b.p > a.p ? b : a));
+        const features: ForecastRecord['features'] = { method: 'spawn_rule', spawn: top.spawnId, emergesInS: f.hyde.emergesInS };
+        for (const s of spawns.slice(0, 12)) features[key40('p_', s.spawnId)] = r4(s.p);
+        put('hyde_spawn', top.spawnId, top.p, 'rule_based', 'spawn-rule-1', features, this.forecastEveryS, 0.05);
+      }
+    } else if (f.hyde.zones.length > 0) {
+      const top = f.hyde.zones.reduce((a, b) => (b.p > a.p ? b : a));
+      const world = this.engine.world;
+      const own = world ? world.zones[zoneIndexAt(world.zones, run.player.x, run.player.z)]?.id ?? null : null;
+      const features: ForecastRecord['features'] = { method: 'zone_hmm', zone: top.zoneId, visible: sample.snapshot.hydeVisible === true, mode: sample.snapshot.hydeMode, own };
+      for (const z of f.hyde.zones.slice(0, 12)) features[key40('p_', z.zoneId)] = r4(z.p);
+      put('hyde_zone', top.zoneId, top.p, 'rule_based', 'zone-hmm-1', features, this.forecastEveryS, 0.05);
+    }
+    // Joseph Crackstone: the rule-based P(he sees / scans the player at their spot within 10 s) — every forecastEveryS
+    // or on a change ≥ 0.1 (flat features: mode, fact, basis, in his area; never his position)
+    const cf = f.crackstone;
+    if (cf) {
+      const p = run.player;
+      const inArea = pointInPolygon(p.x, p.z, cf.area.polygon);
+      put('crackstone_risk', `${cf.mode ?? ''}|${cf.here.fact ?? ''}`, cf.here.p, 'rule_based', CRACK_MODEL_VERSION, {
+        method: 'crack_rule', horizon_s: cf.horizonS, mode: cf.mode ?? null, fact: cf.here.fact, basis: cf.basis ?? null, in_area: inArea,
+        cells: cf.cells.length,
+      }, this.forecastEveryS, 0.1);
+    }
+    const ex = this.extractionEst;
+    if (ex) {
+      const s = sample.snapshot;
+      put('extraction', ex.source, ex.p, ex.source === 'ml' ? 'ml' : 'rule_based', ex.modelVersion, {
+        catches: s.catches, hp: s.hp, eggState: s.eggState, eggSecurity: s.eggSecurity, cluesFound: s.cluesFound, objective: s.objective,
+      }, this.forecastEveryS, 0.05);
+    }
   }
 
-  private advise(run: MysteryRun, trigger: 'hint' | 'context'): Advice | null {
-    const advice = this.prescriptive.recommend(run);
-    if (!advice) return null;
-    this.lastAdviceT = run.t;
+  private contextTrigger(run: MysteryRun, events: readonly StampedEvent[]): boolean {
+    if (run.t - this.lastCatchT < 2.5) return false;
+    if (events.some((e) => e.type === 'catch')) return false;
+    return events.some((e) => (e.type === 'hyde_mode' && ALERT_TO.has(e.to)) || e.type === 'egg_drop'
+      || (e.type === 'crackstone_mode' && ((e.to === 'CHASE' && e.from !== 'ATTACK') || e.to === 'INVESTIGATE') && e.reason !== 'deferred' && e.reason !== 'lured'));
+  }
+
+  private record(run: MysteryRun, advice: Advice, trigger: 'hint' | 'context'): void {
     const rec = this.collector.addRecommendation({
       t: advice.t, action: advice.action, advice: `${advice.text} — Why: ${advice.reason}`, trigger, accepted: null, outcome: null,
     });
@@ -187,7 +325,6 @@ export class MysteryAnalytics {
       recNo: rec.recNo, t: advice.t, trigger, advice, followed: null, outcome: null,
       startPos: { x: run.player.x, z: run.player.z }, startHydeDistM: Math.hypot(run.hyde.x - run.player.x, run.hyde.z - run.player.z),
     });
-    return advice;
   }
 
   private followView(): FollowView {
@@ -200,6 +337,7 @@ export class MysteryAnalytics {
       const followed = r.followed ?? evaluateFollow(r, v);
       const outcome = r.outcome ?? evaluateOutcome(r, v);
       if (followed !== r.followed || outcome !== r.outcome) {
+        if (followed !== r.followed) this.engine.noteFollowed(r.advice.text, followed);
         r.followed = followed;
         r.outcome = outcome;
         this.collector.updateRecommendation(r.recNo, { accepted: followed, outcome });

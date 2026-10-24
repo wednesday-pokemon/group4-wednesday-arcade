@@ -1,8 +1,13 @@
-// Duo draft (UX_MYSTERY §2): three original gothic, Pokémon-card-INSPIRED cards side by side. Each card: duo name +
-// cosmetic rarity, arch portrait + Pokémon medallion, role chip (icon + word), names, six absolute 1–5 stats with the
-// best-of-three ▲, F power and Q real move (Game adaptation badge, LOUD tag), 2 advantages + 1–2 disadvantages, one
-// "Select duo". Keyboard: focus starts on the H1; ← → and 1 2 3 move focus among the Select buttons (roving tabindex);
-// Enter/Space select; Enter ignored for 600 ms after mount and on key repeat. Clicking a card body only focuses it.
+// Duo draft (UX_MYSTERY §2, UX_OVERHAUL §8, UX_DUO_CARDS): three original gothic trading cards side by side, in the
+// anatomy of a Pokémon card (63:88, gold frame, type-coloured face). Each card, top to bottom: the duo name
+// ("Bianca’s Alolan Marowak") with "100 HP" + the type symbol and the grab cost (vitals from the real tuning), the
+// generated duo title on a silver ribbon, the art window (DuoCardArt — 3d-artist), identity · types + role chip, the
+// character power (key Q) and the real Pokémon move (key R; caps from ABILITY_KEY_LABEL — never F) as attack rows with a
+// one-line effect and a big cooldown, a strengths / weakness strip derived from the stats, rarity + set number, then
+// [Select duo][Details]. Details (or D) opens the full stats, texts, adaptation notes and trade-offs on all three cards
+// at once (comparison); Esc closes it before going Back. Keyboard: focus starts on the H1; ← → and 1 2 3 move focus
+// among the Select buttons (roving tabindex); Enter/Space select; Enter ignored for 600 ms after mount and on key
+// repeat. Clicking a card body only focuses it.
 //
 // Slot-machine reveal (feature add-on, purely presentational): the 3 bundles are already fixed in `cards` before this
 // component ever mounts (drawn upstream, unchanged here). The cards are dealt FACE-DOWN (the supplied card-back art,
@@ -10,7 +15,7 @@
 // (~4.5 s in all). A `duo-card-N` / `btn-select-duo-N` pair exists and is clickable from the very
 // first frame for every card: clicking (or Enter-selecting) one at any point during the spin instantly reveals all
 // three and selects that one, so nothing that already depends on immediate card-screen interactivity breaks.
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import type { Duo } from '../../mystery/types.ts';
 import { announce, announceSelection } from '../../app/announce.tsx';
 import { audio } from '../../app/audio.ts';
@@ -21,7 +26,13 @@ import { PARTNERS } from '../../mystery/data/partners.ts';
 import { Button } from '../components/Button.tsx';
 import { ThingSigil } from '../components/ThingSigil.tsx';
 import { Icon } from '../Icon.tsx';
-import { characterArt, pokemonArt, ROLE_ICON, ROLE_LABEL, STAT_MAX, STAT_ROWS, type AbilityView, type DuoCardView } from './duoView.ts';
+import { DuoCardArt } from './card/DuoCardArt.tsx';
+import { PowerDisc, TypeDisc } from './card/TypeSymbol.tsx';
+import {
+  characterArt, pokemonArt, RARITY_GLYPH, RARITY_LABEL, ROLE_ICON, ROLE_LABEL, STAT_MAX, STAT_ROWS, TYPE_THEME, vitalsSpeech,
+  type AbilityView, type DuoCardView, type NameFit, type ThemeType,
+} from './duoView.ts';
+import '../styles/duoCard.css';
 import '../styles/duoReveal.css';
 
 interface DuoCardsProps {
@@ -100,11 +111,18 @@ function beep(freq: number, delayS: number, durS: number, gain: number): void {
 const playSlotClick = () => beep(620, 0, 0.08, 0.05);
 const playRevealChime = () => { beep(660, 0, 0.12, 0.045); beep(880, 0.09, 0.16, 0.045); beep(988, 0.18, 0.22, 0.04); };
 
+/** Card-root custom properties read by the face and by DuoCardArt (UX_DUO_CARDS §3). */
+function themeStyle(t: ThemeType): CSSProperties {
+  const th = TYPE_THEME[t];
+  return { '--type-face-top': th.top, '--type-face-bottom': th.bottom, '--type-accent': th.accent } as CSSProperties;
+}
+
 export function DuoCards({ cards, stepLabel, tools, onBack, onSelect }: DuoCardsProps) {
   const h1 = useRef<HTMLHeadingElement>(null);
   const buttons = useRef<(HTMLButtonElement | null)[]>([]);
   const [active, setActive] = useState(0);
   const [chosen, setChosen] = useState<number | null>(null);
+  const [details, setDetails] = useState(false);
   const mountedAt = useRef(performance.now());
   useScreenFocus(h1);
   const preview = cards.some((c) => c.preview);
@@ -130,6 +148,13 @@ export function DuoCards({ cards, stepLabel, tools, onBack, onSelect }: DuoCards
     startedAt.current = null;
     setSlotPhase((prev) => (prev.every((p) => p === 'settled') ? prev : cards.map(() => 'settled')));
   };
+
+  // Preload every portrait + Pokémon (25 images) so the spin never shows a half-loaded frame.
+  useEffect(() => {
+    if (typeof Image === 'undefined') return;
+    for (const id of NIGHTSHADE_IDS) new Image().src = characterArt(id);
+    for (const id of PARTNER_IDS) new Image().src = pokemonArt(id);
+  }, []);
 
   const TICK_MS = 50;
   useEffect(() => {
@@ -206,6 +231,13 @@ export function DuoCards({ cards, stepLabel, tools, onBack, onSelect }: DuoCards
     return () => clearTimeout(t);
   }, [chosen]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Details opens/closes on all three cards together (comparison). Only once the real cards are showing. */
+  const toggleDetails = (open = !details) => {
+    if (!allSettled || chosen !== null) return;
+    setDetails(open);
+    announce(open ? 'Details shown for all three duos. Press D or Escape to close.' : 'Details closed.');
+  };
+
   useHotkeys((key) => {
     if (chosen !== null) return true;
     if (key === 'arrowleft') {
@@ -220,14 +252,23 @@ export function DuoCards({ cards, stepLabel, tools, onBack, onSelect }: DuoCards
       focusCard(Number(key) - 1);
       return true;
     }
+    if (key === 'd') {
+      toggleDetails();
+      return true;
+    }
     if (key === 'escape' || key === 'backspace') {
-      onBack();
+      if (details) toggleDetails(false); // Esc closes Details before going Back
+      else onBack();
       return true;
     }
   });
 
   return (
-    <main className={`screen duo-draft${chosen !== null ? ' is-committing' : ''}${allSettled ? '' : ' is-revealing'}`} data-testid="screen-cards" data-reveal={allSettled ? 'settled' : 'spin'}>
+    <main
+      className={`screen duo-draft${chosen !== null ? ' is-committing' : ''}${allSettled ? '' : ' is-revealing'}${details ? ' has-details' : ''}`}
+      data-testid="screen-cards"
+      data-reveal={allSettled ? 'settled' : 'spin'}
+    >
       <header className="duo-draft__head">
         <div>
           <p className="caps">{stepLabel}</p>
@@ -235,7 +276,7 @@ export function DuoCards({ cards, stepLabel, tools, onBack, onSelect }: DuoCards
         </div>
         <p className="duo-draft__legend text-2">
           {allSettled
-            ? 'Three duos were drawn for you. Stats compare duos: 1 low · 3 typical · 5 high. Frames are decoration only.'
+            ? <>Three duos were drawn for you. <span aria-hidden="true">⧗</span><span className="sr-only">The hourglass number</span> = cooldown in seconds. <kbd>D</kbd> shows full stats. Frames are decoration only.</>
             : 'Dealing three duos…'}
         </p>
         {tools}
@@ -251,11 +292,14 @@ export function DuoCards({ cards, stepLabel, tools, onBack, onSelect }: DuoCards
             chosen={chosen === i}
             phase={slotPhase[i]!}
             face={slotFace[i]!}
+            detailsOpen={details && allSettled}
+            detailsReady={allSettled && chosen === null}
             buttonRef={(el) => {
               buttons.current[i] = el;
             }}
             onFocusCard={() => setActive(i)}
             onBodyClick={() => focusCard(i)}
+            onToggleDetails={() => toggleDetails()}
             onSelect={(e) => {
               // Enter guard: ignore Enter for 600 ms after mount and on auto-repeat.
               if (e.detail === 0 && performance.now() - mountedAt.current < ENTER_GUARD_MS) return;
@@ -267,7 +311,7 @@ export function DuoCards({ cards, stepLabel, tools, onBack, onSelect }: DuoCards
 
       <footer className="duo-draft__foot">
         <Button variant="ghost" onClick={onBack} data-testid="btn-back">Back</Button>
-        <p className="text-2 duo-draft__keys"><kbd>←</kbd> <kbd>→</kbd> choose · <kbd>Enter</kbd> selects · <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> jump</p>
+        <p className="text-2 duo-draft__keys"><kbd>←</kbd> <kbd>→</kbd> choose · <kbd>Enter</kbd> selects · <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> jump · <kbd>D</kbd> details</p>
         {!allSettled && (
           <Button variant="ghost" size="sm" className="duo-draft__skip" onClick={forceReveal} data-testid="btn-skip-reveal">
             Skip animation
@@ -289,24 +333,37 @@ interface DuoCardItemProps {
   chosen: boolean;
   phase: SlotPhase;
   face: SlotFace;
+  detailsOpen: boolean;
+  detailsReady: boolean;
   buttonRef: (el: HTMLButtonElement | null) => void;
   onFocusCard: () => void;
   onBodyClick: () => void;
+  onToggleDetails: () => void;
   onSelect: (e: ReactMouseEvent<HTMLButtonElement>) => void;
 }
 
-function DuoCardItem({ view: c, index, active, chosen, phase, face, buttonRef, onFocusCard, onBodyClick, onSelect }: DuoCardItemProps) {
+const NEXT_FIT: Record<NameFit, NameFit> = { lg: 'md', md: 'sm', sm: 'sm' };
+
+function DuoCardItem({
+  view: c, index, active, chosen, phase, face, detailsOpen, detailsReady, buttonRef, onFocusCard, onBodyClick, onToggleDetails, onSelect,
+}: DuoCardItemProps) {
   const titleId = `duo-${index}-title`;
+  const detailsId = `duo-${index}-details`;
   const settled = phase === 'settled';
+  // The face stays on the neutral Ghost palette while the slot spins (a type-colour flicker every 70 ms would be a
+  // flash hazard); the real type face cross-fades in on settle (registered custom properties, 300 ms).
+  const theme: ThemeType = settled ? c.themeType : 'ghost';
   return (
     <article
       className={`duo-card${active ? ' is-active' : ''}${chosen ? ' is-chosen' : ''}${settled ? '' : ' duo-card--spin'}`}
+      data-type={theme}
       data-rarity={settled ? c.rarity : undefined}
       data-role={settled ? c.role : undefined}
       data-slot-phase={phase}
       aria-labelledby={titleId}
       data-testid={`duo-card-${index}`}
       data-duo={c.key}
+      style={themeStyle(theme)}
       onMouseEnter={onFocusCard}
       onFocus={onFocusCard}
       onClick={(e) => {
@@ -316,87 +373,235 @@ function DuoCardItem({ view: c, index, active, chosen, phase, face, buttonRef, o
       {chosen && <span className="duo-card__ribbon">Chosen</span>}
       {(phase === 'back' || phase === 'flip') && (
         <div className="duo-card__back" aria-hidden="true">
-          <img src={CARD_BACK} alt="" draggable={false} decoding="async" />
+          <img src={CARD_BACK} alt="" width={412} height={576} draggable={false} decoding="async" />
         </div>
       )}
-      {settled ? (
-        <>
-          <div className="duo-card__title">
-            <h2 id={titleId} className="duo-card__duo">{c.duoName}</h2>
-            <span className="duo-card__rarity"><span className={`rarity-gem rarity-gem--${c.rarity}`} aria-hidden="true" />{c.rarity}</span>
-          </div>
+      <div className="duo-card__face">
+        {settled ? (
+          <SettledFace view={c} titleId={titleId} />
+        ) : (
+          <SlotSpinFace titleId={titleId} face={phase === 'settling' ? { characterId: c.duo.characterId, pokemonId: c.duo.pokemonId } : face} />
+        )}
 
-          <div className="duo-card__art" aria-hidden="true">
-            <Portrait src={c.characterArt} name={c.characterShort} className="duo-card__portrait" />
-            <span className="duo-card__amp">&amp;</span>
-            <Portrait src={c.pokemonArt} name={c.pokemonName} className="duo-card__medallion" />
-            <span className="role-chip duo-card__role"><Icon name={ROLE_ICON[c.role]} /> {ROLE_LABEL[c.role]}</span>
-          </div>
+        {settled && <DetailsPanel view={c} id={detailsId} open={detailsOpen} />}
 
-          <p className="duo-card__names">{c.characterName} · {c.pokemonName}</p>
-
-          <StatGrid view={c} />
-
-          <AbilityBox a={c.power} preview={c.preview} />
-          <AbilityBox a={c.move} preview={c.preview} />
-
-          <ul className="duo-card__trade" aria-label="Advantages and disadvantages" data-testid="trade-list">
-            {c.preview && <li className="duo-card__pending">Trade-offs pending the duo registry</li>}
-            {c.advantages.map((t, i) => (
-              <li key={`a${i}`} className="trade trade--pro"><span className="trade__mark" aria-hidden="true">+</span><span className="sr-only">Advantage: </span>{t}</li>
-            ))}
-            {c.disadvantages.map((t, i) => (
-              <li key={`d${i}`} className="trade trade--con"><span className="trade__mark" aria-hidden="true">−</span><span className="sr-only">Disadvantage: </span>{t}</li>
-            ))}
-          </ul>
-        </>
-      ) : (
-        <SlotSpinFace titleId={titleId} face={face} />
-      )}
-
-      <Button
-        ref={buttonRef}
-        variant={active ? 'primary' : 'secondary'}
-        className="duo-card__select"
-        tabIndex={active ? 0 : -1}
-        onClick={onSelect}
-        aria-label={`Select ${c.duoName}: ${c.characterName} and ${c.pokemonName}, ${ROLE_LABEL[c.role]}`}
-        data-testid={`btn-select-duo-${index}`}
-      >
-        Select duo
-      </Button>
+        <div className="duo-card__actions">
+          <Button
+            ref={buttonRef}
+            variant={active ? 'primary' : 'secondary'}
+            className="duo-card__select"
+            tabIndex={active ? 0 : -1}
+            onClick={onSelect}
+            aria-label={`Select ${c.duoName}: ${c.characterName} and ${c.pokemonName}, ${ROLE_LABEL[c.role]}`}
+            data-testid={`btn-select-duo-${index}`}
+          >
+            Select duo
+          </Button>
+          <Button
+            variant="ghost"
+            className="duo-card__details-btn"
+            tabIndex={active ? 0 : -1}
+            inactive={!detailsReady}
+            aria-expanded={detailsOpen}
+            aria-controls={settled ? detailsId : undefined}
+            onClick={onToggleDetails}
+            data-testid={`btn-duo-details-${index}`}
+          >
+            Details
+          </Button>
+        </div>
+      </div>
     </article>
   );
 }
 
-/**
- * Fills the exact same 7 grid rows `settled` content occupies (title/art/names/stats/power/move/trade — row 8, the
- * Select button, is rendered unconditionally by the caller) so settling never shifts the card's size. Portraits cycle
- * through the real roster via `face`; everything else is a non-reactive shimmer placeholder.
- */
-function SlotSpinFace({ titleId, face }: { titleId: string; face: SlotFace }) {
+function SettledFace({ view: c, titleId }: { view: DuoCardView; titleId: string }) {
+  const nameRef = useRef<HTMLHeadingElement>(null);
+  const [fit, setFit] = useState<NameFit>(c.nameFit);
+  // Safety net over the measured width table: once the webfont is in, step the name down if it still overflows.
+  useEffect(() => {
+    let live = true;
+    const check = () => {
+      const el = nameRef.current;
+      if (live && el && fit !== 'sm' && el.scrollWidth > el.clientWidth + 1) setFit(NEXT_FIT[fit]);
+    };
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
+    if (!fonts || fonts.status === 'loaded') check();
+    else void fonts.ready.then(check);
+    return () => {
+      live = false;
+    };
+  }, [fit]);
+
   return (
     <>
-      <div className="duo-card__title">
-        <h2 id={titleId} className="duo-card__duo duo-card__duo--spin">Drawing…</h2>
-        <span className="duo-card__rarity duo-card__rarity--spin" aria-hidden="true" />
+      <div className="duo-card__names">
+        <h2 id={titleId} ref={nameRef} className="duo-card__duo duo-card__who" data-fit={fit}>{c.displayName}</h2>
+        <p className="duo-card__title-ribbon"><span>{c.duoName}</span></p>
+        <div className="duo-card__vitals" data-testid={c.vitals ? 'duo-vitals' : undefined}>
+          {c.vitals ? (
+            <span className="duo-card__vt" aria-hidden="true">
+              <span className="duo-card__hp"><span className="duo-card__hp-num">{c.vitals.maxHp}</span><span className="duo-card__hp-label">{' HP'}</span></span>
+              <span className="duo-card__vsep">{' · '}</span>
+              <span className="duo-card__grab">{`grab −${c.vitals.grabHp}`}</span>
+            </span>
+          ) : (
+            <span className="duo-card__vt duo-card__vt--pending" aria-hidden="true"><span className="duo-card__hp">HP —</span></span>
+          )}
+          <TypeDisc type={c.themeType} size="lg" className="duo-card__type" />
+          {c.ghostSecondary && <TypeDisc type="ghost" size="sm" className="duo-card__type2" />}
+          {c.vitals && <span className="sr-only">{vitalsSpeech(c.vitals)}</span>}
+        </div>
+      </div>
+
+      <div className="duo-card__art">
+        <DuoCardArt
+          characterArt={c.characterArt}
+          characterName={c.characterName}
+          pokemonArt={c.pokemonArt}
+          pokemonId={c.duo.pokemonId}
+          pokemonName={c.pokemonName}
+        />
+      </div>
+
+      <p className="duo-card__caption">
+        <span className="duo-card__ident">{c.identityShort} · {c.typesLabel}</span>
+        <span className="role-chip duo-card__role"><Icon name={ROLE_ICON[c.role]} /> {ROLE_LABEL[c.role]}</span>
+      </p>
+
+      <AbilityRow a={c.power} glyph={<PowerDisc />} preview={c.preview} />
+      <AbilityRow a={c.move} glyph={<TypeDisc type={c.themeType} size="md" />} preview={c.preview} />
+
+      <div className="duo-card__strip">
+        {c.stats ? (
+          <>
+            <p className="strip__line strip__line--pro">
+              <span className="strip__mark" aria-hidden="true">+</span>
+              <span className="strip__label">Advantages:</span>
+              <span className="strip__value">
+                {c.strengths.map((s, i) => (
+                  <Fragment key={s.key}>
+                    {i > 0 && ', '}
+                    {s.label}
+                    {s.best && <><span className="strip__best" aria-hidden="true" title="Best of the three">▲</span><span className="sr-only"> (best of the three)</span></>}
+                  </Fragment>
+                ))}
+              </span>
+            </p>
+            <p className="strip__line strip__line--con">
+              <span className="strip__mark" aria-hidden="true">−</span>
+              <span className="strip__label">Disadvantage:</span>
+              <span className="strip__value">{c.weakness ? `Low ${c.weakness.label}` : 'Balanced — no stat below 3'}</span>
+            </p>
+          </>
+        ) : (
+          <p className="strip__line strip__line--pending">Stats pending the duo registry</p>
+        )}
+      </div>
+
+      <p className="duo-card__flavour">
+        <span className="duo-card__rarity"><span className="duo-card__rarity-glyph" aria-hidden="true">{RARITY_GLYPH[c.rarity]}</span> {RARITY_LABEL[c.rarity]}</span>
+        <span className="duo-card__set" aria-hidden="true">Nevermore · {c.setNumber}</span>
+      </p>
+    </>
+  );
+}
+
+/**
+ * Fills the exact same face rows the settled content occupies (names ×2 / art / caption / power / move / strip /
+ * flavour — row 9, the buttons, is rendered by the caller) so settling never shifts the card's size. The art window
+ * cycles through the real roster via `face`; everything else is a non-reactive shimmer placeholder.
+ */
+function SlotSpinFace({ titleId, face }: { titleId: string; face: SlotFace }) {
+  const n = NIGHTSHADES[face.characterId];
+  const p = PARTNERS[face.pokemonId];
+  return (
+    <>
+      <div className="duo-card__names duo-card__names--spin">
+        <h2 id={titleId} className="duo-card__duo duo-card__who duo-card__duo--spin">Drawing…</h2>
+        <span className="duo-shimmer duo-shimmer--ribbon" aria-hidden="true" />
+        <span className="duo-shimmer duo-shimmer--hp" aria-hidden="true" />
       </div>
 
       <div className="duo-card__art" aria-hidden="true">
-        <Portrait key={face.characterId} src={characterArt(face.characterId)} name="" className="duo-card__portrait duo-card__portrait--spin" />
-        <span className="duo-card__amp">&amp;</span>
-        <Portrait key={face.pokemonId} src={pokemonArt(face.pokemonId)} name="" className="duo-card__medallion duo-card__medallion--spin" />
+        <DuoCardArt
+          characterArt={characterArt(face.characterId)}
+          characterName={n.name}
+          pokemonArt={pokemonArt(face.pokemonId)}
+          pokemonId={face.pokemonId}
+          pokemonName={p.name}
+          spinning
+        />
       </div>
 
-      <p className="duo-card__names duo-card__names--spin" aria-hidden="true">&nbsp;</p>
-
-      <div className="duo-shimmer duo-shimmer--stats" aria-hidden="true">
-        {Array.from({ length: 6 }, (_, i) => <span key={i} />)}
-      </div>
+      <div className="duo-shimmer duo-shimmer--caption" aria-hidden="true" />
       <div className="duo-shimmer duo-shimmer--ability" aria-hidden="true" />
       <div className="duo-shimmer duo-shimmer--ability" aria-hidden="true" />
-      <div className="duo-shimmer duo-shimmer--trade" aria-hidden="true" />
+      <div className="duo-shimmer duo-shimmer--strip" aria-hidden="true" />
+      <div className="duo-shimmer duo-shimmer--flavour" aria-hidden="true" />
     </>
+  );
+}
+
+function AbilityRow({ a, glyph, preview }: { a: AbilityView; glyph: ReactNode; preview: boolean }) {
+  const cd = a.cooldownS !== null ? Math.round(a.cooldownS) : null;
+  return (
+    <div className={`ability-box ability-box--${a.key === 'F' ? 'power' : 'move'}`}>
+      <span className="ability-box__icons">{glyph}<kbd className="kcap">{a.cap}</kbd></span>
+      <p className="ability-box__head">
+        <span className="sr-only">{a.kind}: </span>
+        <span className="ability-box__name">{a.name}</span>
+        {a.adaptationNote && <span className="ability-box__adapt" title={a.adaptationNote}>Game adaptation</span>}
+      </p>
+      <p className="ability-box__text">
+        {a.loud && <span className="loud-tag">LOUD</span>}
+        <span className="ability-box__short">{a.short ?? (preview ? 'Effect details pending the registry.' : '')}</span>
+      </p>
+      {cd !== null && (
+        <span className="ability-box__cd" role="img" aria-label={`cooldown ${cd} seconds`}>
+          <Icon name="hourglass" />
+          <span className="ability-box__cd-num">{cd}</span>
+          <span className="ability-box__cd-unit">s</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Details overlay (§1): covers the face from the art top to the button row; the header stays visible. */
+function DetailsPanel({ view: c, id, open }: { view: DuoCardView; id: string; open: boolean }) {
+  return (
+    <section id={id} className="duo-card__details" hidden={!open} aria-label={`${c.displayName}: full details`}>
+      {c.vitals && <p className="dd__vitals">{vitalsSpeech(c.vitals)}</p>}
+      <StatGrid view={c} />
+      <DetailAbility a={c.power} />
+      <DetailAbility a={c.move} />
+      <ul className="dd__trade" aria-label="Advantages and disadvantages" data-testid="trade-list">
+        {c.preview && <li className="duo-card__pending">Trade-offs pending the duo registry</li>}
+        {c.advantages.map((t, i) => (
+          <li key={`a${i}`} className="trade trade--pro"><span className="trade__mark" aria-hidden="true">+</span><span className="sr-only">Advantage: </span>{t}</li>
+        ))}
+        {c.disadvantages.map((t, i) => (
+          <li key={`d${i}`} className="trade trade--con"><span className="trade__mark" aria-hidden="true">−</span><span className="sr-only">Disadvantage: </span>{t}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function DetailAbility({ a }: { a: AbilityView }) {
+  const cd = a.cooldownS !== null ? Math.round(a.cooldownS) : null;
+  return (
+    <div className="dd__ability">
+      <p className="dd__ability-head">
+        <span className="dd__key" aria-label={`key ${a.cap}`}>{a.cap}</span>
+        <span className="dd__ability-name">{a.name}</span>
+        <span className="dd__ability-kind">{a.kind}{a.loud ? ' · loud' : ''}</span>
+        {cd !== null && <span className="dd__ability-cd">{cd} s cooldown</span>}
+      </p>
+      {a.text && <p className="dd__ability-text">{a.text}</p>}
+      {a.adaptationNote && <p className="dd__ability-note">{a.adaptationNote}</p>}
+    </div>
   );
 }
 
@@ -428,31 +633,4 @@ function StatGrid({ view: c }: { view: DuoCardView }) {
       })}
     </div>
   );
-}
-
-function AbilityBox({ a, preview }: { a: AbilityView; preview: boolean }) {
-  return (
-    <div className={`ability-box ability-box--${a.key === 'F' ? 'power' : 'move'}`}>
-      <p className="ability-box__head">
-        <kbd className="kcap">{a.key}</kbd>
-        <span className="ability-box__name">{a.name}</span>
-        {a.key === 'Q' && a.adaptationNote
-          ? <span className="ability-box__adapt" title={a.adaptationNote}>Game adaptation</span>
-          : <span className="ability-box__kind">{a.kind}</span>}
-        {a.loud && <span className="loud-tag">LOUD</span>}
-        {a.cooldownS !== null && <span className="ability-box__cd num" aria-label={`cooldown ${Math.round(a.cooldownS)} seconds`}>{Math.round(a.cooldownS)} s</span>}
-      </p>
-      <p className="ability-box__text">{a.text ?? (preview ? 'Effect details pending the registry.' : '')}</p>
-    </div>
-  );
-}
-
-/** Portrait with explicit size (no layout shift) and a Cinzel-initial crest fallback when the image is missing. */
-function Portrait({ src, name, className }: { src: string; name: string; className: string }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [src]);
-  if (failed) {
-    return <span className={`${className} portrait-fallback`}><span>{name.slice(0, 1)}</span></span>;
-  }
-  return <img className={className} src={src} alt="" width={120} height={120} loading="eager" decoding="async" onError={() => setFailed(true)} />;
 }

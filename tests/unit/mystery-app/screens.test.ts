@@ -102,7 +102,7 @@ describe('evidence board (public data only)', () => {
     }
   });
 
-  it('shows case number, title, victim, statements, notes; locked clues show only the location', () => {
+  it('shows case number, title, victim, statements, notes; locked clues show only where to search', () => {
     const c = CASES.poisoned_archive;
     const html = board(c, [c.clues[0]!.id], 'review');
     expect(html).toContain(`Case ${c.number} · ${c.title}`);
@@ -114,7 +114,7 @@ describe('evidence board (public data only)', () => {
     expect(html).toContain(esc(c.clues[0]!.text));
     expect(html).toContain(esc(c.clues[0]!.deduction));
     for (const locked of c.clues.slice(1)) {
-      expect(html).toContain(`Location: ${locked.location}`);
+      expect(html).toContain(`data-testid="clue-${locked.id}" data-found="false"`); // overhaul: "Search: <areas>" (overhaulB_investigation.test.ts)
       expect(html).not.toContain(esc(locked.text));
       expect(html).not.toContain(esc(locked.title));
     }

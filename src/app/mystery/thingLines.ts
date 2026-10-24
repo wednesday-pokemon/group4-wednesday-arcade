@@ -66,6 +66,13 @@ export const thing = {
   result: (verdict: Verdict) => speak(THING.results[verdict]),
   dnf: (reason: DnfReason) => speak(THING.dnf[reason]),
   idle: () => speak(THING.idle),
+  /** Joseph Crackstone's area intro (advice-style, said once ~3 s after "Go."): the designer's line with {area}. */
+  crackArea: (area: string): SpokenLine => {
+    const l = THING.crackstone.area;
+    return { id: l.id, text: formatThingLine(l.text, { area }), pose: l.pose };
+  },
+  /** Crackstone event lines from the script (text only; the HUD owns WHY / ADVICE copy per UX_ENEMIES §6). */
+  crack: (k: keyof typeof THING.crackstone): SpokenLine => speak(THING.crackstone[k]),
 };
 
 export type TutorialStepLine = SpokenLine & { step: TutorialLine['step']; keys: string };

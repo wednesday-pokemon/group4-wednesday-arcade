@@ -16,6 +16,8 @@ import type { TelemetrySample } from './types.ts';
 export interface EpisodeHooks {
   /** Called at every 1 Hz sample with the live run (do not mutate it). */
   onSample?(run: MysteryRun, sample: TelemetrySample, collector: TelemetryCollector): void;
+  /** Called after every fixed sim step with the live run (do not mutate it) — evaluation scripts record trajectories. */
+  onStep?(run: MysteryRun): void;
   context?: LiveContextOptions;
 }
 
@@ -57,6 +59,7 @@ export function simulateEpisode(
       nextSnap += 1;
     }
     run.step(dt);
+    hooks.onStep?.(run);
     collector.trackPosition(run.player.x, run.player.z);
     input = { ...input, interact: false, power: false, move: false, hint: false };
     run.setInput(input);

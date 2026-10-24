@@ -1,4 +1,5 @@
-// Laptop 1 MYSTERY dashboard, LOCAL DEMO (`/?mode=dashboard&demo=1`): reads the sessions finished on this browser
+// Laptop 1 MYSTERY dashboard, LOCAL DEMO (`/?mode=dashboard&demo=1`): header KPI ribbon + StationLiveCard
+// (docs/overhaul/UX_OVERHAUL.md §10, src/ui/mystery/stationView.ts) over the sessions finished on this browser
 // ('raven.mystery.records') and this station's live status ('raven.mystery.live'), refreshing every 2 s and on
 // cross-tab `storage` events, and renders the four game-wide analytics via `dashboard(records, { caseId })` for the
 // selected case scope (All / Case 01 / 02 / 03) plus the per-case summary table. Records from before the three cases
@@ -8,6 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { boardOptions, bundledPredictiveService, dashboard } from '../../mystery/analytics/index.ts';
 import { MysteryDashboard, type CaseScope } from '../../ui/mystery/MysteryDashboard.tsx';
+import { kpiRibbon, stationViewFromLocal } from '../../ui/mystery/stationView.ts';
 import '../../ui/styles/mystery.css';
 import { useTestHooks } from '../testHooks.ts';
 import { browserStorage, LIVE_KEY, loadRecords, readLive, RECORDS_KEY, type LiveStatus, type StoredRecord } from './records.ts';
@@ -52,6 +54,11 @@ export function MysteryDashboardApp() {
       legacyExcluded: agg.descriptive.legacyExcluded,
       cases: agg.descriptive.cases.map((c) => ({ id: c.caseId, runs: c.runs, solvedPct: c.solvedPctOfFinished, medianTimeS: c.medianTimeS, extractionPct: c.extractionPct })),
       live: live && { phase: live.phase, stale: now - live.updatedAt > 15000 },
+      kpis: kpiRibbon(agg.descriptive).map((k) => ({ key: k.key, value: k.value, n: k.n, small: k.small })),
+      station: (() => {
+        const v = stationViewFromLocal(live, now);
+        return { phase: v.lost ? 'lost' : v.phase, chasing: v.chasing, clues: v.clues, egg: v.egg, objective: v.objectiveText, hyde: v.hyde?.word ?? null, thing: v.thing?.head ?? null };
+      })(),
       descriptive: { runs: agg.descriptive.runs, finished: agg.descriptive.finished, dnf: agg.descriptive.dnf, solvedPct: agg.descriptive.caseSolvedPctOfFinished },
       model: { source: card.source, label: card.label, brier: card.brier, baselineBrier: card.baselineBrier, episodes: card.episodes },
       prescriptive: { given: agg.prescriptive.given, uptakePct: agg.prescriptive.uptakePct },

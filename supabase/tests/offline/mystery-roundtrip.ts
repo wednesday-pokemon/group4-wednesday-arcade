@@ -12,14 +12,21 @@
 //  * mystery_standings order == shared compareResults() (finishers by score/time above all DNFs)
 //  * each of the three cases: correct accusation with all 3 clues + full evidence -> case_solved; wrong suspect ->
 //    unsolved and stored; forged evidence dropped; second finalize returns the same row
+//  * overhaul (2026-10-23): the six telemetry types, noise source 'hazard' and hyde_mode 'gave_up' ride in the random
+//    streams; forecasts of EVERY target (incl. egg_site / clue_area / hyde_zone / hyde_spawn) ride on the batches through
+//    the real parseMysteryAppend and are stored exactly once despite resends; telemetry never changes the result
+//  * Joseph Crackstone (2026-10-24): the four Crackstone telemetry types and curse cast / miss ride in the random
+//    streams; landed curses (rule events) cost HP, never a catch; some DNFs are curse deaths (dnf 'hp_depleted');
+//    crackstone_risk forecasts ride along (FORECAST_TARGETS); the finalize replay re-reads RULE_EVENT_TYPES (incl. curse)
 //  * v2.5 tables are untouched by all of it
 import { createStream } from '../../functions/_shared/game/index.ts';
 import {
-  applyBatch, initialProgress, parseEventBatch, progressFromRow, ruleFingerprint, splitResend, type ParsedEvent,
+  RULE_EVENT_TYPES, applyBatch, initialProgress, progressFromRow, ruleFingerprint, splitResend, type ParsedEvent,
 } from '../../functions/_shared/mystery-events.ts';
 import {
   caseVersions, computeOffer, computeResult, requireData, requireEggRules, resolveCase, rulesContext, type SessionCase,
 } from '../../functions/_shared/mystery-rules.ts';
+import { FORECAST_TARGETS, parseMysteryAppend } from '../../functions/_shared/mystery-validation.ts';
 import { CASE_IDS, type CaseId } from '../../functions/_shared/mystery/types.ts';
 import { compareResults, scoreFor } from '../../functions/_shared/mystery/scoring.ts';
 import { HttpError } from '../../functions/_shared/errors.ts';
@@ -28,7 +35,8 @@ import { jsonEqual } from '../../functions/_shared/validation.ts';
 type Db = { query: (sql: string, params?: unknown[]) => Promise<{ rows: Record<string, any>[] }> };
 type Check = (cond: unknown, msg: string) => void;
 
-const RULE_TYPES = "('catch','clue_found','egg_pickup','egg_drop','egg_damage','egg_delivered','accusation','finish','dnf','hyde_sighted','hint_requested')";
+/** SQL list of the rule event types finalize re-reads (mystery-db.ts loadRuleEvents filters on RULE_EVENT_TYPES). */
+const RULE_TYPES = `(${RULE_EVENT_TYPES.map((t) => `'${t}'`).join(',')})`;
 
 export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check): Promise<string> {
   const rng = createStream('mystery-roundtrip-v1');
@@ -49,10 +57,11 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
   };
   const row = async (id: string) => (await db.query('select * from public.mystery_sessions where id = $1', [id])).rows[0];
 
-  /** Mirrors mystery-append-events/index.ts. Returns the error code or null. */
-  async function append(sessionId: string, station: string, rawEvents: unknown[]): Promise<string | null> {
+  /** Mirrors mystery-append-events/index.ts (body parsed by the real parseMysteryAppend). Returns the error code or null. */
+  async function append(sessionId: string, station: string, rawEvents: unknown[], rawForecasts: unknown[] = []): Promise<string | null> {
     try {
-      const events = parseEventBatch(rawEvents, false);
+      const body = parseMysteryAppend({ sessionId, events: rawEvents, forecasts: rawForecasts });
+      const events = body.events;
       const r = await row(sessionId);
       const resent = events.filter((e) => e.seq <= r.last_seq).map((e) => e.seq);
       const stored = new Map<number, ParsedEvent>();
@@ -62,9 +71,9 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
         }
       }
       const { fresh } = splitResend(events, r.last_seq, stored);
-      if (fresh.length === 0) return null;
+      if (fresh.length === 0 && body.forecasts.length === 0) return null;
       const next = applyBatch(progressFromRow(r.progress), fresh, rulesContext(r.seed, resolveCase(r.case_id, r.case_version).caseDef, egg));
-      const out = await rpc('mystery_append_events', [sessionId, station, r.last_seq, fresh, next, null, null],
+      const out = await rpc('mystery_append_events', [sessionId, station, r.last_seq, fresh, next, body.forecasts, null],
         ['::uuid', '', '::int', '::jsonb', '::jsonb', '::jsonb', '::jsonb']);
       return out.ok ? null : out.error;
     } catch (e) {
@@ -75,6 +84,7 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
 
   let finished = 0;
   let dnf = 0;
+  let curseDnf = 0;
   let rejected = 0;
   let abandoned = 0;
   for (let n = 0; n < sessions; n++) {
@@ -121,14 +131,46 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
       () => push('hyde_sighted', { distanceM: rng() * 13 }),
       () => push('hint_requested'),
       () => push('ability_used', { key: 'F', abilityId: 'psychic_vision', kinds: ['reveal_clues'], success: true, detail: 'Two clues glow' }),
+      // overhaul telemetry (never rule events)
+      () => push('hyde_mode', { from: 'INVESTIGATE_SOUND', to: 'SEARCH', reason: 'gave_up' }),
+      () => push('noise', { source: 'hazard', x: rng() * 90 - 45, z: rng() * 120 - 60, loudness: 0.8, radiusM: 14 }),
+      () => push('hyde_emerged', { spawnId: pick(['sp_court', 'sp_crypt', 'sp_east']), x: rng() * 90 - 45, z: rng() * 120 - 60 }),
+      () => push('site_checked', { site: pick(['clue', 'egg']), siteId: pick(['s_ft_desk', 'e_shed', 'e_vault']), found: rng() < 0.3 }),
+      () => push('trace_found', { sourceId: pick(['ex_cracked_vial', 'botanical_residue']), siteId: pick(['e_shed', 'e_vault']) }),
+      () => push('examined', { examineId: pick(['ex_cracked_vial', 'ex_books']) }),
+      () => push('passage_opened', { passageId: 'p_bookcase' }),
+      () => push('hazard_triggered', { hazardId: 'hz_searchlight_1' }),
+      // Joseph Crackstone telemetry + curse cast / miss (cost no HP)
+      () => push('crackstone_mode', { from: 'PATROL', to: pick(['INVESTIGATE', 'CHASE']), reason: pick(['saw_player', 'sensed_player', 'scan_hit']) }),
+      () => push('crackstone_sighted', { via: pick(['sight', 'proximity', 'scan']), distanceM: rng() * 20 }),
+      () => push('crackstone_lost'),
+      () => push('crackstone_scan', { phase: pick(['warning', 'pulse']), radiusM: 14, hit: rng() < 0.3 }),
+      () => push('curse', { phase: pick(['cast', 'miss']), hpLost: 0, blocked: false }),
     ])();
+    const feature = { egg_site: 'site', clue_area: 'area', hyde_zone: 'zone', hyde_spawn: 'spawn' } as Record<string, string>;
+    let forecastNo = 0;
+    /** 0–2 forecasts of random targets issued at time `at` (one row per candidate for the overhaul targets). */
+    const forecastsAt = (at: number) => Array.from({ length: Math.floor(rng() * 3) }, () => {
+      const target = pick(FORECAST_TARGETS);
+      const features: Record<string, unknown> = { t_bucket: Math.round(at / 10) };
+      if (feature[target]) features[feature[target]] = pick(['e_shed', 'a_greenhouse', 'z_mid', 'sp_court']);
+      return { forecastNo: forecastNo++, t: at, target, value: target === 'eta_s' ? Math.round(rng() * 400) : Math.round(rng() * 1e4) / 1e4,
+        modelLabel: target === 'detection_15s' ? 'ml' : 'rule_based', features };
+    });
     const clues = [...ctx.clueIds].sort(() => rng() - 0.5).slice(0, Math.floor(rng() * 4));
     let catches = 0;
     for (let i = 0; i < 6; i++) cosmetic();
     clues.forEach((c, i) => { cosmetic(); push('clue_found', { clueId: c, cluesFound: i + 1 }); });
     if (rng() < 0.5) { catches = 1; push('catch', { catchNumber: 1, hpLost: 35, eggSecurityLost: 0, blocked: false }); }
+    let hpLost = catches * 35;
+    if (rng() < 0.4) { push('curse', { phase: 'hit', hpLost: 25, blocked: false }); hpLost += 25; } // a landed curse (not a catch)
+    if (rng() < 0.2) push('curse', { phase: 'hit', hpLost: 0, blocked: true }); // blocked by block_grab
     const willDnf = rng() < 0.2;
-    if (willDnf) {
+    const curseDeath = willDnf && rng() < 0.5;
+    if (curseDeath) {
+      while (hpLost < 100) { push('curse', { phase: 'hit', hpLost: 25, blocked: false }); hpLost += 25; }
+      push('dnf', { reason: 'hp_depleted' }, 0);
+    } else if (willDnf) {
       if (catches === 0) push('catch', { catchNumber: 1, hpLost: 35, eggSecurityLost: 0, blocked: false });
       push('catch', { catchNumber: 2, hpLost: 35, eggSecurityLost: 0, blocked: false });
       push('dnf', { reason: 'second_catch' });
@@ -139,7 +181,7 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
       push('egg_delivered', { tier, points: egg.points[tier], security: rng() < 0.3 ? 70 : 100 }, rng() * 30);
       const suspect = rng() < 0.1 ? null : pick(ctx.suspectIds);
       // cite all found clues (sometimes one fewer, sometimes plus a case-file note): an honest client cites only citable ids
-      let evidence = suspect === null ? [] : [...clues];
+      let evidence: string[] = suspect === null ? [] : [...clues];
       if (suspect !== null && evidence.length > 0 && rng() < 0.2) evidence = evidence.slice(1);
       if (suspect !== null && rng() < 0.2) evidence.push(kase.caseDef.notes[0]!.id);
       const deductionCorrect = suspect !== null && evidence.length === 3 && kase.solution.supportingEvidence.every((c) => evidence.includes(c));
@@ -158,14 +200,17 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
       else evs.push({ type: 'clue_found', t: t + 1, seq: seq + 1, clueId: 'master_key', cluesFound: 1 }); // after terminal / dup
     }
 
-    // ---- send in random batches, sometimes resending the previous batch
+    // ---- send in random batches (with forecasts riding along), sometimes resending the previous batch
     let error: string | null = null;
-    let prev: Record<string, unknown>[] = [];
+    let prev: { events: Record<string, unknown>[]; forecasts: unknown[] } | null = null;
+    const forecastNos = new Set<number>();
     for (let i = 0; i < evs.length && !error;) {
       const size = 1 + Math.floor(rng() * 12);
-      const batch = evs.slice(i, i + size);
-      if (prev.length && rng() < 0.3) error = await append(id, station, prev); // network retry of an acknowledged batch
-      if (!error) error = await append(id, station, batch);
+      const batch = { events: evs.slice(i, i + size), forecasts: [] as { forecastNo: number }[] };
+      batch.forecasts = forecastsAt(batch.events[batch.events.length - 1].t as number);
+      if (prev && rng() < 0.3) error = await append(id, station, prev.events, prev.forecasts); // network retry of an acknowledged batch
+      if (!error) error = await append(id, station, batch.events, batch.forecasts);
+      if (!error) batch.forecasts.forEach((f) => forecastNos.add(f.forecastNo));
       prev = batch;
       i += size;
     }
@@ -181,7 +226,9 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
     const stored = (await db.query('select count(*)::int c from public.mystery_events where session_id = $1', [id])).rows[0].c;
     check(stored === evs.length && r.event_count === evs.length, `#${n} every event stored exactly once despite resends`);
     check(r.last_seq === evs[evs.length - 1].seq, `#${n} last_seq`);
-    check(r.clues_found === clues.length && r.catches === (willDnf ? 2 : catches), `#${n} clue/catch projections`);
+    check(r.clues_found === clues.length && r.catches === (willDnf && !curseDeath ? 2 : catches), `#${n} clue/catch projections`);
+    const fcStored = (await db.query('select count(*)::int c from public.mystery_forecasts where session_id = $1', [id])).rows[0].c;
+    check(fcStored === forecastNos.size, `#${n} every forecast (all targets) stored exactly once despite resends (${fcStored} vs ${forecastNos.size})`);
 
     // ---- finalize (mirrors mystery-finalize/index.ts)
     const ruleEvents = (await db.query(`select seq, t, type, payload from public.mystery_events where session_id = $1 and type in ${RULE_TYPES} order by seq`, [id]))
@@ -205,6 +252,7 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
       ['::uuid', '', '::int', '::jsonb', '::jsonb']);
     check(fin2.replay === true && jsonEqual(fin2.result, res), `#${n} second finalize returns the same row`);
     if (result.outcome === 'finished') finished++; else dnf++;
+    if (result.dnfReason === 'hp_depleted') { curseDnf++; check(res.dnf_reason === 'hp_depleted' && res.catches === result.catches, `#${n} curse death stored as dnf hp_depleted`); }
   }
 
   // ---- the three cases, explicitly: solved / wrong suspect / forged evidence, through the real create (bag) path
@@ -234,8 +282,14 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
   const superseded = (await db.query(`select count(*)::int c from public.mystery_sessions where status = 'abandoned'`)).rows[0].c;
   const perCase = (await db.query(`select case_id, count(*)::int c from public.mystery_results group by case_id order by case_id`)).rows
     .map((x) => `${x.case_id}=${x.c}`).join(' ');
-  return `mystery sessions=${sessions} finished=${finished} (negative=${negatives}) dnf=${dnf} rejected=${rejected} left-on-cards=${abandoned} `
-    + `abandoned(superseded)=${superseded} case-scenarios=${scenarioCount} results-per-case: ${perCase}`;
+  const telemetry = (await db.query(`select count(*)::int c from public.mystery_events where type in
+    ('hyde_emerged','site_checked','trace_found','examined','passage_opened','hazard_triggered')`)).rows[0].c;
+  const perTarget = (await db.query(`select target, count(*)::int c from public.mystery_forecasts group by target order by target`)).rows;
+  check(FORECAST_TARGETS.every((t) => perTarget.some((x) => x.target === t)), 'forecasts of every target were stored');
+  check(telemetry > 0, 'overhaul telemetry events were stored');
+  return `mystery sessions=${sessions} finished=${finished} (negative=${negatives}) dnf=${dnf} (curse deaths=${curseDnf}) rejected=${rejected} left-on-cards=${abandoned} `
+    + `abandoned(superseded)=${superseded} case-scenarios=${scenarioCount} results-per-case: ${perCase} `
+    + `telemetry-events=${telemetry} forecasts: ${perTarget.map((x) => `${x.target}=${x.c}`).join(' ')}`;
 }
 
 type Rpc = (fn: string, args: unknown[], casts: string[]) => Promise<Record<string, any>>;

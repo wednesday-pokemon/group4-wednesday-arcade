@@ -6,6 +6,7 @@ import { MeshBuilder, clamp, smoothstep } from '../util.ts';
 import { TriBuilder, distToEdges, mergeAll, pointInPoly } from '../action/geom.ts';
 import type { GlowEntry } from '../action/fx.ts';
 import { CONE4, ICO0, PAL, distPointSeg, seeded, segHitsWall } from './common.ts';
+import { pointsOfSites } from './siteProps.ts';
 
 type V3 = [number, number, number];
 
@@ -148,7 +149,8 @@ export function buildTerrain(map: MapDef, piers: PierRect[], low: boolean): Terr
     return best;
   };
   if (map.patrol.length > 1) {
-    const targets: Vec2[] = [map.playerStart, map.eggSpawn, map.tower, ...map.clues.map((c) => ({ x: c.x, z: c.z }))];
+    // a worn trail to EVERY candidate site (never only the real one): the dirt must not give the answer away
+    const targets: Vec2[] = [map.playerStart, map.tower, ...pointsOfSites(map)];
     if (map.powerSwitch) targets.push({ x: map.powerSwitch.x, z: map.powerSwitch.z });
     for (const t of targets) {
       const q = nearestPatrol(t);

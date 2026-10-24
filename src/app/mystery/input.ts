@@ -1,7 +1,9 @@
 // Keyboard + pointer-lock mouse → MysteryInput (one per sim frame). DOM-free so it is unit-testable: the play loop
-// forwards KeyboardEvent.code / movementX/Y here. UX_MYSTERY rulings: WASD move; mouse or arrow keys look (← → 120°/s,
-// ↑ ↓ pitch); Shift sprint; C crouch (Ctrl only while the kiosk keyboard lock is active); E interact (+ held for the
-// 0.8 s egg set-down); F power; Q move; V hint. Tab/Esc/M are app keys (PlayView).
+// forwards KeyboardEvent.code / movementX/Y here. Controls (OVERHAUL_CONTRACT "Controls", UX_OVERHAUL §9 / R4): WASD
+// move; mouse or arrow keys look (← → 120°/s, ↑ ↓ pitch); Shift sprint; C crouch (Ctrl only while the kiosk keyboard
+// lock is active); E interact (+ held for long actions / the egg set-down); Q = character power (slot 'F'; F still
+// works as a silent alias, never displayed); R = Pokémon move (slot 'Q'); V hint. Tab/Esc/M are app keys (PlayView).
+// The sim's input field names stay `power` (slot F) / `move` (slot Q).
 import type { MysteryInput } from '../../mystery/types.ts';
 
 export interface LookPrefs {
@@ -23,11 +25,12 @@ export const KEY_PITCH_RAD_PER_S = (70 * Math.PI) / 180;
 /** Codes the game owns while playing: their browser defaults (scroll, find, focus moves…) are suppressed. */
 export const GAME_CODES: ReadonlySet<string> = new Set([
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight',
-  'KeyC', 'KeyE', 'KeyF', 'KeyQ', 'KeyV', 'Space', 'Tab', 'PageUp', 'PageDown', 'Home', 'End', 'Slash', 'Quote', 'Backspace',
+  'KeyC', 'KeyE', 'KeyF', 'KeyQ', 'KeyR', 'KeyV', 'Space', 'Tab', 'PageUp', 'PageDown', 'Home', 'End', 'Slash', 'Quote', 'Backspace',
 ]);
 
 type Edge = 'interact' | 'power' | 'move' | 'hint';
-const EDGE_BY_CODE: Record<string, Edge> = { KeyE: 'interact', KeyF: 'power', KeyQ: 'move', KeyV: 'hint' };
+/** Physical key → sim edge. Q = power (slot F), F = silent power alias, R = move (slot Q). */
+export const EDGE_BY_CODE: Readonly<Record<string, Edge>> = { KeyE: 'interact', KeyQ: 'power', KeyF: 'power', KeyR: 'move', KeyV: 'hint' };
 const CTRL_CODES = new Set(['ControlLeft', 'ControlRight']);
 
 export class MysteryInputController {

@@ -7,6 +7,12 @@
 //             'saw_player'` (sight rule); `catch` → `egg_drop reason 'grab'` (grab rule); `egg_damage cause 'impact'`
 //             → `egg_drop reason 'impact'` (security threshold rule); `ability_used` → `hyde_mode reason 'stunned' |
 //             'lured'`; the second catch → `dnf`.
+//             Joseph Crackstone (enemy contract): `crackstone_sighted {via}` → `crackstone_mode → CHASE` with reason
+//             saw_player (sight rule: distance + your stance; being seen means you were in his line of sight, not hidden —
+//             crouching only shortens his range), sensed_player (proximity rule: within proximityM all around) or scan_hit
+//             (scan rule: in the ring with line of sight, not hidden — crouching does not help); `curse {cast}` →
+//             `curse {hit}` (you stayed in the ring) / `{hit, blocked}` / `{miss}`; his chase ending by `lost_sight` /
+//             `leash` (out of his cursed area) / stun / lure; a landed curse before an `hp_depleted` DNF.
 //   pattern — co-occurrence counts, always worded as correlation ("… a pattern, not proof.").
 //   case    — why the MYSTERY was not solved, from the case rules (caseLogic.verdictFor): a clue of THIS case never
 //             found (named by its case-file title), the wrong suspect, the right suspect with evidence that is not the
@@ -52,6 +58,7 @@ const STANCE_STEP: Record<Stance, string> = {
 };
 
 const SOURCE_TEXT: Record<NoiseSource, string> = {
+  hazard: 'A tripped alarm',
   footstep: 'footsteps',
   egg_drop: 'The egg hitting the ground',
   ability: 'Your ability',
@@ -67,6 +74,12 @@ const PRIORITY: Record<string, number> = {
   heard_footstep_sprint: 65, heard_footstep_walk: 60, heard_footstep_crouch: 58, heard_footstep_idle: 58,
   heard_egg_drop: 64, heard_ability: 60, heard_interact: 55, heard_impact: 62, heard_decoy: 50,
   glimpse: 50, impact_damage: 45, stunned: 40, lured: 40, chase_lost: 30,
+  crack_curse_hit: 87, crack_scan_hit: 69, crack_seen: 68, crack_sensed: 67, crack_curse_blocked: 44, crack_curse_missed: 35,
+  crack_leash: 28, crack_lost_sight: 27, crack_stunned: 38, crack_lured: 38,
+};
+
+const STANCE_NOTE: Record<Stance, string> = {
+  crouch: ' even crouched (crouching only shortens his sight)', sprint: ' sprinting', walk: ' walking', idle: ' standing still',
 };
 
 export function causePriority(code: string): number {
@@ -201,8 +214,26 @@ export function diagnoseCauses(events: readonly StampedEvent[], o: DiagnoseOptio
       out.push(drop
         ? { t: e.t, kind: 'cause', code: 'impact_drop', evidenceSeq: [e.seq, drop.e.seq], text: `${fmtT(e.t)} · A hard collision cost ${e.amount} security → the egg dropped.` }
         : { t: e.t, kind: 'cause', code: 'impact_damage', evidenceSeq: [e.seq], text: `${fmtT(e.t)} · A collision while carrying cost ${e.amount} egg security.` });
+    } else if (e.type === 'crackstone_mode') {
+      crackCause(ev, i, e, init, o, out);
+    } else if (e.type === 'curse' && e.phase !== 'cast') {
+      const cast = findBack(ev, i, 'curse', (c) => c.phase === 'cast', 200);
+      if (!cast) continue;
+      const evidence = [cast.e.seq, e.seq];
+      if (e.phase === 'hit') {
+        out.push(e.blocked
+          ? { t: e.t, kind: 'cause', code: 'crack_curse_blocked', evidenceSeq: evidence, text: `${fmtT(e.t)} · The curse landed on you, but your block absorbed it — no damage.` }
+          : { t: e.t, kind: 'cause', code: 'crack_curse_hit', evidenceSeq: evidence, text: `${fmtT(e.t)} · Crackstone's curse landed: you stayed in the ring → −${e.hpLost} HP and slowed.` });
+      } else {
+        out.push({
+          t: e.t, kind: 'cause', code: 'crack_curse_missed', evidenceSeq: evidence,
+          text: `${fmtT(e.t)} · The curse missed: you were out of the ring, hidden or out of his line of sight when it landed (or he was stopped).`,
+        });
+      }
     } else if (e.type === 'dnf') {
-      const lastCatch = findBack(ev, i, 'catch', () => true, 20);
+      const lastCatch = e.reason === 'hp_depleted'
+        ? findBack(ev, i, 'catch', () => true, 20) ?? findBack(ev, i, 'curse', (c) => c.phase === 'hit', 20)
+        : findBack(ev, i, 'catch', () => true, 20);
       out.push({
         t: e.t, kind: 'cause', code: `dnf_${e.reason}`, evidenceSeq: [...(lastCatch ? [lastCatch.e.seq] : []), e.seq],
         text: e.reason === 'second_catch' ? `${fmtT(e.t)} · The second catch ended the run.` : `${fmtT(e.t)} · HP ran out → the run ended.`,
@@ -210,6 +241,53 @@ export function diagnoseCauses(events: readonly StampedEvent[], o: DiagnoseOptio
     }
   }
   return out;
+}
+
+/** Crackstone mode transitions with a rule cause (chase onset by sight / proximity / scan, chase end, stun / lure). */
+function crackCause(ev: readonly StampedEvent[], i: number, e: Ev<'crackstone_mode'>, init: Stance, o: DiagnoseOptions, out: DiagnosticItem[]): void {
+  const engaged = (m: string) => m === 'CHASE' || m === 'ATTACK';
+  if (e.to === 'CHASE' && e.from !== 'ATTACK' && (e.reason === 'saw_player' || e.reason === 'sensed_player' || e.reason === 'scan_hit')) {
+    const via = e.reason === 'saw_player' ? 'sight' : e.reason === 'sensed_player' ? 'proximity' : 'scan';
+    const seen = findBack(ev, i, 'crackstone_sighted', (x) => x.via === via, 400);
+    if (!seen) return;
+    // a sight / proximity detection must still be current: no crackstone_lost between it and the transition
+    if (via !== 'scan' && ev.slice(seen.i + 1, i).some((x) => x.type === 'crackstone_lost')) return;
+    const st = stanceAt(ev, seen.e.t, init);
+    const d = m1(seen.e.distanceM);
+    if (via === 'sight') {
+      out.push({
+        t: e.t, kind: 'cause', code: 'crack_seen', evidenceSeq: [seen.e.seq, e.seq],
+        text: `${fmtT(e.t)} · Crackstone saw you ${d} away${STANCE_NOTE[st.stance]}, in his line of sight and not hidden → he hunted you.`,
+      });
+    } else if (via === 'proximity') {
+      out.push({
+        t: e.t, kind: 'cause', code: 'crack_sensed', evidenceSeq: [seen.e.seq, e.seq],
+        text: `${fmtT(e.t)} · You came within ${d} of Crackstone — he senses anyone that close, all around → he hunted you.`,
+      });
+    } else {
+      const scan = findBack(ev, i, 'crackstone_scan', (x) => x.phase === 'pulse' && x.hit, 20);
+      out.push({
+        t: e.t, kind: 'cause', code: 'crack_scan_hit', evidenceSeq: [...(scan ? [scan.e.seq] : []), seen.e.seq, e.seq],
+        text: `${fmtT(e.t)} · His scan found you ${d} away: inside the ring, no wall between you, not hidden${st.stance === 'crouch' ? ' (crouching does not stop a scan)' : ''} → he hunted you.`,
+      });
+    }
+    void o;
+    return;
+  }
+  if (engaged(e.from) && !engaged(e.to)) {
+    if (e.reason === 'leash') {
+      out.push({ t: e.t, kind: 'cause', code: 'crack_leash', evidenceSeq: [e.seq], text: `${fmtT(e.t)} · You got out of his cursed area → Crackstone gave up the chase (he never leaves it).` });
+    } else if (e.reason === 'lost_sight') {
+      out.push({ t: e.t, kind: 'cause', code: 'crack_lost_sight', evidenceSeq: [e.seq], text: `${fmtT(e.t)} · Crackstone lost sight of you long enough → he gave up the chase and searched.` });
+    } else if (e.reason === 'stunned' || e.reason === 'lured') {
+      const used = findBack(ev, i, 'ability_used', (u) => u.t === e.t, 10);
+      if (!used) return;
+      out.push({
+        t: e.t, kind: 'cause', code: e.reason === 'stunned' ? 'crack_stunned' : 'crack_lured', evidenceSeq: [used.e.seq, e.seq],
+        text: e.reason === 'stunned' ? `${fmtT(e.t)} · Your ${abilityName(used.e, o.factors)} stopped Crackstone → he lost track of you.` : `${fmtT(e.t)} · Your ${abilityName(used.e, o.factors)} lured Crackstone to a decoy.`,
+      });
+    }
+  }
 }
 
 /** [from, to] stance intervals covering 0..endT. */
@@ -386,7 +464,7 @@ export function diagnoseSession(events: readonly StampedEvent[], o: DiagnoseOpti
 }
 
 /** Stealth causes that count as mistakes (they led to an alert, a catch, an egg drop or the DNF). */
-const MISTAKE = /^(heard_|seen_|glimpse$|catch$|catch_blocked$|grab_drop$|impact_drop$|impact_damage$|dnf_)/;
+const MISTAKE = /^(heard_|seen_|glimpse$|catch$|catch_blocked$|grab_drop$|impact_drop$|impact_damage$|dnf_|crack_seen$|crack_sensed$|crack_scan_hit$|crack_curse_hit$)/;
 
 /**
  * Reasons this run fell short, for the results panel: the case-rule reasons (incorrect deduction, missed clues) plus

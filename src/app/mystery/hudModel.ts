@@ -1,13 +1,19 @@
-// Pure view-model for the mystery HUD (UX_MYSTERY §4 "MysteryHudVM"): turns public run state + the frame's events into
-// a throttled snapshot — threat state (held ≥ 0.5 s), effect chips, Hyde bearing, noise meter + hearing radius, hidden /
-// too-close, objective, clues, egg, F/Q slots, interaction prompt, Thing line, directional sound captions, toasts.
+// Pure view-model for the mystery HUD (UX_OVERHAUL §1–§7): turns public run state + the frame's events into a
+// throttled snapshot — threat state (held ≥ 0.5 s) + DORMANT countdown, effect chips, Hyde bearing, noise meter +
+// hearing radius, hidden / too-close, objective, clues, egg, Q/R ability slots, interaction prompt, ClueCard,
+// ExamineToast, the Thing stack, directional sound captions, toasts and the Odds panel. Joseph Crackstone
+// (UX_ENEMIES): his status plaque, the telegraph banner, the Vitals CURSED row and the ONE threat-edge chevron
+// (Hyde CHASE > Crackstone ATTACK > Crackstone CHASE > Hyde SEARCH) — see ./hud/crackstone.ts.
 import type { EggTier } from '../../game/types.ts';
 import type {
-  AbilityDef, ClueDef, ClueId, EggState, GameEvent, HydeMode, NoiseSource, Objective, RunStatus, Stance,
+  AbilityDef, CaseDef, ClueDef, ClueId, EggState, GameEvent, HydeMode, InvestigationState, NoiseSource, Objective, RunStatus, Stance,
 } from '../../mystery/types.ts';
 import type { Interactable, MysteryRunLike } from './runTypes.ts';
 import { CASES } from '../../mystery/data/cases.ts';
 import type { SpokenLine } from './thingLines.ts';
+import type { OddsView } from './hud/oddsModel.ts';
+import type { StackKind } from './hud/thingStack.ts';
+import type { BannerView, CrackHudView } from './hud/crackstone.ts';
 
 // ------------------------------------------------------------------------------------------------- noise meter
 
@@ -193,6 +199,7 @@ export class ThreatHold {
 // ------------------------------------------------------------------------------------------------- HUD model
 
 export interface AbilityHud {
+  /** Ability SLOT id ('F' power / 'Q' move); the key cap shown is ABILITY_KEY_LABEL[key] (Q / R). */
   key: 'F' | 'Q';
   name: string;
   art: string;
@@ -206,9 +213,29 @@ export interface AbilityHud {
   aimed: boolean;
 }
 
-export interface Toast { id: number; tone: 'danger' | 'lantern' | 'success' | 'info'; headline: string; sub: string | null; icon: 'claw' | 'shieldCheck' | ClueDef['icon'] }
+export interface Toast { id: number; tone: 'danger' | 'lantern' | 'success' | 'info'; headline: string; sub: string | null; icon: 'claw' | 'shieldCheck' | 'lock' | ClueDef['icon'] }
+
+/** TL;DR clue card (UX §5): CLUE FOUND · title · `short` (fallback: deduction) · Meaning (when the case has one). */
+export interface ClueCardView {
+  id: number; clueId: ClueId;
+  /** Card title: ClueDef.shortTitle ?? title (fits the 400 px card). */
+  title: string;
+  /** The full ClueDef.title (screen reader + tooltip). */
+  fullTitle: string;
+  short: string; meaning: string | null; icon: ClueDef['icon'];
+  /** Last 300 ms: flies into its objective pip. */
+  leaving: boolean;
+}
+
+/** Replaces the E prompt in place for 3 s: examine result, empty site, passage / switch. Second line = cyan odds change. */
+export interface ExamineToastView { id: number; kind: 'examine' | 'empty' | 'passage' | 'switch'; head: string | null; text: string; odds: string | null }
+
+export interface StackView { id: string; kind: StackKind; head: string; text: string; why: string | null; basis: 'rule' | 'pattern' | null; priority: number }
 
 export type HydeLevel = 0 | 1 | 2;
+
+/** The one screen-edge chevron (§4 order). `icon` null = the plain chevron (the Hyde). */
+export interface ThreatEdgeView { at: { x: number; y: number; rot: number }; enemy: 'hyde' | 'crack'; icon: 'hat' | 'curse' | null; strong: boolean }
 export interface MysteryHudModel {
   t: number;
   status: RunStatus;
@@ -226,32 +253,49 @@ export interface MysteryHudModel {
     edge: boolean;
     /** Screen-edge point (0..1 of width/height) for the chevron, and its rotation (rad, 0 = pointing up). */
     edgeAt: { x: number; y: number; rot: number } | null;
+    /** The Hyde is in play (before emergence: DORMANT pill with the countdown). */
+    emerged: boolean;
+    emergesInS: number | null;
   };
   objective: Objective;
-  /** The objective sentence for this case (HUD top-left). */
+  /** The short objective sentence (UX §1): "Find 3 clues." … */
   objectiveText: string;
   clues: { found: readonly ClueId[]; total: number; order: ClueId[] };
-  egg: { state: EggState; tier: Exclude<EggTier, 'none'> | null; points: number; security: number };
+  egg: { state: EggState; tier: Exclude<EggTier, 'none'> | null; points: number; security: number; seenLabel: string | null };
   power: AbilityHud;
   move: AbilityHud;
-  prompt: (Interactable & { warning: string | null }) | null;
-  thing: { key: string; text: string; pose: SpokenLine['pose']; why: string | null } | null;
+  prompt: (Interactable & { warning: string | null; standStill: boolean }) | null;
+  examineToast: ExamineToastView | null;
+  clueCard: ClueCardView | null;
+  stack: { log: StackView | null; card: StackView | null };
   captions: Caption[];
   toast: Toast | null;
-  evidenceToast: Toast | null;
   catchFlashSeq: number;
   hintCooldownS: number;
-  /** Phase 4 predictive service (≤ 1 Hz, band held ≥ 2 s); null before the first sample / in the tutorial. */
+  hintLevel: 0 | 1 | 2 | 3;
+  /** Detection risk (pill right segment; ≤ 1 Hz, band held ≥ 2 s); null before emergence / in the tutorial. */
   risk: RiskView | null;
+  odds: OddsView;
+  /** Current area / room name (minimap chip). */
+  areaName: string | null;
+  /** Joseph Crackstone's plaque (null = no Crackstone in this case: the Hyde pill keeps its centred box). */
+  crack: CrackHudView | null;
+  /** Scan / curse telegraph banner (curse > scan), null when none. */
+  banner: BannerView | null;
+  /** Vitals CURSED row: seconds of slow left, null when not cursed. */
+  cursedLeftS: number | null;
+  /** The single threat-edge chevron, null when none applies. */
+  threatEdge: ThreatEdgeView | null;
 }
 
+/** UX §1 objective copy (R5: the egg line never names a site). */
 export const OBJECTIVE_TEXT: Record<Objective, string> = {
-  find_clues: 'Search the ruins for evidence',
-  find_egg: 'Find the hidden egg',
-  retrieve_egg: 'Your egg was dropped — pick it up (E)',
-  deliver_egg: 'Carry the egg to Iago Tower',
-  accuse: 'Name the culprit',
-  done: 'Case closed',
+  find_clues: 'Find 3 clues.',
+  find_egg: 'Find the egg.',
+  retrieve_egg: 'Pick up the egg (E).',
+  deliver_egg: 'Take the egg to Iago Tower.',
+  accuse: 'Name the culprit.',
+  done: 'Case closed.',
 };
 
 export const THREAT: Record<HydeMode, { word: string; icon: 'eyeClosed' | 'ear' | 'search' | 'claw' | 'hourglass' }> = {
@@ -294,7 +338,8 @@ function effectChip(run: MysteryRunLike): { word: string; leftS: number | null }
   const fx = run.effects();
   const h = run.hyde;
   const left = (until: number) => (until > run.t ? Math.round((until - run.t) * 10) / 10 : null);
-  if (fx.hydePetrified) return { word: 'PETRIFIED', leftS: left(h.stunnedUntil) };
+  // a held look is a stun OR a slow (Spirit Shackle pins with a slow): name the look, time whichever effect holds it
+  if (fx.hydePetrified) return { word: run.hydeVisual?.() === 'pin' ? 'PINNED' : 'PETRIFIED', leftS: left(Math.max(h.stunnedUntil, h.slowedUntil)) };
   if (fx.hydeStunned) return { word: 'STUNNED', leftS: left(h.stunnedUntil) };
   if (fx.hydeSlowed) return { word: 'SLOWED', leftS: left(h.slowedUntil) };
   if (fx.hydeDistracted) return { word: 'DISTRACTED', leftS: left(h.distractedUntil) };
@@ -308,17 +353,46 @@ export interface HudExtras {
   shownMode: HydeMode;
   power: AbilityMeta;
   move: AbilityMeta;
-  thing: ThingLineState | null;
   captions: Caption[];
   toast: Toast | null;
-  evidenceToast: Toast | null;
   catchFlashSeq: number;
   hintCooldownS: number;
+  hintLevel?: 0 | 1 | 2 | 3;
   noiseRadiusM: number;
   bearing: { angle: number; distanceM: number } | null;
   risk: RiskView | null;
   /** Renderer projection of the Hyde (preferred over the bearing when available). */
   hydeScreen: { onScreen: boolean; ndcX: number; ndcY: number; behind: boolean } | null;
+  /** Public investigation state (run.investigation()), when the sim has it. */
+  investigation?: InvestigationState | null;
+  hydeEmerged?: boolean;
+  clueCard?: ClueCardView | null;
+  examineToast?: ExamineToastView | null;
+  stack?: { log: StackView | null; card: StackView | null };
+  odds?: OddsView;
+  /** E is held while moving (hold-to-search needs standing still). */
+  standStill?: boolean;
+  areaName?: string | null;
+  crack?: CrackHudView | null;
+  banner?: BannerView | null;
+  cursedLeftS?: number | null;
+  /** Crackstone edge candidates (R4-gated by the loop): his CHASE / ATTACK point and the curse circle cue. */
+  crackEdge?: { chase: { x: number; y: number; rot: number } | null; attack: { x: number; y: number; rot: number } | null; curse: { x: number; y: number; rot: number } | null } | null;
+}
+
+/**
+ * The ONE threat-edge chevron (UX_ENEMIES §4): Hyde CHASE > Crackstone ATTACK (curse circle cue first, else his
+ * position) > Crackstone CHASE > Hyde SEARCH. Crackstone SEARCH never gets a chevron (his position is not public).
+ */
+export function pickThreatEdge(hydeMode: HydeMode, hydeAt: { x: number; y: number; rot: number } | null, crack: HudExtras['crackEdge'] | null | undefined, crackMode: 'CHASE' | 'ATTACK' | null): ThreatEdgeView | null {
+  if (hydeMode === 'CHASE') return hydeAt ? { at: hydeAt, enemy: 'hyde', icon: null, strong: true } : null;
+  if (crackMode === 'ATTACK') {
+    if (crack?.curse) return { at: crack.curse, enemy: 'crack', icon: 'curse', strong: true };
+    if (crack?.attack) return { at: crack.attack, enemy: 'crack', icon: 'curse', strong: true };
+  }
+  if (crackMode === 'CHASE' && crack?.chase) return { at: crack.chase, enemy: 'crack', icon: 'hat', strong: true };
+  if (hydeMode === 'SEARCH' && hydeAt) return { at: hydeAt, enemy: 'hyde', icon: null, strong: false };
+  return null;
 }
 
 /**
@@ -341,16 +415,40 @@ export function threatEdgePoint(
   } else return null;
   const m = Math.max(Math.abs(dx), Math.abs(dy)) || 1;
   const k = 0.46 / m;
-  return { x: 0.5 + dx * k, y: 0.5 + dy * k, rot: Math.atan2(dx, -dy) };
+  const x = 0.5 + dx * k;
+  const y = 0.5 + dy * k;
+  const rot = Math.atan2(dx, -dy);
+  // the bottom-centre column (captions + ThingStack, x 403–963) would hide a "behind you" chevron: move it to the free
+  // gap beside the stack on the side of the shortest turn (still pointing the same way)
+  if (y > 0.85 && x > 0.27 && x < 0.73) return { x: dx < 0 ? 0.25 : 0.75, y: 0.93, rot };
+  return { x, y, rot };
+}
+
+const HIDDEN_ODDS: OddsView = { phase: 'hidden', groups: [], footer: [] };
+
+/** Prompt copy (UX §5): tower warning before deposit, the egg set-down hold. */
+export function promptView(prompt: Interactable | null, found: number, total: number, standStill: boolean): MysteryHudModel['prompt'] {
+  if (!prompt) return null;
+  const label = prompt.kind === 'egg' && /set the egg down/i.test(prompt.label) ? 'Hold E: set the egg down' : prompt.label;
+  return {
+    ...prompt,
+    label,
+    warning: prompt.kind === 'tower' && found < total ? `${found} of ${total} clues — the case will stay unsolved.` : null,
+    standStill: standStill && (prompt.kind === 'clue' || prompt.kind === 'examine' || prompt.kind === 'lever' || prompt.kind === 'practice'),
+  };
 }
 
 export function buildHud(run: MysteryRunLike, x: HudExtras): MysteryHudModel {
   const p = run.player;
   const h = run.hyde;
   const eggKnown = run.egg.state !== 'resting';
-  const prompt = run.interactable();
   const found = run.cluesFound.length;
+  const total = run.caseDef.clues.length;
   const edgeAt = x.shownMode === 'SEARCH' || x.shownMode === 'CHASE' ? threatEdgePoint(x.hydeScreen, x.bearing) : null;
+  const inv = x.investigation ?? null;
+  const world = run.map.world ?? null;
+  const seenLabel = inv?.eggSeenAt ? world?.eggSites.find((s) => s.id === inv.eggSeenAt)?.label ?? null : null;
+  const emerged = x.hydeEmerged ?? true;
   return {
     t: run.t,
     status: run.status,
@@ -365,27 +463,80 @@ export function buildHud(run: MysteryRunLike, x: HudExtras): MysteryHudModel {
       mode: x.shownMode, suspicion: h.suspicion, level: hydeLevel(x.shownMode, h.suspicion, h.grabbing), canSee: h.canSeePlayer,
       effect: effectChip(run), bearing: x.bearing,
       edge: edgeAt !== null, edgeAt,
+      emerged,
+      emergesInS: emerged ? null : inv?.hydeEmergesInS ?? null,
     },
     objective: run.objective(),
     objectiveText: objectiveText(run),
-    clues: { found: run.cluesFound, total: run.caseDef.clues.length, order: run.caseDef.clues.map((c) => c.id) },
-    egg: { state: run.egg.state, tier: eggKnown ? run.egg.tier : null, points: run.egg.points, security: run.egg.security },
+    clues: { found: run.cluesFound, total, order: run.caseDef.clues.map((c) => c.id) },
+    egg: { state: run.egg.state, tier: eggKnown ? run.egg.tier : null, points: run.egg.points, security: run.egg.security, seenLabel },
     power: abilityHud('F', run.powerStatus(), x.power, x.now),
     move: abilityHud('Q', run.moveStatus(), x.move, x.now),
-    prompt: prompt && {
-      ...prompt,
-      warning: prompt.kind === 'tower' && found < run.caseDef.clues.length
-        ? `You have ${found} of ${run.caseDef.clues.length} clues — the case may stay unsolved.`
-        : null,
-    },
-    thing: x.thing ? { key: x.thing.key, text: x.thing.text, pose: x.thing.pose, why: x.thing.why } : null,
+    prompt: promptView(run.interactable(), found, total, !!x.standStill),
+    examineToast: x.examineToast ?? null,
+    clueCard: x.clueCard ?? null,
+    stack: x.stack ?? { log: null, card: null },
     captions: x.captions,
     toast: x.toast,
-    evidenceToast: x.evidenceToast,
     catchFlashSeq: x.catchFlashSeq,
     hintCooldownS: x.hintCooldownS,
+    hintLevel: x.hintLevel ?? 0,
     risk: x.risk,
+    odds: x.odds ?? HIDDEN_ODDS,
+    areaName: x.areaName ?? null,
+    crack: x.crack ?? null,
+    banner: x.banner ?? null,
+    cursedLeftS: x.cursedLeftS ?? null,
+    threatEdge: emerged || x.crack ? pickThreatEdge(emerged ? x.shownMode : 'PATROL', emerged ? edgeAt : null, x.crackEdge, x.crack?.key === 'CHASE' || x.crack?.key === 'ATTACK' ? x.crack.key : null) : null,
   };
+}
+
+/**
+ * Numbers at the precision the HUD actually shows them (by field name). Fields not listed keep 2 decimals; `t` (sim
+ * time) is not drawn. Two models with the same key render the same DOM, so the loop skips the React update.
+ */
+const HUD_KEY_ROUND: Readonly<Record<string, ((v: number) => number) | null>> = {
+  t: null,
+  level: (v) => Math.round(v * 10), // noise meter: 10 segments (Hyde level is an int)
+  suspicion: (v) => Math.round(v * 100), // pill underline %
+  angle: (v) => Math.round(v * 20),
+  distanceM: Math.round,
+  x: (v) => Math.round(v * 400), // edge chevrons: 0.25 % of the screen
+  y: (v) => Math.round(v * 400),
+  rot: (v) => Math.round(v * 50),
+  hp: Math.round,
+  security: Math.round,
+  cooldownLeftS: Math.ceil, // "12 s"
+  activeLeftS: (v) => Math.round(v * 10), // "ACTIVE 3.2 s"
+  leftS: (v) => Math.round(v * 10),
+  emergesInS: Math.ceil, // "0:18"
+  cursedLeftS: (v) => Math.round(v * 10),
+  progress: (v) => Math.round(v * 60), // hold rings
+  radiusM: Math.round,
+  p: (v) => Math.round(v * 100),
+};
+
+/** Large subtrees that are replaced wholesale (the Odds view ≤ 1 Hz) are keyed by identity, not stringified. */
+const OBJ_ID = new WeakMap<object, number>();
+let objSeq = 0;
+const idOf = (o: object): number => {
+  let i = OBJ_ID.get(o);
+  if (i === undefined) {
+    i = ++objSeq;
+    OBJ_ID.set(o, i);
+  }
+  return i;
+};
+
+export function hudRenderKey(m: MysteryHudModel): string {
+  return JSON.stringify(m, function (this: unknown, k: string, v: unknown) {
+    if (k === 'odds' && v && typeof v === 'object') return idOf(v);
+    if (k === 'art') return undefined; // portrait URLs never change during a run
+    if (typeof v !== 'number') return v;
+    const r = HUD_KEY_ROUND[k];
+    if (r === null) return undefined;
+    return r ? r(v) : Math.round(v * 100) / 100;
+  });
 }
 
 /** Clue title for Thing/captions: the case text when available. */
@@ -394,10 +545,18 @@ export function clueTitle(run: MysteryRunLike, id: string): string {
   return c?.title ?? id;
 }
 
-/** The objective line for this run's case (the egg's hiding place differs per case). */
+/** The objective line for this run (UX §1; the clue count comes from the case). */
 export function objectiveText(run: MysteryRunLike): string {
   const o = run.objective();
-  return o === 'find_egg' ? run.caseDef.egg.objective.replace(/\.$/, '') : OBJECTIVE_TEXT[o];
+  if (o === 'find_clues') return `Find ${run.caseDef.clues.length} clues.`;
+  return OBJECTIVE_TEXT[o];
+}
+
+/** The TL;DR card for a found clue: `short` + `meaning` (overhaul copy), falling back to the board deduction. */
+export function clueCardContent(caseDef: CaseDef, id: ClueId): { title: string; fullTitle: string; short: string; meaning: string | null; icon: ClueDef['icon'] } {
+  const c = caseDef.clues.find((x) => x.id === id);
+  if (!c) return { title: id, fullTitle: id, short: '', meaning: null, icon: 'fileText' };
+  return { title: c.shortTitle ?? c.title, fullTitle: c.title, short: c.short ?? c.deduction, meaning: c.meaning ?? null, icon: c.icon };
 }
 
 /** Clue type icon (UX §4: the KIND of evidence, never who), for the clues of every case. */

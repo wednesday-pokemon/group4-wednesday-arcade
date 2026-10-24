@@ -6,8 +6,8 @@ import type {
   PlayerState, RunResult, RunStatus, StampedEvent, StateSnapshot,
 } from '../../mystery/types.ts';
 
-/** 'practice' = the tutorial crate at the pier (sim extension beyond the contract list). */
-export interface Interactable { kind: 'clue' | 'egg' | 'tower' | 'switch' | 'practice'; id: string; label: string; progress: number }
+/** 'practice' = the tutorial crate at the pier; 'examine' / 'lever' = overhaul interactables (ExamineDef / PassageDef). */
+export interface Interactable { kind: 'clue' | 'egg' | 'tower' | 'switch' | 'practice' | 'examine' | 'lever'; id: string; label: string; progress: number }
 
 export interface MysteryRunLike {
   readonly map: MapDef;
@@ -37,7 +37,11 @@ export interface MysteryRunLike {
   // Sim extensions (UX_MYSTERY data asks); optional so the app degrades if one is missing.
   boardAllowed?(): boolean;
   hydeBearing?(): { angle: number; distanceM: number };
+  /** How the Hyde is held by an effect: stone ('petrify') vs spectral shackle ('pin'); null = not held. */
+  hydeVisual?(): 'petrify' | 'pin' | null;
   noiseRadiusM?(): number;
+  // Overhaul (feature-detected in src/app/mystery/hud/publicRun.ts): investigation(), hydeEmerged, hydeVisible(),
+  // playerNav(), world.lineOfSight — PUBLIC state only; `layout` is hidden truth and never read by the app.
 }
 
 export type MysteryRunCtor = new (o: { duo: Duo; seed: string; map?: MapDef; caseDef?: CaseDef; tutorial?: boolean }) => MysteryRunLike;
@@ -53,6 +57,8 @@ export interface MysterySceneLike {
   setShowcase?(on: boolean): void;
   /** Drive the in-world Thing from the caption pose (null = its own idle). */
   setThingPose?(pose: 'stand' | 'wave' | 'point' | 'shush' | 'count1' | 'count2' | 'count3' | 'thumbsUp' | 'tap' | 'fist' | null): void;
+  /** Hint level 3: the 3D Thing scuttles ~4 m toward the target and points for 5.5 s (null dismisses). */
+  pointThing?(target: { x: number; z: number } | null): void;
   /** Where the Hyde is on screen (ThreatEdge chevron). */
   getHydeScreen?(): { onScreen: boolean; ndcX: number; ndcY: number; behind: boolean; distance: number };
 }

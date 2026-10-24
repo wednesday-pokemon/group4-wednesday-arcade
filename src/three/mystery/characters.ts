@@ -452,12 +452,24 @@ export class Companion {
   visual: 'model' | 'art' | 'procedural' = 'procedural';
   modelSource: string | null = null;
   modelError: string | null = null;
-  /** world height of the artwork billboard (m) */
-  static readonly ART_HEIGHT = 1.3;
-  static readonly MODEL_HEIGHT = 1.05;
+  /** world height of the artwork billboard (m) before the per-partner factor: the visible creature is ~0.6 x the player's height */
+  static readonly ART_HEIGHT = 1.1;
+  static readonly MODEL_HEIGHT = 0.88;
   static readonly MODEL_SELF_LIT = 0.35;
+  /** the companion never floats closer than this to the camera lens (m) */
+  static readonly MIN_LENS_M = 2.8;
+  /** per-partner size factor (the player is ~1.7 m): big ghosts a little taller, small ones a little shorter */
+  static readonly SIZE_K: Partial<Record<PokemonId, number>> = {
+    gengar: 0.95, alolan_marowak: 0.85, misdreavus: 0.85, galarian_corsola: 0.85, sableye: 0.85, dusknoir: 1.15, drifblim: 1.0, froslass: 1.0,
+    jellicent: 1.05, chandelure: 0.9, aegislash: 0.95, trevenant: 1.1, dhelmise: 1.0, decidueye: 1.0, dragapult: 1.1, basculegion: 1.1, ceruledge: 1.0, gholdengo: 1.05,
+  };
+  /** size factor applied to the artwork / 3D model of this partner */
+  readonly sizeK: number;
+  /** how far behind the player (in the placement frame) the companion floats; eased so it moves ahead when the lens is close */
+  private backNow = -0.35;
 
   constructor(readonly pokemonId: PokemonId) {
+    this.sizeK = Companion.SIZE_K[pokemonId] ?? 1;
     const idx = Math.max(0, POKEMON.findIndex((p) => p.id === pokemonId));
     const def = POKEMON[idx] ?? POKEMON[0];
     const kind = KINDS[idx % KINDS.length];
@@ -524,7 +536,7 @@ export class Companion {
     if (typeof document === 'undefined') return;
     const ref = POKEMON_MODEL_REFS[this.pokemonId];
     if (!ref) return;
-    loadPokemonModel(ref, { height: Companion.MODEL_HEIGHT, maxWidth: 1.4, anchor: 'center', faceNegZ: true, selfLit: Companion.MODEL_SELF_LIT }).then(
+    loadPokemonModel(ref, { height: Companion.MODEL_HEIGHT * this.sizeK, maxWidth: 1.1 * this.sizeK, anchor: 'center', faceNegZ: true, selfLit: Companion.MODEL_SELF_LIT }).then(
       (m) => {
         if (this.disposedFlag) { m.dispose(); return; }
         this.model = m;
@@ -556,7 +568,7 @@ export class Companion {
         // alphaTest instead of blending: no sorting, no transparent-pass overdraw
         this.artMat = new THREE.SpriteMaterial({ map: tex, alphaTest: 0.5, transparent: false, depthWrite: true, color: 0xe4e8ff, fog: true });
         const sp = new THREE.Sprite(this.artMat);
-        sp.scale.set(Companion.ART_HEIGHT, Companion.ART_HEIGHT, 1);
+        sp.scale.set(Companion.ART_HEIGHT * this.sizeK, Companion.ART_HEIGHT * this.sizeK, 1);
         sp.renderOrder = 6;
         sp.visible = !this.model;
         this.art = sp;
@@ -577,16 +589,32 @@ export class Companion {
   /** 0..1: how see-through the artwork should be (it sits between the lens and the player). */
   setFade(f: number): void { this.fade = f; }
 
-  /** Floats beside-behind the player, eased; `speed` makes it tilt into the move. */
-  update(dt: number, clock: number, px: number, pz: number, yaw: number, speed: number, alertness: number, reduced: boolean): void {
-    const s = Math.sin(yaw), c = Math.cos(yaw);
-    const side = -0.95, back = -0.35;
+  /**
+   * Floats to the player's LEFT and a little behind, eased; `speed` makes it tilt into the move. `placeYaw` is the CAMERA's yaw (the
+   * companion keeps its place on screen however the body turns); `yaw` orients the creature. `lens` is the camera position: the
+   * companion is never allowed within MIN_LENS_M of it — with the lens close behind the player (walls at his back) it slides ahead
+   * of the player along the view direction instead of toward the lens.
+   */
+  update(dt: number, clock: number, px: number, pz: number, yaw: number, speed: number, alertness: number, reduced: boolean, placeYaw: number = yaw, lens: { x: number; z: number } | null = null): void {
+    const s = Math.sin(placeYaw), c = Math.cos(placeYaw);
+    const side = -1.3 - 0.1 * this.sizeK;
+    let wantBack = -0.35;
+    if (lens) {
+      // push forward (along the view direction) until the lens is at least MIN_LENS_M away
+      for (let k = 0; k < 24; k++) {
+        const bx = px + (side * c + wantBack * s), bz = pz + (-side * s + wantBack * c);
+        if (Math.hypot(bx - lens.x, bz - lens.z) >= Companion.MIN_LENS_M) break;
+        wantBack += 0.25;
+      }
+    }
+    this.backNow += (wantBack - this.backNow) * (1 - Math.exp(-(wantBack > this.backNow ? 6 : 3) * dt));
+    const back = this.backNow;
     // yaw-local (right, back) -> world
     const tx = px + (side * c + back * s);
     const tz = pz + (-side * s + back * c);
     const fast = 1 + alertness * 1.6;
     const bob = reduced ? 0 : Math.sin(clock * 2.3 * fast) * (0.12 + 0.05 * alertness);
-    const ty = 1.45 + bob + Math.sin(clock * 0.9) * 0.05 * (reduced ? 0 : 1);
+    const ty = 1.3 + bob * 0.8 + Math.sin(clock * 0.9) * 0.05 * (reduced ? 0 : 1);
     if (!this.seeded) { this.x.set(tx, ty, tz); this.seeded = true; }
     const k = 1 - Math.exp(-5 * dt);
     this.x.x += (tx - this.x.x) * k;
@@ -598,7 +626,7 @@ export class Companion {
     if (this.second) this.second.position.y = 0.05 + Math.sin(clock * 3.1) * 0.05;
     this.flashT = Math.max(0, this.flashT - dt * 2.2);
     if (this.art && this.artMat) {
-      const base = Companion.ART_HEIGHT;
+      const base = Companion.ART_HEIGHT * this.sizeK;
       const pop = reduced ? 1 : 1 + this.flashT * 0.12;
       this.art.scale.set(base * pop, base * pop, 1);
       this.art.position.y = 0.0;

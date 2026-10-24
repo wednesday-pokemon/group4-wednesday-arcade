@@ -1359,7 +1359,7 @@ export function openMysteryBoard(server: FakeSupabaseServer, opts: { pollMs?: nu
 // FINISH_SEED finishes (case solved) with the stealthy bot in EVERY case. The careless DNF is case dependent: push
 // MYSTERY_DNF_CASE onto server.nextMysteryCases together with MYSTERY_DNF_SEED.
 export const MYSTERY_FINISH_SEED = '2'.repeat(32);
-export const MYSTERY_DNF_SEED = 'a'.repeat(32);
+export const MYSTERY_DNF_SEED = '0'.repeat(32);
 export const MYSTERY_DNF_CASE: CaseId = 'poisoned_archive';
 
 /** Deterministic timers for the uploader / heartbeat / finalize back-off (advance() fires what is due, in order). */

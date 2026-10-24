@@ -6,11 +6,14 @@ import type { HidingSpotDef, MapDef, RoomDef, Vec2, WallDef } from '../../myster
 import { TriBuilder, centroid, distToEdges, pointInPoly } from '../action/geom.ts';
 import { Bld, Collector } from './builders.ts';
 import {
-  BOX, CONE4, CONE6, CONE8, CYL6, CYL8, CYL12, ICO0, ICO1, PAL, PRISM, TORUS, distPointSeg, nearestWall, seeded, yawOf,
+  BOX, CONE4, CONE6, CONE8, CYL6, CYL8, ICO0, ICO1, PAL, PRISM, TORUS, distPointSeg, nearestWall, seeded, yawOf,
 } from './common.ts';
 import type { PierRect } from './terrain.ts';
 import { buildGateGeometry } from './walls.ts';
-import { buildCaseDressing } from './caseDressing.ts';
+import { buildCaseDressing, type DressingExtras } from './caseDressing.ts';
+import { themeOf, type Theme } from './look.ts';
+import { pointsOfSites, sitesOf } from './siteProps.ts';
+import { QuadSet } from './wallStyles.ts';
 
 // ------------------------------------------------------------------------------------------------ small model helpers
 function lampPost(b: Bld, x: number, z: number, h = 3.3, color: string = PAL.lantern): void {
@@ -174,27 +177,45 @@ function spaced(samples: WallSample[], spacing: number, avoid: Vec2[], avoidR: n
   return out;
 }
 
-const BOOKS = ['#6b2a3a', '#2e4a6b', '#4a6b3a', '#6b5a2a', '#4a2f6b', '#2a5a5a', '#7a4a2a'];
-
-function bookshelf(b: Bld, s: WallSample): void {
+/** A single freestanding bookshelf against a wall: carcass + one textured spine face (archive research room). */
+function bookshelfTextured(b: Bld, shelf: QuadSet, s: WallSample): void {
   const rot = Math.atan2(-s.tz, s.tx);
   const dep = 0.5, w = 1.9, hh = 2.5;
   const cx = s.x + s.nx * (dep / 2 + 0.02), cz = s.z + s.nz * (dep / 2 + 0.02);
   b.lit.add(BOX, PAL.woodDark, [cx, hh / 2, cz], [0, rot, 0], [w, hh, dep], { gradient: 0.3, jitter: 0.08 });
-  const rows = 4;
-  for (let r = 0; r < rows; r++) {
-    const y = 0.45 + r * 0.55;
-    let off = -w / 2 + 0.12;
-    while (off < w / 2 - 0.2) {
-      const bw = 0.07 + b.rand() * 0.09;
-      const bh = 0.28 + b.rand() * 0.18;
-      const bx = cx + s.tx * (off + bw / 2) + s.nx * (dep / 2 - 0.02);
-      const bz = cz + s.tz * (off + bw / 2) + s.nz * (dep / 2 - 0.02);
-      b.lit.add(BOX, BOOKS[Math.floor(b.rand() * BOOKS.length)], [bx, y + bh / 2, bz], [0, rot, 0], [bw, bh, 0.28], { gradient: 0.1, jitter: 0.1 });
-      off += bw + 0.01;
-    }
-    b.lit.add(BOX, PAL.wood, [cx, y - 0.04, cz], [0, rot, 0], [w - 0.06, 0.06, dep - 0.04], { gradient: 0 });
+  b.lit.add(BOX, '#3a2517', [cx, hh + 0.05, cz], [0, rot, 0], [w + 0.12, 0.1, dep + 0.1], { gradient: 0 });
+  const fx = cx + s.nx * (dep / 2 + 0.012), fz = cz + s.nz * (dep / 2 + 0.012);
+  const y0 = 0.15, y1 = hh - 0.1;
+  // seen from the room (looking along -normal) the right-hand direction is (nz, -nx)
+  const rx = s.nz, rz = -s.nx;
+  const ax = fx - rx * (w / 2 - 0.06), az = fz - rz * (w / 2 - 0.06), bx = fx + rx * (w / 2 - 0.06), bz = fz + rz * (w / 2 - 0.06);
+  const u0 = ((s.x * 7.3 + s.z * 3.1) % 1 + 1) % 1;
+  shelf.add([ax, y0, az], [bx, y0, bz], [bx, y1, bz], [ax, y1, az], [s.nx, 0, s.nz], (w - 0.12) / 1.9, (y1 - y0) / 2.2, u0, 1);
+}
+
+function machineUnit(b: Bld, s: WallSample): void {
+  const rot = Math.atan2(-s.tz, s.tx);
+  const cx = s.x + s.nx * 0.55, cz = s.z + s.nz * 0.55;
+  b.lit.add(BOX, '#3a3f58', [cx, 0.8, cz], [0, rot, 0], [1.5, 1.6, 0.9], { gradient: 0.3, jitter: 0.06 });
+  b.lit.add(BOX, '#2a2f48', [cx, 1.65, cz], [0, rot, 0], [1.6, 0.1, 1.0], { gradient: 0 });
+  const fx = cx + s.nx * 0.47, fz = cz + s.nz * 0.47;
+  b.lit.add(CYL8, '#6a6f8a', [fx, 1.0, fz], [Math.PI / 2, rot, 0], [0.3, 0.1, 0.3], { gradient: 0.1 });
+  b.lit.add(CYL8, '#8a6a3a', [fx + s.tx * 0.5, 0.7, fz + s.tz * 0.5], [Math.PI / 2, rot, 0], [0.16, 0.08, 0.16], { gradient: 0.1 });
+  b.em.add(ICO0, '#ffb04a', [fx - s.tx * 0.5, 1.3, fz - s.tz * 0.5], [0, 0, 0], 0.045, { gradient: 0, jitter: 0 });
+  b.lit.add(CYL6, '#8a6a3a', [cx + s.tx * 0.6, 2.1, cz + s.tz * 0.6], [0, 0, 0], [0.07, 0.9, 0.07], { gradient: 0 });
+}
+
+function serverRack(b: Bld, s: WallSample): void {
+  const rot = Math.atan2(-s.tz, s.tx);
+  const cx = s.x + s.nx * 0.42, cz = s.z + s.nz * 0.42;
+  b.lit.add(BOX, '#1b1f30', [cx, 1.05, cz], [0, rot, 0], [1.1, 2.1, 0.7], { gradient: 0.25 });
+  const fx = cx + s.nx * 0.36, fz = cz + s.nz * 0.36;
+  for (let i = 0; i < 7; i++) {
+    const y = 0.35 + i * 0.26;
+    b.lit.add(BOX, '#10152e', [fx, y, fz], [0, rot, 0], [0.96, 0.2, 0.02], { gradient: 0, jitter: 0 });
+    for (let k = 0; k < 4; k++) b.em.add(BOX, (i + k) % 5 === 0 ? '#ff5a4a' : (i + k) % 3 === 0 ? '#ffd24a' : '#4fe6f2', [fx + s.tx * (-0.36 + k * 0.1) + s.nx * 0.012, y, fz + s.tz * (-0.36 + k * 0.1) + s.nz * 0.012], [0, rot, 0], [0.04, 0.04, 0.01], { gradient: 0, jitter: 0 });
   }
+  b.glows.push({ x: fx + s.nx * 0.2, y: 1.3, z: fz + s.nz * 0.2, size: 2.4, color: '#4fe6f2', alpha: 0.32, flicker: 0.5, fogFloor: 0.05 });
 }
 
 // -------------------------------------------------------------------------------------------------- roofs
@@ -416,6 +437,11 @@ export interface DressingBuild {
   tower: { x: number; z: number; r: number };
   gate: { wall: WallDef; posts: THREE.BufferGeometry | null; bars: THREE.BufferGeometry | null } | null;
   swtch: { x: number; z: number; yaw: number } | null;
+  /** where the per-case pieces (site furniture, examines, lever, beacons) ended up */
+  extras: DressingExtras;
+  /** textured bookshelf faces (archive) */
+  shelf: QuadSet;
+  theme: Theme;
 }
 
 /** The dock pocket is planked in terrain.ts, so no ground is carved away any more. */
@@ -441,7 +467,10 @@ function ringStrip(tb: TriBuilder, x: number, z: number, r0: number, r1: number,
 export function buildDressing(map: MapDef, low: boolean): DressingBuild {
   const col = new Collector();
   const gateId = map.powerSwitch?.gateWallId;
-  const skip = new Set<string>(gateId ? [gateId] : []);
+  const passageId = map.world?.passage?.wallId;
+  const skip = new Set<string>([...(gateId ? [gateId] : []), ...(passageId ? [passageId] : [])]);
+  const theme = themeOf(map);
+  const shelf = new QuadSet();
   const piers = pierRects(map);
   const poolTb = new TriBuilder();
   const warm: [number, number, number] = [0.13, 0.08, 0.03];
@@ -469,7 +498,7 @@ export function buildDressing(map: MapDef, low: boolean): DressingBuild {
       case 'greenhouse': {
         const gs = Math.sin(lm.yaw), gc = Math.cos(lm.yaw);
         const toLocal = (p: Vec2): Vec2 => ({ x: ((p.x - lm.x) * gc - (p.z - lm.z) * gs) / sc, z: ((p.x - lm.x) * gs + (p.z - lm.z) * gc) / sc });
-        greenhouse(b, [...map.clues.map((c) => ({ x: c.x, z: c.z })), map.eggSpawn].map(toLocal));
+        greenhouse(b, pointsOfSites(map).map(toLocal));
         break;
       }
       case 'lamp':
@@ -507,12 +536,16 @@ export function buildDressing(map: MapDef, low: boolean): DressingBuild {
   }
 
   // ---- room interiors
-  const avoid: Vec2[] = [...map.clues.map((c) => ({ x: c.x, z: c.z })), map.eggSpawn, ...map.hidingSpots.map((h) => ({ x: h.x, z: h.z }))];
+  const avoid: Vec2[] = [...pointsOfSites(map), ...(map.world?.examines ?? []).map((e) => ({ x: e.x, z: e.z })), ...map.hidingSpots.map((h) => ({ x: h.x, z: h.z }))];
   for (const room of map.rooms) {
     const b = new Bld(seeded('room:' + room.id));
     const samples = roomWallSamples(map, room, 0.5, skip);
     if (room.id === 'research_room') {
-      for (const s of spaced(samples, 2.5, avoid, 2.0, low ? 4 : 9)) bookshelf(b, s);
+      for (const s of spaced(samples, 2.5, avoid, 2.0, low ? 4 : 9)) {
+        if (theme === 'archive') bookshelfTextured(b, shelf, s);
+        else if (theme === 'crypt') machineUnit(b, s);
+        else serverRack(b, s);
+      }
       for (const s of spaced(samples.filter((q) => q.h >= 3), 4.2, [], 0, 6)) {
         // windows on the outside faces: glowing lancets
         const wx = s.x - s.nx * (s.thick + 0.03), wz = s.z - s.nz * (s.thick + 0.03);
@@ -552,25 +585,13 @@ export function buildDressing(map: MapDef, low: boolean): DressingBuild {
     col.add(b.finish(0, 0, 0, 1));
   }
 
-  // ---- per-case set dressing (decoration only; keyed off the clue ids in the map)
-  {
-    const b = new Bld(seeded('case:' + map.id));
-    buildCaseDressing(map, b, low);
-    col.add(b.finish(0, 0, 0, 1));
-  }
+  // ---- per-case set dressing (decoration only; built from the case's world, never from the session's hidden layout)
+  const extras = buildCaseDressing(map, col, low, theme);
 
-  // ---- egg nest + rune circle at the spawn
+  // ---- rune circle around every egg site that is a nest (all candidates look alike, so the circle is not a giveaway)
   const shrineTb = new TriBuilder();
-  {
-    const b = new Bld(seeded('nest'));
-    const e = map.eggSpawn;
-    b.lit.add(CYL12, PAL.stoneDark, [e.x, 0.12, e.z], [0, 0, 0], [0.95, 0.24, 0.95], { gradient: 0.1 });
-    b.lit.add(CYL12, '#2c3260', [e.x, 0.27, e.z], [0, 0, 0], [0.78, 0.1, 0.78], { gradient: 0 });
-    for (let i = 0; i < 9; i++) {
-      const a = (i / 9) * Math.PI * 2;
-      b.lit.add(CONE4, '#3a2a20', [e.x + Math.cos(a) * 0.62, 0.45, e.z + Math.sin(a) * 0.62], [Math.sin(a) * 0.7, 0, -Math.cos(a) * 0.7], [0.05, 0.55, 0.05], { gradient: 0 });
-    }
-    col.add(b.finish(0, 0, 0, 1));
+  for (const e of sitesOf(map).egg) {
+    if (e.prop !== 'nest') continue;
     ringStrip(shrineTb, e.x, e.z, 2.35, 2.5, 0.075, [0.12, 0.36, 0.42]);
     ringStrip(shrineTb, e.x, e.z, 1.35, 1.42, 0.075, [0.1, 0.28, 0.34]);
     for (let i = 0; i < 8; i++) {
@@ -619,7 +640,7 @@ export function buildDressing(map: MapDef, low: boolean): DressingBuild {
   const swtch = map.powerSwitch ? { x: map.powerSwitch.x, z: map.powerSwitch.z, yaw: switchYaw(map) } : null;
 
   const roofs = buildRoofs(map, ['research_room', 'egg_chamber'], skip);
-  return { col, hide: hideCol, roofs, pools: poolTb.build(false), runes: rt.build(false), shrineRunes: shrineTb.build(false), piers, thing, tower: { x: map.tower.x, z: map.tower.z, r: map.tower.radius }, gate, swtch };
+  return { col, hide: hideCol, roofs, pools: poolTb.build(false), runes: rt.build(false), shrineRunes: shrineTb.build(false), piers, thing, tower: { x: map.tower.x, z: map.tower.z, r: map.tower.radius }, gate, swtch, extras, shelf, theme };
 }
 
 function switchYaw(map: MapDef): number {

@@ -3,7 +3,7 @@
 import { isStationId } from '../../game/index.ts';
 import type { StationId } from '../../game/index.ts';
 import { eventFromRow } from '../../mystery/analytics/telemetry.ts';
-import type { SessionRecord } from '../../mystery/analytics/types.ts';
+import { FORECAST_TARGETS, type ForecastTarget, type SessionRecord } from '../../mystery/analytics/types.ts';
 import type {
   CaseId, ClueId, DnfReason, Duo, DuoCard, DuoOffer, EggState, NightshadeId, RunResult, SuspectId, Verdict,
 } from '../../mystery/types.ts';
@@ -102,6 +102,9 @@ export interface MysteryAppendAck {
   progress: MysteryProgressSummary;
   forecastsInserted: number;
   recommendationsUpserted: number;
+  /** Analytics records the server dropped as invalid (best-effort analytics; the run stays verified). */
+  forecastsDropped: number;
+  recommendationsDropped: number;
 }
 
 /** The case's answer, released by mystery-finalize only after the run (and its accusation) is stored. */
@@ -297,6 +300,8 @@ export function parseAppendAck(raw: unknown): MysteryAppendAck {
     progress: p as unknown as MysteryProgressSummary,
     forecastsInserted: Number(a.forecastsInserted ?? 0),
     recommendationsUpserted: Number(a.recommendationsUpserted ?? 0),
+    forecastsDropped: Number(a.forecastsDropped ?? 0) || 0,
+    recommendationsDropped: Number(a.recommendationsDropped ?? 0) || 0,
   };
 }
 
@@ -538,9 +543,24 @@ export const SIGNAL_LOST_MS = 15_000;
 export const HEARTBEAT_PHASES = ['idle', 'name', 'duo', 'tutorial', 'investigating', 'carrying', 'accusing', 'results', 'dnf'] as const;
 export type HeartbeatPhase = (typeof HEARTBEAT_PHASES)[number];
 const HYDE_MODES = ['PATROL', 'INVESTIGATE_SOUND', 'SEARCH', 'CHASE', 'COOLDOWN'] as const;
+/** Joseph Crackstone's modes (types.ts CrackstoneMode) — enum only on the wire, never his position. */
+const CRACKSTONE_MODES = ['PATROL', 'INVESTIGATE', 'CHASE', 'ATTACK', 'SEARCH', 'RETURN'] as const;
 const EGG_STATES = ['resting', 'carried', 'dropped', 'delivered'] as const;
 const EGG_TIERS = ['common', 'rare', 'legendary'] as const;
 const SYNC_STATES = ['idle', 'live', 'offline', 'unverified', 'closed', 'reset'] as const;
+const OBJECTIVES = ['find_clues', 'find_egg', 'retrieve_egg', 'deliver_egg', 'accuse', 'done'] as const;
+const THING_KINDS = ['log', 'diagnostic', 'advice'] as const;
+/** Ids / codes travel as short snake-case tokens only (never free text): the board renders fixed copy for them. */
+const TOKEN_RE = /^[a-z][a-z0-9_]{0,39}$/;
+
+/** A probability for one named candidate (egg site / Hyde zone id of the station's case world). */
+export interface HeartbeatChance { id: string; p: number }
+
+/**
+ * The newest Thing item as a CODE (message code / advice action) + optional `ref` (ability id, site / area id) — the board
+ * maps it to fixed copy (analytics `thingItemText`). Free text never travels on the spoofable broadcast.
+ */
+export interface HeartbeatThing { kind: (typeof THING_KINDS)[number]; code: string; ref: string | null; followed: boolean | null }
 
 export interface MysteryHeartbeat {
   v: 1;
@@ -557,6 +577,33 @@ export interface MysteryHeartbeat {
   eggSecurity: number | null;
   activeTimeS: number | null;
   sync: (typeof SYNC_STATES)[number];
+  // ---- overhaul additions (all optional on the wire; null when absent — older stations keep working)
+  objective: (typeof OBJECTIVES)[number] | null;
+  cluesTotal: number | null;
+  chases: number | null;
+  escapes: number | null;
+  hydeEmerged: boolean | null;
+  /** Most likely Hyde zone (after emergence, zone filter). */
+  hydeZone: HeartbeatChance | null;
+  /** Most likely egg site (Bayesian posterior) while the egg is still uncertain (never once located: spectators). */
+  eggSite: HeartbeatChance | null;
+  /** The visitor located the egg (seen / certain). The board shows "located" — never the site. */
+  eggLocated?: boolean | null;
+  extraction: number | null;
+  extractionSource: 'ml' | 'rule_based' | null;
+  thing: HeartbeatThing | null;
+  // ---- enemy contract (UX_ENEMIES §8; optional on the wire — older stations send none)
+  /** The station's case has Joseph Crackstone (false = no second enemy). */
+  crackstonePresent?: boolean | null;
+  /** His public mode (HUD pill); null when absent / not playing. */
+  crackstoneMode?: (typeof CRACKSTONE_MODES)[number] | null;
+  /** He is chasing or cursing the visitor right now ("HUNTED" chip). */
+  crackstoneChase?: boolean | null;
+  /** Crackstone encounters (chase onsets) / escapes this visit — "Chases H2 · C1". */
+  crackstoneChases?: number | null;
+  crackstoneEscapes?: number | null;
+  /** Rule-based P(he sees the visitor's spot within 10 s). */
+  crackstoneRisk?: number | null;
 }
 
 function oneOf<T extends string>(list: readonly T[], v: unknown): T | null {
@@ -567,6 +614,27 @@ function clamp(v: unknown, lo: number, hi: number, digits = 1): number | null {
   if (typeof v !== 'number' || !Number.isFinite(v)) return null;
   const f = 10 ** digits;
   return Math.round(Math.min(hi, Math.max(lo, v)) * f) / f;
+}
+
+function token(v: unknown): string | null {
+  return typeof v === 'string' && TOKEN_RE.test(v) ? v : null;
+}
+
+function chance(v: unknown): HeartbeatChance | null {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const id = token(o.id);
+  const p = clamp(o.p, 0, 1, 3);
+  return id && p !== null ? { id, p } : null;
+}
+
+function thingOf(v: unknown): HeartbeatThing | null {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const kind = oneOf(THING_KINDS, o.kind);
+  const code = token(o.code);
+  if (!kind || !code) return null;
+  return { kind, code, ref: token(o.ref), followed: typeof o.followed === 'boolean' ? o.followed : null };
 }
 
 /** Strict parse of a received heartbeat; anything malformed is dropped (null). */
@@ -591,6 +659,24 @@ export function parseHeartbeat(raw: unknown): MysteryHeartbeat | null {
     eggSecurity: clamp(h.eggSecurity, 0, 100, 0),
     activeTimeS: clamp(h.activeTimeS, 0, 14_400, 1),
     sync: oneOf(SYNC_STATES, h.sync) ?? 'idle',
+    objective: oneOf(OBJECTIVES, h.objective),
+    cluesTotal: clamp(h.cluesTotal, 1, 9, 0),
+    chases: clamp(h.chases, 0, 999, 0),
+    escapes: clamp(h.escapes, 0, 999, 0),
+    hydeEmerged: typeof h.hydeEmerged === 'boolean' ? h.hydeEmerged : null,
+    hydeZone: chance(h.hydeZone),
+    // defence in depth: a located egg never comes with a site, and a near-certain "estimate" is not shown either
+    eggSite: h.eggLocated === true ? null : (() => { const c = chance(h.eggSite); return c && c.p < 0.95 ? c : null; })(),
+    eggLocated: typeof h.eggLocated === 'boolean' ? h.eggLocated : null,
+    extraction: clamp(h.extraction, 0, 1, 3),
+    extractionSource: h.extractionSource === 'ml' || h.extractionSource === 'rule_based' ? h.extractionSource : null,
+    thing: thingOf(h.thing),
+    crackstonePresent: typeof h.crackstonePresent === 'boolean' ? h.crackstonePresent : null,
+    crackstoneMode: oneOf(CRACKSTONE_MODES, h.crackstoneMode),
+    crackstoneChase: typeof h.crackstoneChase === 'boolean' ? h.crackstoneChase : null,
+    crackstoneChases: clamp(h.crackstoneChases, 0, 999, 0),
+    crackstoneEscapes: clamp(h.crackstoneEscapes, 0, 999, 0),
+    crackstoneRisk: clamp(h.crackstoneRisk, 0, 1, 2),
   };
 }
 
@@ -638,9 +724,11 @@ export function recordFromRows(r: MysteryResultRow, detail: SessionDetail | null
     if (detail.offered.length > 0) {
       record.offered = detail.offered.map((o) => ({ characterId: o.character_id as NightshadeId, pokemonId: o.pokemon_id as PokemonId }));
     }
-    record.forecasts = detail.forecasts.map((f) => ({
-      t: Number(f.t), target: f.target as 'detection_15s', value: Number(f.value), modelLabel: f.model_label === 'ml' ? 'ml' : 'rule_based',
-    }));
+    record.forecasts = detail.forecasts
+      .filter((f) => (FORECAST_TARGETS as readonly string[]).includes(f.target))
+      .map((f) => ({
+        t: Number(f.t), target: f.target as ForecastTarget, value: Number(f.value), modelLabel: f.model_label === 'ml' ? 'ml' : 'rule_based',
+      }));
     record.recommendations = detail.recommendations.map((x) => ({ action: x.action, accepted: x.accepted, outcome: x.outcome }));
   }
   return record;

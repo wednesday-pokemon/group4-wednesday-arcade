@@ -2,9 +2,12 @@
 // Thing's subtitled lines (plan §9, UX spec §3–§6). Game-designer owned.
 //
 // Rules: every line ≤ 60 chars where possible (hard cap 90) — the exact Stay Silent sentence is the only exception
-// to the 60 budget. Thing NEVER names or hints at the culprit, and never names a suspect at all before the verdict.
-// Templates use {placeholders} filled by formatThingLine(): {character} = NightshadeDef.shortName,
-// {pokemon} = PokemonPartnerDef.name, {power} = power name, {move} = move name, {n} = a number.
+// to the 60 budget. Overhaul budgets (UX_OVERHAUL): log-style event lines ≤ 34 chars, advice-style lines ≤ 52 chars
+// after filling placeholders. Thing NEVER names or hints at the culprit, and never names a suspect at all before the
+// verdict. Templates use {placeholders} filled by formatThingLine(): {character} = NightshadeDef.shortName,
+// {pokemon} = PokemonPartnerDef.name, {power} = power name, {move} = move name, {n} = a number, {area} = AreaDef.name
+// (≤ 18), {direction} = compass word (≤ 10, e.g. "north-east"), {label} = SiteDef.label (≤ 20).
+// Keys: the character power is pressed with Q, the Pokémon move with R (slot ids stay 'F' / 'Q' in data).
 import type { DnfReason, HydeMode, Verdict } from '../types.ts';
 
 export type ThingPose = 'stand' | 'wave' | 'point' | 'shush' | 'count1' | 'count2' | 'count3' | 'thumbsUp' | 'tap' | 'fist';
@@ -39,6 +42,29 @@ export interface ThingScript {
   dnf: Record<DnfReason, ThingLine>;
   hints: ThingLine[];
   idle: ThingLine;
+  // ---- overhaul (2026-10-23)
+  /** Hyde emergence: `soon` is advice-style ({n} = seconds left), the rest log-style. */
+  hyde: { soon: ThingLine; emerged: ThingLine; calm: ThingLine };
+  /** A candidate site seen empty (clue / egg). */
+  site: { clueEmpty: ThingLine; eggEmpty: ThingLine };
+  trace: { found: ThingLine };
+  /** `intro` before the result text; `noTrace` after an examine that gives no egg trace. */
+  examine: { intro: ThingLine; noTrace: ThingLine };
+  passage: { opened: ThingLine };
+  hazard: Record<'glass' | 'boards' | 'rubble' | 'puddle' | 'searchlight', ThingLine>;
+  /** V hints, one level per press for the same target: 1 area → 2 direction → 3 most likely spot (advice-style). */
+  progressiveHints: Record<1 | 2 | 3, ThingLine>;
+  // ---- enemy contract (2026-10-24): Joseph Crackstone
+  /**
+   * `area` / `deaf` are advice-style (said at the start of play; {area} = CrackstoneDef.areaName ≤ 15 chars); the rest
+   * are log-style event lines (≤ 34 chars): telegraphs (`scanWarn`, `curseWarn`), detection (`glimpse` = INVESTIGATE,
+   * `seen` / `sensed` / `scanHit` = CHASE by sight / proximity / scan), outcomes and his mode changes.
+   */
+  crackstone: Record<
+    | 'area' | 'deaf' | 'scanWarn' | 'curseWarn' | 'glimpse' | 'seen' | 'sensed' | 'scanHit' | 'escaped'
+    | 'curseHit' | 'curseBlocked' | 'curseDodged' | 'gaveUp' | 'returned' | 'deferred',
+    ThingLine
+  >;
 }
 
 export const THING: ThingScript = {
@@ -58,19 +84,20 @@ export const THING: ThingScript = {
     { step: 'crouch', keys: 'C', ...line('tut_crouch', 'shush', 'C to crouch. Slow and quiet — heard within 2 m.') },
     { step: 'sprint', keys: 'Shift', ...line('tut_sprint', 'tap', 'Shift sprints. Fast, but heard within 13 m.') },
     { step: 'interact', keys: 'E', ...line('tut_interact', 'point', 'E searches. Try the crate — and stand still.') },
-    { step: 'power', keys: 'F', ...line('tut_power', 'tap', 'F uses {power}. Watch for the LOUD tag.') },
-    { step: 'move_q', keys: 'Q', ...line('tut_move_q', 'tap', 'Q calls {move}. Each has a cooldown.') },
+    { step: 'power', keys: 'Q', ...line('tut_power', 'tap', 'Q uses {power}. Watch for the LOUD tag.') },
+    { step: 'move_q', keys: 'R', ...line('tut_move_q', 'tap', 'R calls {move}. Each has a cooldown.') },
     { step: 'board', keys: 'Tab', ...line('tut_board', 'count3', 'Tab opens your evidence board.') },
     { step: 'hint', keys: 'V', ...line('tut_hint', 'tap', "V asks me for a hint. I won't name names.") },
     { step: 'go', keys: '', ...line('tut_go', 'point', 'Sprinting is loud. Tab: evidence. V: ask me. Go.') },
   ],
 
   objective: {
-    find_clues: line('obj_clues', 'point', 'Three clues hide in the ruins. Start looking.'),
-    find_egg: line('obj_egg', 'point', 'Now find the egg. Follow the case file.'),
-    retrieve_egg: line('obj_retrieve', 'point', 'Pick the egg back up with E.'),
-    deliver_egg: line('obj_deliver', 'point', 'Carry the egg to Iago Tower, north.'),
-    accuse: line('obj_accuse', 'point', 'Name the one who released the Hyde.'),
+    // Same wording as the HUD objective (UX_OVERHAUL); the accuse line avoids verdict words on purpose.
+    find_clues: line('obj_clues', 'point', 'Find 3 clues.'),
+    find_egg: line('obj_egg', 'point', 'Find the egg.'),
+    retrieve_egg: line('obj_retrieve', 'point', 'Pick up the egg (E).'),
+    deliver_egg: line('obj_deliver', 'point', 'Take the egg to Iago Tower.'),
+    accuse: line('obj_accuse', 'point', 'Name who released the Hyde.'),
   },
 
   search: {
@@ -158,12 +185,59 @@ export const THING: ThingScript = {
     line('hint_crouch', 'shush', 'Crouch near the Hyde. Walking is heard at 7 m.'),
     line('hint_hide', 'shush', 'Hiding spots hide you. It can still hear you.'),
     line('hint_walls', 'tap', 'Walls muffle sound. Keep stone between you.'),
-    line('hint_where', 'point', 'Three clues per case. The board shows where.'),
+    line('hint_where', 'point', 'Tab shows where clues may be.'),
     line('hint_board', 'tap', 'On the board: who is explained, who is not?'),
     line('hint_patrol', 'point', 'It walks a loop. Wait for it to pass.'),
   ],
 
   idle: line('idle_tap', 'tap', 'Still here? The Hyde certainly is.'),
+
+  // ---- overhaul lines (log-style ≤ 34 chars, advice-style ≤ 52 chars filled)
+  hyde: {
+    soon: line('hyde_soon', 'shush', 'The Hyde wakes in {n} s. Get under cover.'), // advice, 40 filled
+    emerged: line('hyde_emerged', 'fist', 'The Hyde is loose. Stay quiet.'), // 30
+    calm: line('hyde_calm', 'tap', 'It gave up. Catch your breath.'), // 30
+  },
+  site: {
+    clueEmpty: line('site_clue_empty', 'tap', 'Nothing here. Cross it off.'), // 27
+    eggEmpty: line('site_egg_empty', 'tap', 'No egg here. Map updated.'), // 25
+  },
+  trace: { found: line('trace_found', 'point', 'An egg trace! Map updated.') }, // 26
+  examine: {
+    intro: line('examine_intro', 'point', 'Let me look closer...'), // 21
+    noTrace: line('examine_no_trace', 'tap', 'Strange. Remember that.'), // 23
+  },
+  passage: { opened: line('passage_opened', 'thumbsUp', 'A hidden way opens!') }, // 19
+  hazard: {
+    glass: line('hazard_glass', 'shush', 'Glass! Crouch to cross.'), // 23
+    boards: line('hazard_boards', 'shush', 'Creaky boards. Crouch.'), // 22
+    rubble: line('hazard_rubble', 'shush', 'Loose rubble. Crouch.'), // 21
+    puddle: line('hazard_puddle', 'shush', 'Splash! Crouch in water.'), // 24
+    searchlight: line('hazard_searchlight', 'fist', 'Spotted by the light! Hide.'), // 27
+  },
+  progressiveHints: {
+    1: line('hint_lvl1_area', 'point', 'Search the {area} next.'), // ≤ 35 filled
+    2: line('hint_lvl2_direction', 'point', 'Head {direction}, toward the {area}.'), // ≤ 48 filled
+    3: line('hint_lvl3_spot', 'point', 'Most likely spot: the {label}.'), // ≤ 50 filled
+  },
+  // ---- Joseph Crackstone (advice-style ≤ 52 filled, log-style ≤ 34). Never a suspect; plain words.
+  crackstone: {
+    area: line('crackstone_area', 'point', 'Crackstone haunts the {area}. Stay unseen.'), // ≤ 50 filled
+    deaf: line('crackstone_deaf', 'tap', "He can't hear you, but he sees far. Use walls."), // 46
+    scanWarn: line('crackstone_scan_warn', 'fist', 'A scan! Get behind a wall or hide!'), // 34
+    curseWarn: line('crackstone_curse_warn', 'fist', 'Curse circle — step out of it!'), // 30
+    glimpse: line('crackstone_glimpse', 'shush', 'Crackstone noticed you. Hide!'), // 29
+    seen: line('crackstone_seen', 'fist', 'Crackstone saw you! Hide or run!'), // 32
+    sensed: line('crackstone_sensed', 'fist', 'Too close! Crackstone sensed you.'), // 33
+    scanHit: line('crackstone_scan_hit', 'fist', 'The scan found you! Run or hide!'), // 32
+    escaped: line('crackstone_escaped', 'thumbsUp', 'You lost Crackstone. Stay unseen.'), // 33
+    curseHit: line('crackstone_curse_hit', 'fist', 'Cursed! Slowed for a moment.'), // 28
+    curseBlocked: line('crackstone_curse_blocked', 'thumbsUp', 'Shield held. The curse fizzled.'), // 31
+    curseDodged: line('crackstone_curse_dodged', 'thumbsUp', 'Curse dodged! Keep moving.'), // 26
+    gaveUp: line('crackstone_gave_up', 'tap', 'Crackstone gave up the hunt.'), // 28
+    returned: line('crackstone_returned', 'tap', 'Crackstone is back on his rounds.'), // 33
+    deferred: line('crackstone_deferred', 'tap', 'Crackstone backs off for now.'), // 29
+  },
 };
 
 /** Fill {placeholders}; unknown placeholders are left untouched so a missing value is visible in tests. */

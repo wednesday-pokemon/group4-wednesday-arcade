@@ -11,6 +11,7 @@ Game-designer document. Sources: `docs/v3.1/GAME_PLAN_v3_1.md` (source of truth)
 | `cases.ts` | `CASES` (three cases, public), `isCaseId`, `caseById`, `ROOM_LABELS`, `CASE_DISCLAIMER` — answers in `solutions.ts` (`CASE_SOLUTIONS`) |
 | `thing.ts` | `THING`, `THING_STAY_SILENT`, `formatThingLine`, `ThingPose`, `ThingLine`, `TutorialLine` |
 | `island.ts` | `buildIsland()`, `PRACTICE_CRATE`, `SHORTCUT_GATE_WALL_ID` |
+| `caseWorlds.ts` | `CASE_WORLDS`, `caseWorld()` — per-case layout, candidate sites, spawns, zones, examines, passage, hazards (§10) |
 
 **Honesty notes.** Every number is a proposed default for playtesting. It is not validated balance. Distances and
 times below are computed from the map geometry. They are not playtest measurements. Move legality is tracked in
@@ -482,3 +483,356 @@ Common egg at 200 s scores −100. Negative scores are allowed by the rules.
 8. **Thing line types:** `ThingLine` and `ThingPose` live in `thing.ts`. Move them into `types.ts` if the frontend
    prefers to import from there.
 9. **Clue labels:** each `ClueDef` carries its own `interactLabel` (case system v1; `CLUE_INTERACT_LABELS` is retired).
+
+---
+
+## 10. Overhaul (2026-10-23): case worlds, candidate sites, Hyde emergence
+
+Data: `src/mystery/data/caseWorlds.ts` (`CASE_WORLDS`, `caseWorld()`), contract `docs/overhaul/OVERHAUL_CONTRACT.md`.
+Content version **2** for all cases (`CaseDef.version` = `CaseSolution.version` = 2; answers unchanged). §2.4 and
+the §4b position columns are now only the *default* layout (`buildIsland()` uses the first site of each group).
+Everything below is computed from geometry by hand, not measured in play or by the bot (no shell this pass).
+
+### 10.1 What every case adds to the shared island
+
+| | Case 01 Poisoned Archive (`archive`) | Case 02 Crypt's Last Witness (`crypt`) | Case 03 Midnight Signal (`signal`) |
+|---|---|---|---|
+| Layout | 2 bookshelf rows in the archive, 2 staggered stacks in the alley, vine-walled greenhouse (open east), record-shelf serpentine in the crypt vault, lab bench / centrifuge / smashed still | rubble narrows the vault mouth to 3.4 m and the cage pocket, 2 rock falls zig-zag the tunnel (3.15 / 3.5 m squeezes), 3 coffins, fallen gate, broken boiler | east-lawn guard hut (3.4 m door), 2 server racks, fence chicane in the guard post, 37 m security fence at x 17 with a checkpoint gate, L-shaped yard hut, 5 equipment crates |
+| Passage | `pa_bookcase` closes crypt → vault door (x −36, z −8); lever (−32, −4.5) on the crypt side | `cw_rubble_door` fills the catacombs' east door (x −18, z −24); winch (−22, −27) inside | `ms_gate` in the fence (x 17, z −39.5..−43.5); lever (15, −43) by the tower |
+| Without the passage | vault via its east door (terrace) | catacombs via the crypt's north door | yard round the fence's north end (3.35 m corridor behind the tower) |
+| Shortcut saves | crypt hall → vault shrine 65 m → 15 m | catacombs → tower 102 m → 51 m | tower door ↔ yard 33 m → 10 m (each way) |
+| Hazards | broken glass (greenhouse floor), creaky boards (archive north aisle), +0.25 per step | loose rubble (crypt east door), tunnel puddles, +0.25 per step | yard searchlight (30, −48) r 14 m 24° 10 s; tower searchlight (−3, −49) r 13 m 24° 12 s (west-gate approach only — the east gate avoids it) |
+| Examines (trace?) | cracked vial (archive, ✓), toppled books (crypt hall, ✓), cut vines (greenhouse, ✗) | flickering lantern (crypt hall, ✓), cobwebbed winch (tunnel, ✓), torn cobwebs (catacomb door, ✗) | crackling radio (control room, ✓), boot prints (yard, ✓), silenced alarm (guard hut, ✗) |
+| Renamed rooms | research_room Research Archive · crypt Records Crypt · egg_chamber Restricted Vault · shortcut Rare Book Stacks | crypt Collapsed Crypt · shortcut Maintenance Tunnel · egg_chamber Catacombs · research_room Lamp Room | research_room Security Control Room · shortcut Guard Post Passage · courtyard Watchtower Yard · egg_chamber Old Kennel |
+
+Sketches (only the case additions; `S` = clue site, `E` = egg site, `L` = lever, `H` = Hyde spawn, `*` = searchlight,
+`~` = noisy floor, `X` = passage wall, `=`/`|` = new wall). Not to scale.
+
+```
+CASE 01 — west half                          CASE 01 — east half (Research Archive + Rare Book Stacks)
+ crypt vault (x -43..-30, z 8..26)            z -10 ===res_n===[N door]=========    alley x 26..36
+   |===pa_rec_1 z15===|   E reliquary(-33.5,18.5)  ~~~~ boards ~~~~ S desk(38,-6)  |==stack_1 z-18
+   |      |===pa_rec_2 z11 (to inner wall)    z -2   ====res_shelf====              |  S stacks(31,-24)
+ hall: books(-26,2)  L(-32,-4.5)             z 3  pa_shelf_2(x24)  ====pa_shelf_1===  stack_2 z-29==|
+ ====X pa_bookcase (x -38.5..-33.5, z -8)====       vial(23,7)  bench  centrifuge  cabinet-hide
+ Restricted Vault: S specimen(-40,-20) E shrine(-28,-20)
+ terrace: E store(-6,-28)  |greenhouse| S shelf(1,-26)  H gh entrance(11,-18)  H vault door(-12,-24)
+          (vines hide -6,-24)   ~glass~ open east       H archive hall (14,4)
+
+CASE 02 — crypt + catacombs                  CASE 02 — Maintenance Tunnel (alley)
+  vault: coffin(-40.5,12)  E altar(-36.5,15)   z -10 [N door]   switch(33,-13)
+         S niche(-32.5,17.5) coffin(-33,22.5)  z -16 ====cw_tunnel_1====   . 3.15 m
+  ====cw_rubble_vault z8==== . 3.4 m mouth     z -20.5 S sign-in(29.5,-20.5)   winch examine(33.5,-20)
+  hall: ~rubble~ at east door  E gatehouse(-22,10)  S gate(-26,21.5)  fallen gate  lantern(-20.5,14)
+  catacombs: coffin(-36.5,-12.5)  E nest(-28,-20)  L winch(-22,-27)  X cw_rubble_door (x -18)
+  cage: ===cw_rubble_cage z-26=== . 3.4 m gap   S by the cage(-40,-31)    ~puddles~ z -24..-17
+  H side door(-11,4)  H ravine(-12,-16)  H terrace drain(19,-19.8)   lamp room: S locker(38,-6) boiler
+
+CASE 03 — courtyard / Watchtower Yard (north)            CASE 03 — east lawn + control room
+ cliff ------------------------------------------- z-58    hut  |=====ms_hut_n z20=====|
+   tower x3..13 |corridor| fence end z-54.5   E crates(37,-52)   door|  S? none  hide  |cliff
+   *(-3,-49)    |3.35 m  |ms_fence_2   S recorder(25,-51) *(30,-48)  |=====ms_hut_s z27.5==|
+   crates (-8,-46) (0,-50)  L(15,-43) X ms_gate  prints(21,-44)  yard hut L (35,-39)  alarm examine(35,25.5)
+   S relay (-22,-46)        |ms_fence_1  S booth(20.5,-38)            H control lawn (30,22)
+ ====west gate (H -10,-38)===east gate===|==court_s_3==|GOMEZ GATE|==   control room: S console(40,8), 2 racks,
+                                                                       radio examine (25,9)
+ guard post (alley): ==ms_post_fence z-22== S desk(30,-27) crates   E shed(3.5,-28) terrace  H greenhouse(2,-16)
+```
+
+### 10.2 Candidate clue sites (priors per clue; `location` reads true for every site)
+
+| Case | Clue | Site → prior (area, room, x, z) | Why these places |
+|---|---|---|---|
+| 01 | falsified_transfer | archive desk **0.6** (Research Archive, research_room, 38, −6) · stacks terminal **0.4** (Rare Book Stacks, shortcut, 31, −24) | "filed from an archive terminal": both are archive terminals; the desk is the obvious one |
+| 01 | botanical_residue | inventory shelf **0.6** (Greenhouse Annex, path, 1, −26) · specimen cabinet **0.4** (Restricted Vault, egg_chamber, −40, −20) | the tincture inventory sits with the plants or in the locked specimen store |
+| 01 | access_ledger | door ledger **1.0** (Records Crypt, crypt, −22, 21) | the text says the ledger is *stored in the old crypt*; a fixed, close first objective (42 m) |
+| 02 | sabotaged_gate | gate mechanism **1.0** (Collapsed Crypt, crypt, −26, 21.5) | the gate is where it is |
+| 02 | tunnel_access_record | tunnel sign-in desk **0.55** (Maintenance Tunnel, shortcut, 29.5, −20.5) · lamp-room locker **0.45** (Lamp Room, research_room, 38, −6) | a "lamp-room sign-in for the tunnel" can lie at either end |
+| 02 | equipment_match | by the cage **0.6** (Catacombs, egg_chamber, −40, −31) · coffin niche **0.4** (Burial Vault, crypt, −32.5, 17.5) | stashed underground; text broadened from "by the Hyde's cage" to "underground" |
+| 03 | falsified_patrol_log | guard post desk **0.55** (Guard Post Passage, shortcut, 30, −27) · checkpoint booth **0.45** (Restricted Yard, courtyard, 20.5, −38) | a guard's log lives at a guard post |
+| 03 | alarm_override | override console **1.0** (Control Room, research_room, 40, 8) | the console is fixed hardware |
+| 03 | watchtower_signal | signal recorder **0.6** (Restricted Yard, courtyard, 25, −51) · relay recorder **0.4** (West Signal Post, courtyard, −22, −46) | both are watchtower recorders in the Watchtower Yard; text now says "flashed from beside the egg path" |
+
+All clue searches are 2.5 s (× interactTimeMult). Every site is ≥ 1.5 m from every wall surface (so no walkable cell
+on the far side of a wall is within the 1.8 m interact range: 1.5 + wall thickness + 0.4 player radius > 1.8),
+≥ 0.3 m from cover, and in the room it declares (first match: tower, pier, research_room, crypt, egg_chamber,
+shortcut, courtyard, path). Sites of one case are ≥ 3 m apart (closest pair: Case 02 coffin niche ↔ vault altar 4.7 m).
+
+### 10.3 Egg sites (priors, traces) — `traceAccuracy` 0.75 in every case
+
+| Case | Site → prior | Trace text | Role |
+|---|---|---|---|
+| 01 | Potting store (−6, −28) **0.5** | Nest straw leads toward the greenhouse storage. | central, by the patrol (S8 5.4 m); short carry (~32 m) |
+| 01 | Vault shrine (−28, −20) **0.3** | Cold shell dust trails toward the Restricted Vault. | **guarded**: behind the bookcase / beside the cage, pillar ring |
+| 01 | Reliquary (−33.5, 18.5) **0.2** | Warm wax drips lead into the Records Crypt. | deep in the shelf serpentine |
+| 02 | Vault altar (−36.5, 15) **0.5** | Scraped dust leads toward the burial vault. | through the 3.4 m rubble mouth |
+| 02 | Catacomb nest (−28, −20) **0.3** | Damp straw trails down into the catacombs. | **guarded**: the cage room; the winch shortcut matters most here |
+| 02 | Gatehouse (−22, 10) **0.2** | Shell grit glitters by the collapsed gatehouse. | open hall, near the gate clue |
+| 03 | Potting shed (3.5, −28) **0.5** | Soil tracks lead toward the potting shed. | central; carry ~30 m |
+| 03 | Yard crates (37, −52) **0.3** | Crate marks lead into the restricted yard. | **guarded**: fence + searchlight |
+| 03 | Kennel straw (−28, −20) **0.2** | Straw drifts toward the old kennel. | far west decoy-risk |
+
+Case 02's egg sites are deliberately clustered in the west (≤ 40 m apart) because its tunnel clue is in the far east —
+this caps the longest case's walking. Bayes example (Case 01, one trace pointing at the potting store): posterior ∝
+0.5×0.75 : 0.3×0.125 : 0.2×0.125 = 0.375 : 0.0375 : 0.025 → **86 % / 9 % / 6 %**. A second agreeing trace → 97 %.
+A site seen empty → 0 and the rest renormalise. With 3 clue traces + 2 examine traces per case the egg is usually
+pinned down before the third clue — the probabilities *visibly* earn their keep.
+
+### 10.4 Hyde emergence points (weights; renormalised over spawns ≥ 25 m from the player at t = 20 s)
+
+| Case | Spawn (x, z) → weight | Zone | On patrol | From pier start |
+|---|---|---|---|---|
+| 01 | Archive Hallway (14, 4) **0.45** · Greenhouse Entrance (11, −18) **0.35** · Restricted Vault Door (−12, −24) **0.20** | mid · terrace · terrace | P4 · on P13→P14 · P8 | 52 · 73 · 98 m |
+| 02 | Crypt Side Door (−11, 4) **0.40** · Ravine Pass (−12, −16) **0.35** · Terrace Drain (19, −19.8) **0.25** | mid · terrace · terrace | P16 · P7 · on P13→P14 | 51 · 71 · 77 m |
+| 03 | West Courtyard Gate (−10, −38) **0.45** · Greenhouse Path (2, −16) **0.35** · Control Room Lawn (30, 22) **0.20** | court · terrace · east | P9 · P14 · P2 | 93 · 70 · 44 m |
+
+Each spawn faces along the patrol (yaw toward the next waypoint) and has ≥ 1.5 m clearance (closest: none under
+4 m). Fairness: a player who heads straight for the nearest building is usually *within* 25 m of the spawn guarding
+it, so that spawn drops out — e.g. Case 01 player at (25, 18) at 20 s: Archive Hallway is 17.8 m away → the draw is
+Greenhouse 0.35/0.55 = **64 %**, Vault Door **36 %**. The Hyde therefore appears in a part of the island the player is
+*not* in, then walks its learnable loop toward them. The predictive layer shows exactly this renormalised table.
+
+### 10.5 Risk zones (identical rectangles, case names ≤ 14 chars)
+
+| Zone id | Rectangle | 01 | 02 | 03 |
+|---|---|---|---|---|
+| z_lawn | x −45..45, z 26..60 | Graveyard Lawn | Graveyard Lawn | Pier Lawn |
+| z_crypt | x −45..−18, z −8..26 | Records Crypt | Crypt Ruins | Old Crypt |
+| z_chamber | x −45..−18, z −34..−8 | Locked Vault | Catacombs | Old Kennel |
+| z_mid | x −18..20, z −10..26 | Middle Path | Middle Path | Middle Path |
+| z_east | x 20..45, z −34..26 | Archive Wing | Tunnel Wing | Security Wing |
+| z_terrace | x −18..20, z −34..−10 | Greenhouse | Greenhouse | Greenhouse |
+| z_court | x −45..45, z −60..−34 | Tower Yard | Tower Yard | Watchtower |
+
+They tile the bounds exactly (no gap, no overlap except shared edges); the patrol visits them in the order lawn → east
+→ mid → terrace → court → terrace → mid → lawn, which gives the HMM its transition structure.
+
+### 10.6 Clearance verification (by hand; please let the tests confirm)
+
+- **Patrol** (21 segments incl. P20→P0): all case walls inside the research room, crypt, egg chamber and alley are ≥ 6 m
+  from the loop (the loop never enters a room and passes ≥ 6 m outside every door). Outdoor walls: `pa_vine_s` 5.4 m
+  (S13), `pa_vine_n` 9 m (S8), `ms_fence_*` 5 m (P11), `ms_hut_*` ≥ 7 m (P2), `cw_rubble_door` 6 m (S7/S8). Outdoor
+  cover: `pa_lab_still` 4 m (S11), `ms_ccrate_1` 6.3 m (S9). Required: 0.6 m + radius (≤ 1.6 m).
+- **Gaps ≥ 3.0 m clear**: vault mouth 3.4 (02), cage gap 3.44 (02), tunnel 3.15 / 3.5 (02), stacks 4.9 / 5.2 (01),
+  record-shelf serpentine 3.4 / 5.7 / 6.2 (01), greenhouse mouth 3.1 / 3.4 to planter 1 (01), archive shelf ends 3.2 /
+  3.3 (01), guard-hut door 3.4 (03), guard-post chicane 4.1 (03), yard corridor 3.35 + fence-end 3.65 (03), checkpoint
+  gate 3.7 when open (03), yard hut to cliff 3.2 (03). Furniture aisles inside rooms ≥ 1.9 m (Hyde needs 1.2).
+- **Never blocked**: pier pocket (no additions south of z 28), tower door (8, −46) (nearest addition 9 m), Gomez's
+  switch (33, −13) and gate (31, −34) (Case 01/02/03 alley pieces keep ≥ 3.15 m routes to both), every site / spawn /
+  examine / lever (≥ 1.3 m from any addition).
+- **Shared arrays untouched** (WALLS / COVER / HIDING / PATROL / ROOMS in island.ts). Note: `caseIslands.test.ts`
+  ("walls … never change between cases") needs updating to "shared prefix unchanged + case extras".
+
+### 10.7 Pacing (expected route = sensible order, priors weighted; human = route × 1.3 / 2.7 m/s)
+
+| Case | Expected route | Movement | Interactions (3 searches, 2 examines, lever, pickup, deposit) | Hiding / waits | Orientation | Active | + menus 90–120 s |
+|---|---|---|---|---|---|---|---|
+| 01 | pier → ledger 42 → books 19 → lever 9 → vault 25 → greenhouse 31 → archive 80 (+stacks 0.4 × 36) → egg + carry E≈136 = **~356 m** | 171 s | ~14 s | 25–45 s | 15–25 s | **225–255 s** | **5.3–6.3 min** |
+| 02 | pier → lamp room / tunnel (E≈+25) → ravine → catacombs → vault → gate → egg → tower = **~380 m** | 183 s | ~14 s | 25–45 s | 15–25 s | **237–267 s** | **5.5–6.5 min** |
+| 03 | pier → console 62 → guard post 25 → back out 36 → ravine → east gate → lever → yard 25 (+west post 0.4 × 90) → egg + carry E≈60 = **~324 m** | 156 s | ~13 s | 25–45 s | 15–25 s | **209–239 s** | **5.0–6.0 min** |
+
+The v1 bot medians were 171 / 196 / 172 s; with the extra uncertain sites I expect bots at ~190–240 s (still
+2.5–4 min). Bot medians for v2 are **not measured yet** (no shell this pass) — the orchestrator's sweep should report
+them. If humans run long, knobs in order: lower the far site's prior (01 stacks, 02 lamp room, 03 west post) by 0.1,
+raise `traceAccuracy` to 0.8, then trim `hyde.searchS` 8 → 6.
+
+### 10.8 Hyde fairness and tuning changes
+
+- **Emergence 20 s**: the first 20 s are threat-free (read the objective, learn the noise meter, reach a building).
+  Thing warns with a countdown (`THING.hyde.soon`), the minimap shows the spawn odds, and spawn selection never puts
+  the Hyde within 25 m. The old design started the Hyde 96 m away (first contact ~60 s); now first contact is likely
+  30–60 s in — earlier suspense, but never at spawn.
+- **Calm window 10 s, hearing × 0.5** after every chase ends: one SEARCH (8 s) + part of COOLDOWN (5 s). An escaped
+  player can walk away (heard at 3.5 m instead of 7 m) instead of being re-acquired by their next step. This answers
+  the brief's "no constant attacks" without making the Hyde slower.
+- **Player sees Hyde at 18 m** (LOS) vs Hyde sight 13 m: a watchful player always gets the first look.
+- **Searchlights** only make noise (loudness 0.75 → 11 m radius, halved by walls); they never detect directly. A beam
+  lights a given direction for 24/360 × period ≈ 0.7–0.8 s per turn, so a 2.5 s search is caught ~1 time in 3 in the
+  open; crates/huts give shade. Recommended sim rule: LOS from the light uses `crouchTarget = player.crouched`, so low
+  crates shade a crouching player ("crouch behind cover").
+- **Noisy floors** add +0.25 to walk/sprint steps (walk 0.35 → 0.60 ≈ 9.5 m radius); crouching is silent, and every
+  floor has a way round or is short enough to cross crouched (≤ 6 m).
+- **Lever noise 0.5** (~8.5 m): pulling a lever beside the patrol (Case 03, 4.2 m from P11) is a timing decision.
+- **Examine 1.0 s, lever 1.5 s**: short holds; examines scale with interactTimeMult, levers do not.
+- **Hint cooldown 10 → 8 s**; clue searches all 2.5 s. Speeds, hearing, sight, suspicion and grab are unchanged (see
+  the header of `tuning.ts`).
+
+---
+
+## 11. Joseph Crackstone (enemy contract 2026-10-24)
+
+Contract: `docs/overhaul/ENEMY_CONTRACT.md` (rules R1–R9, sim rules 1–12). Data: `CaseWorldDef.crackstone` in
+`src/mystery/data/caseWorlds.ts`, `MYSTERY_TUNING.crackstone` in `tuning.ts`, `THING.crackstone` in `thing.ts`.
+Everything below is computed by hand from the geometry (no shell this pass). It is not a playtest or bot measurement.
+The game-developer's walkability test is the authority.
+
+### 11.1 Design intent
+
+The Hyde is the ears of the island. It roams, it is drawn by noise, and you beat it by being quiet. **Crackstone is the
+eyes of one place.** He is a gaunt pilgrim in a buckled hat, with a long tattered cloak and a staff, and he guards one
+named, public area per case. He walks it slowly and on purpose. The visitor's question changes from "am I quiet?" to
+"can he see me?", which is a second stealth skill (walls, angles, timing his look-around pauses) that every first-timer
+already understands. He brings tension to **one region per case** and is never constant pressure:
+
+- **Public area, private position (R4).** Thing names the area at the start of play and the minimap draws its outline,
+  so a visitor can choose to avoid it or plan the visit. His live marker appears only per R4.
+- **Leashed guardian (R5).** Every encounter is local. Leaving his area always ends it.
+- **Telegraphed threats (R9).** The scan has a 2.2 s warning and the curse has a 1.4 s visible circle. Nothing he does
+  is instant except being seen point-blank (≤ 2.5 m), which is the same rule as the Hyde's instant chase.
+
+### 11.2 Deliberate differences from the Hyde
+
+| | Hyde | Crackstone |
+|---|---|---|
+| Detects by | **hearing** (+ sight) | **sight, proximity, scan**. He is deaf: footsteps, levers, glass, searchlight alarms and decoy *sounds* do nothing to him (a lure works only as a visible decoy within 20 m, R8) |
+| Where | whole island, 288 m loop, emerges at 20 s | one cursed area per case, present from t = 0, loop 48–107 m |
+| Patrol speed | 2.4 m/s | 1.5 m/s, with a 1.2 s look-around pause at every waypoint |
+| Sight | 100°, 13 m (fog 8), crouch × 0.7 | 90°, 14 m (fog 9), crouch × 0.6, × per-case mult |
+| Chase | 4.0 m/s, roams | 3.5 m/s, gives up beyond `leashM` from his area's centroid |
+| Attack | grab: 0.7 s wind-up, −35 HP, **a catch**, egg damage | curse: 1.4 s circle, −15 HP, slow × 0.75 for 2.5 s. **Never a catch, never egg damage** (R7) |
+| Special | — | scan every 21–29 s: 10 m pulse that only walls, high cover or hiding beat (crouching does not) |
+| Counter-play | be quiet, walls muffle | break line of sight, keep a wall between you, hide, don't tail him (2.5 m proximity) |
+
+### 11.3 The three haunts
+
+Clearance rule (all three): the **centre** of his 0.5 m body stays ≥ 1.2 m from every wall surface (segment distance
+minus thickness/2) and every cover edge (distance minus radius), on every waypoint and every straight segment including
+last → first. Waypoints are ≥ 3 m from every clue and egg site, and no waypoint brings him within a hiding spot's
+`revealM`. Every waypoint is ≥ 55 m and every polygon ≥ 50 m from the pier start (0, 54); every loop is ≥ 16 m from
+the Iago Tower rooms (x 3..13, z −57..−46).
+The polygon is the loop's bounding box plus 2 m (rect convention: NW → SW → SE → NE).
+
+| Case | Area (`areaName`) | Polygon / centroid | Lap | Leash | Overrides | Sites inside / near |
+|---|---|---|---|---|---|---|
+| 01 | **Archive Stacks**: north half of the Research Archive + a look into the Rare Book Stacks | x 24..41, z −16.5..2.8 / (32.5, −6.85) | 47.7 m, ~41 s | 16 m | none (default) | archive desk (0.6) inside; the stacks terminal (0.4) is behind his door |
+| 02 | **Crypt Catacombs**: the crypt's lower hall + the catacombs' pillar ring | x −38.5..−18.5, z −30.5..6.5 / (−28.5, −12) | 107.1 m, ~86 s | 25 m | `scanEveryS` 20, `sightRangeMult` 1.15 | nest egg (0.3) inside the ring; the cage pocket (clue 0.6) opens off his south lane |
+| 03 | **Restricted Yard**: the fenced yard east of the security fence | x 27..43, z −58..−34.8 / (35, −46.4) | 59.3 m, ~46 s | 17 m | `scanEveryS` 28, `sightRangeMult` 0.9 | yard egg crates (0.3) inside his loop; signal recorder (0.6) 5.7 m off his path |
+
+Lap time = length / 1.5 m/s + 1.2 s × waypoints (turning time not included).
+
+**Case 01: Archive Stacks.** C0 (31.2, −7) → C1 (31, −14.5) → C2 (30.8, −7) → C3 (26.8, −3.9) → C4 (26, −0.5) →
+C5 (33, 0.8) → C6 (39, −1) → C7 (34.5, −7); start C7 facing west. He circles the archive's central bookshelf (`res_shelf`)
+and once per lap dips through the north door to look down the stacks.
+- *Why here:* the stacks are a dead end reachable only through the archive's north door. Guarding the aisle in front
+  of that door covers both "archive" sites of `falsified_transfer` without sitting on either one. The three shelf rows
+  give constant line-of-sight breaks, so this is the gentlest haunt and uses default numbers.
+- *Leash 16:* he gives up ~2 m inside the west door (17.9 m), at the lab benches before the south door (21 m), and by
+  the stacks terminal (17.2 m). The stacks hiding spot and stack 2 give a cornered player a way out.
+- *Walls/cover checked:* `res_n_w`, `res_n_e` (door caps), `res_shelf` (both caps), `pa_shelf_1`, `pa_shelf_2`,
+  `pa_stack_1`, `alley_w`, `alley_e`, `res_w_n`, `cliff_e`, `c_res_pillar`, `c_desk_1`, `c_desk_3`; hiding `hs_research`,
+  `pa_hs_stacks`, `pa_hs_cabinet`. Tightest: C3→C4 1.30 m (res_shelf west cap), the three door crossings 1.38 m,
+  C6→C7 1.50 m, C5→C6 1.52 m.
+
+**Case 02: Crypt Catacombs (stronger).** H0 (−26, 4.5) → H1 (−33, 3) → H2 (−33, −3) → D_in (−36.5, −5.5) →
+C_NW (−34, −12.5) → C_NE (−21, −12.5) → C_SE (−20.7, −25.5) → C_SW (−33, −28.5) → C_W (−35.5, −20) → C_NW2 (−34, −12) →
+D_out (−36.5, −5) → H3 (−27.5, −5.5); start H0 facing west. He loops round pillar 2 in the lower hall, passes through
+the north door (x −36) and circles all four catacomb pillars.
+- *Why here:* "underground" is the case's theme. The catacombs are only reachable through the crypt's north door
+  until the winch is cranked, so he guards the deep half of the case (nest egg, cage clue) while the mandatory gate
+  clue by the south door (17 m from his nearest point, in fog) stays a calm first objective.
+- *Stronger, through data:* scans every 16–24 s (20 ± 4) instead of 21–29 s. Sight × 1.15 gives 10.4 m in the foggy
+  crypt and 16.1 m in the clear catacombs, still under the player's 20 m. Leash 25 lets him follow into the
+  burial-vault mouth and ~6 m out of the east door. He also has the longest lap (86 s), so he spends ~60 % of it in the
+  catacombs.
+- *Still escapable:* the same chase speed (3.5 < 4.22), the pillar ring breaks his sight every few metres, and there
+  are three hiding spots (catacomb coffin, egg-chamber alcove, crypt alcove) ≥ 1 m beyond `revealM` from his path. He
+  never parks on the winch (−22, −27): his path passes it at 1.2 m and his nearest pause (C_SE) is 2.0 m away. The
+  lever is interact-only, not an obstacle.
+- *Walls/cover checked:* `crypt_inner` (cap −30, 8), `crypt_egg_w` / `crypt_egg_e` (door caps), `crypt_e_n`,
+  `cw_rubble_door`, `egg_e_n`, `court_s_egg`, `cage_bars`, `cw_rubble_cage`, `cw_rubble_vault`; cover
+  `c_crypt_pillar_2`, `c_sarc_1`, `c_sarc_2`, `c_egg_pillar_1..4`, `c_egg_crate`, `cw_coffin_3`; hiding
+  `hs_crypt_alcove`, `cw_hs_catacomb`, `hs_egg_alcove` (edges ≥ 4 m from his pauses). Tightest: C_NW2→D_out 1.31 m
+  (crypt_egg_e cap), C_SW→C_W 1.43 m and C_SE→C_SW 1.44 m (catacomb pillars), D_in→C_NW 1.46 m (coffin 3) / 1.49 m
+  (door cap).
+
+**Case 03: Restricted Yard.** Y0 (32, −36.8) → Y1 (41.4, −36.8) → Y2 (41, −55.5) → Y3 (29.5, −56) → Y4 (32.8, −44.5);
+start Y0 facing east (his back to the yard's two entrances). He walks round the L-shaped yard hut and the egg crates.
+- *Why here:* it splits Case 03 cleanly. The Hyde owns the courtyard west of the security fence (its loop never
+  crosses x 17), and Crackstone owns the yard east of it. Case 03 was already the most dangerous case for bots
+  (Hyde catches), so a guardian in the Hyde-free yard adds a different kind of danger instead of more of the same.
+  This also makes R6 conflicts rare.
+- *Lighter numbers:* the yard is open and already has a searchlight, so sight × 0.9 (12.6 m) and scans every 24–32 s.
+  The recorder site sits west of his loop, where the statue and crates give shade.
+- *Leash 17:* he gives up 1.7 m before the checkpoint gate and 3.4 m before the fence's north end. Leaving the yard
+  always ends the encounter.
+- *Walls/cover checked:* `court_s_3`, `court_s_alley_w`, `gate_shortcut`, `court_s_alley_e`, `court_s_4`, `alley_e`
+  north cap (36, −34), `ms_yhut_a`, `ms_yhut_b`, `cliff_e`, `cliff_n`, `ms_fence_1/2`, `ms_gate` (≥ 12 m); cover
+  `ms_ycrate_1..3`, `c_statue_c2`, `c_bush_c2`; hiding `ms_hs_yhut`, `hs_court_e`; the searchlight post (30, −48).
+  Tightest: Y1→Y2 1.55 m (ms_yhut_a east cap) / 1.65 m (cliff), Y3→Y4 1.64 m (crate 2), 1.72 m from the searchlight.
+
+### 11.4 Numbers and rationale (`MYSTERY_TUNING.crackstone`)
+
+| Group | Value | Why |
+|---|---|---|
+| Body | radius 0.5 m, turn 3.0 rad/s | Slower turning than the Hyde (4.0), so slipping past behind him during a pause is a learnable skill |
+| Speeds | PATROL 1.5 · INVESTIGATE 2.2 · CHASE 3.5 · ATTACK 0 · SEARCH 1.8 · RETURN 1.8 | walk 3.2 < chase 3.5 < slowest legal sprint 4.22 (carrying). The escape margin is 0.72 m/s, against the Hyde's 0.22 |
+| Pause | 1.2 s per waypoint | Gives a readable rhythm and a window to cross his path |
+| Sight | 90°, 14 m clear, 9 m fog, crouch × 0.6, instant 2.5 m | The "eyes" enemy: narrower cone but longer range than the Hyde. Crouching in the open is seen at 8.4 m (5.4 m in fog) |
+| Proximity | 2.5 m (LOS, not hidden) | Tailing him is punished even when crouched. Hiding still works |
+| Suspicion | +1.0/s × (1 + closeness), chase at 1, decay 0.2/s | A visible ramp of 1.0 s at the edge of his sight, ~0.5 s point-blank. Same feel as the Hyde |
+| Timers | chase loss 3.5 s, search 7 s (r 6 m), investigate ≤ 10 s, waypoint 1.0 m, return sight × 0.6 | Breaking his sight pays off faster than with the Hyde (4 / 8 / 12 s) |
+| Scan | every 25 ± 4 s (per case 20 / 28), warn **2.2 s**, radius **10 m**, flash 0.6 s | See 11.5 |
+| Curse | range 7 m, circle 1.8 m, wind-up **1.4 s**, cooldown 10 s, −15 HP, slow × 0.75 for **2.5 s**, invulnerable 2.5 s | See 11.5 |
+| Other | lure 20 m, player sees him 20 m, Hyde-release ≥ 12 m from him | 20 m is above his best sight (16.1 m in Case 02), so a watchful player always gets the first look |
+
+**Changed from the proposal:**
+- scanEveryS 26 → 25 and jitter 6 → 4. The interval becomes 21–29 s, inside the 20–30 s brief. The proposed ±6 with
+  Case 02's faster scans would have dropped to 14 s.
+- scanWarnS 2.0 → 2.2. This adds a first-timer reaction allowance (see 11.5).
+- scanRadiusM 11 → 10. From the outer half of the ring, a walker can now get out in time.
+- curseWindupS 1.3 → 1.4. The slowest walker carrying the egg needs 1.33 s to get out.
+- curseSlowS 3 → 2.5. It now equals `curseInvulnerableS`, so the slow can never be exploited.
+
+### 11.5 Fairness math
+
+- **Scan escape.** Window = 2.2 s warning − ~0.6 s reaction = 1.6 s. Walking covers 5.1 m, so anyone ≥ 4.9 m from him
+  can walk out of the 10 m ring. Sprinting at the slowest 4.22 m/s covers 6.8 m. Closer in, the answer is a wall, high
+  cover or a hiding spot. On his loops one is almost always within 4 m (shelves in 01, pillars and walls in 02, the
+  hut and walls in 03). The worst open spot is the yard's west half in Case 03, which is outside his loop. Crouching
+  does NOT beat a scan, and Thing's warning says so in plain words ("Get behind a wall or hide!").
+- **Curse escape.** He casts on the player's position. Leaving a 1.8 m circle from its centre takes 0.56 s walking, or
+  0.73 s for the slowest carrying walker (Morticia-type 3.04 × 0.95 × 0.85 = 2.45 m/s). Adding 0.6 s reaction gives
+  1.33 s, which is under the 1.4 s wind-up. A player who keeps moving is already out. The curse punishes **standing
+  still in his sight**: searching, picking up the egg, or freezing. It costs 15 HP (3/7 of a grab), never a catch,
+  and never egg security. King's Shield (`block_grab`) also blocks it (R7).
+- **Chase.** 3.5 m/s with a 3.5 s loss timer and a leash of 16 / 25 / 17 m. A sprinting player opens ≥ 0.72 m/s, which
+  is ~2.5 m per 3.5 s. One corner or shelf ends the chase, and leaving his area always does.
+- **Slow never stacks with danger.** The curse slow (× 0.75 for 2.5 s; slowest sprint 4.22 → 3.17 m/s, which is below
+  both chases) is fully covered by 2.5 s of invulnerability. This assumes `invulnerableUntil` makes *both* enemies
+  ignore the player, as the existing grab-release rule does for the Hyde. After a landed curse he RETURNs anyway.
+- **Two enemies, one chase (R6).** The haunts are placed where the Hyde's loop does not go: inside rooms (01), underground
+  (02), behind the fence (03). Simultaneous pressure is rare, and R6 cancels it when it happens.
+
+### 11.6 Pacing
+
+Time in his area per visit, estimated: Case 01 30–50 s (desk + stacks), Case 02 20–60 s (only if the egg or clue is in
+the catacombs; P(nest or cage) = 1 − 0.7 × 0.4 = 72 %), Case 03 20–45 s (P(recorder or crates) = 1 − 0.4 × 0.7 =
+72 %). At one scan per ~25 s that is 1–2 scan warnings per visit, each costing ~3–8 s of hiding or detouring. One
+encounter (chase or curse) adds ~10–15 s. **Estimated +15–30 s of active time**, which moves §10.7's 5.0–6.5 min to
+**~5.3–7.0 min**. If playtests run long, change these in order: Case 02 `scanEveryS` 20 → 24, global `scanEveryS` 25 → 30,
+then `sight.rangeClearM` 14 → 12. Bot medians with Crackstone have **not** been measured (no shell); the orchestrator's
+sweep should report them.
+
+### 11.7 Thing lines (`THING.crackstone`)
+
+Advice-style (≤ 52 filled): `crackstone_area` "Crackstone haunts the {area}. Stay unseen." (max 51 with "Crypt
+Catacombs"), `crackstone_deaf` "He can't hear you, but he sees far. Use walls." Log-style (≤ 34): `crackstone_scan_warn`,
+`crackstone_curse_warn`, `crackstone_glimpse` (INVESTIGATE), `crackstone_seen` / `crackstone_sensed` /
+`crackstone_scan_hit` (CHASE by sight / proximity / scan), `crackstone_escaped`, `crackstone_curse_hit`,
+`crackstone_curse_blocked`, `crackstone_curse_dodged`, `crackstone_gave_up` (SEARCH → RETURN), `crackstone_returned`
+(→ PATROL), `crackstone_deferred` (R6). None of them names a suspect.
+
+### 11.8 Open items for the orchestrator / game-developer
+
+1. **Safe release point (36, −48) is inside the Case 03 yard** (4.7 m from Y4, 5.3 m from his east lane). `releaseMinDistM`
+   12 handles it dynamically, but I recommend that the release rule also skip points inside `crackstone.polygon`.
+   (`island.ts` is shared and was not edited.)
+2. **Curse HP and `catchDamageMult`.** I recommend `curseHp × catchDamageMult` (rounded) so that the card's Defense
+   stat stays honest for both enemies. Otherwise the advantage texts about "grab damage" stay grab-only, which is
+   still true.
+3. **Invulnerability scope.** The 11.5 slow argument needs `invulnerableUntil` (set by a landed curse) to make the Hyde
+   ignore the player too, as after a grab release.
+4. **Searchlight post collision** (Case 03) is not in walls/cover. If the renderer adds a collider, it must stay
+   ≤ 1.2 m radius (his path passes 1.72 m from (30, −48)).
+5. Case 02's path passes the winch lever (−22, −27) at 1.2 m. Levers have no collider today, so this is fine. If one
+   is added, keep it ≤ 0.4 m.

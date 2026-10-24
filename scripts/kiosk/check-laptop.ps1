@@ -4,19 +4,23 @@
 
 .DESCRIPTION
   Checks the Windows settings from docs/THREE_LAPTOP_RUNBOOK.md: Sticky/Filter/Toggle Keys shortcuts, mouse
-  acceleration, display scaling, power (AC, no sleep), notifications, Windows Update pause, browser version,
-  and reachability of the game URL and the Supabase project. Exit code = number of FAIL lines.
+  acceleration, display scaling, refresh rate, power (AC, no sleep), notifications, Windows Update pause, browser
+  version, page zoom of the kiosk profiles, and reachability of the game URL and (unless -SkipSupabase) the Supabase
+  project. Exit code = number of FAIL lines.
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\kiosk\check-laptop.ps1
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\kiosk\check-laptop.ps1 -BaseUrl http://192.168.1.10:4173
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\kiosk\check-laptop.ps1 -SkipSupabase   # Plan D (no internet)
 #>
 [CmdletBinding()]
 param(
   [string]$BaseUrl = $(if ($env:RAVEN_BASE_URL) { $env:RAVEN_BASE_URL } else { 'http://localhost:4173' }),
   # Public project host (not a secret). Override for a different project.
   [string]$SupabaseHost = 'abkohhdjlufhsbqrchpn.supabase.co',
-  [datetime]$EventDay = '2026-10-27'
+  [datetime]$EventDay = '2026-10-27',
+  # Plan D / LOCAL DEMO: do not open any connection to the Supabase host (the line is reported as SKIP).
+  [switch]$SkipSupabase
 )
 
 Set-StrictMode -Version 2.0
@@ -72,8 +76,18 @@ elseif ([int]$dpi -eq 96) { Out-Check 'PASS' 'Display scaling' '100 %' '' }
 else { Out-Check 'WARN' 'Display scaling' ('{0} %' -f [math]::Round([int]$dpi / 96 * 100)) 'Settings > System > Display > Scale: 100 % (sign out/in), or launch with -ForceScale1' }
 try {
   $vc = @(Get-CimInstance Win32_VideoController -ErrorAction Stop | Where-Object { $_.CurrentHorizontalResolution })
-  foreach ($v in $vc) { Out-Check 'PASS' 'GPU / resolution' ('{0} - {1}x{2} @ {3} Hz' -f $v.Name, $v.CurrentHorizontalResolution, $v.CurrentVerticalResolution, $v.CurrentRefreshRate) '' }
+  foreach ($v in $vc) {
+    $detail = '{0} - {1}x{2} @ {3} Hz' -f $v.Name, $v.CurrentHorizontalResolution, $v.CurrentVerticalResolution, $v.CurrentRefreshRate
+    # The game caps at 60 fps (measured at 60 Hz); 120/144 Hz panels make the GPU draw the HUD/compositor twice as often.
+    if ([int]$v.CurrentRefreshRate -gt 61) { Out-Check 'WARN' 'GPU / resolution' $detail 'Settings > System > Display > Advanced display > Choose a refresh rate: 60 Hz' }
+    else { Out-Check 'PASS' 'GPU / resolution' $detail '' }
+  }
 } catch { Out-Check 'WARN' 'GPU / resolution' 'could not read' '' }
+# Laptops with two GPUs: Windows decides per app. Listed so the operator can set Chrome/Edge to High performance.
+try {
+  $allGpu = @(Get-CimInstance Win32_VideoController -ErrorAction Stop | ForEach-Object { $_.Name })
+  if ($allGpu.Count -gt 1) { Out-Check 'WARN' 'Two GPUs' ($allGpu -join ' + ') 'Settings > System > Display > Graphics > Chrome/Edge: High performance (then chrome://gpu shows the fast GPU)' }
+} catch { }
 
 # ---- 4. Power: on AC, no sleep, display stays on
 try {
@@ -126,6 +140,19 @@ foreach ($b in $browsers) {
 }
 if (-not $found) { Out-Check 'FAIL' 'Browser' 'no Chrome/Edge found' 'Install Chrome (or use Edge)' }
 
+# ---- 7b. Page zoom in the kiosk profiles (launch-kiosk.ps1 profiles). Ctrl+wheel / Ctrl+= by a visitor persists per host.
+$kioskRoot = Join-Path $env:LOCALAPPDATA 'RavenIslandKiosk'
+if (-not (Test-Path -LiteralPath $kioskRoot)) { Write-Host '[INFO] Browser zoom: no kiosk profile yet (launch the role once, then re-run this check)' -ForegroundColor DarkGray }
+foreach ($role in @('station_a', 'station_b', 'dashboard')) {
+  $prefs = Join-Path $kioskRoot ($role + '\Default\Preferences')
+  if (-not (Test-Path -LiteralPath $prefs)) { continue }
+  $text = ''
+  try { $text = [IO.File]::ReadAllText($prefs) } catch { continue }
+  $levels = @([regex]::Matches($text, '"(?:default_)?zoom_level":\{?(?:"[^"]*":)?(-?[0-9.]+)') | ForEach-Object { [double]$_.Groups[1].Value } | Where-Object { [math]::Abs($_) -gt 0.001 })
+  if ($levels.Count -gt 0) { Out-Check 'WARN' "Browser zoom ($role)" 'not 100 % in this kiosk profile' "Launch with -Window, press Ctrl+0 on the game page, close; or delete $kioskRoot\$role (also deletes its LOCAL DEMO records - export first)" }
+  else { Out-Check 'PASS' "Browser zoom ($role)" '100 %' '' }
+}
+
 # ---- 8. Reachability
 try {
   $r = Invoke-WebRequest -Uri $BaseUrl -UseBasicParsing -TimeoutSec 5
@@ -136,11 +163,13 @@ function Test-Tcp([string]$h, [int]$port) {
   $c = New-Object Net.Sockets.TcpClient
   try { $ok = $c.ConnectAsync($h, $port).Wait(4000); return ($ok -and $c.Connected) } catch { return $false } finally { $c.Close() }
 }
-if (Test-Tcp $SupabaseHost 443) { Out-Check 'PASS' 'Supabase' "${SupabaseHost}:443 reachable" '' }
+if ($SkipSupabase) { Write-Host '[SKIP] Supabase: not contacted (-SkipSupabase; Plan D needs no internet)' -ForegroundColor DarkGray }
+elseif (Test-Tcp $SupabaseHost 443) { Out-Check 'PASS' 'Supabase' "${SupabaseHost}:443 reachable" '' }
 else { Out-Check 'WARN' 'Supabase' "${SupabaseHost}:443 NOT reachable" 'Live mode needs internet. Check Wi-Fi / captive portal / hotspot. LOCAL DEMO still works.' }
 
 Write-Host ''
-Write-Host 'Manual checks this script cannot see: Shift x5 opens nothing; volume ~60 %; Do not disturb on;'
-Write-Host 'Graphics setting for chrome.exe/msedge.exe = High performance (Settings > System > Display > Graphics).'
+Write-Host 'Manual checks this script cannot see: Shift x5 opens nothing; hold right Shift 9 s opens nothing; volume ~60 %;'
+Write-Host 'Do not disturb on; Graphics setting for chrome.exe/msedge.exe = High performance (Settings > System > Display >'
+Write-Host 'Graphics); chrome://gpu says "WebGL: Hardware accelerated"; the game page is at 100 % zoom (Ctrl+0).'
 Write-Host ("FAIL count: {0}" -f $script:fails)
 exit $script:fails

@@ -53,7 +53,7 @@ describe('DescriptiveService — exact counts', () => {
     expect(r.caseVersion).toBe(CASES.poisoned_archive.version);
     expect(r.activeTimeS).toBe(40);
     expect(r.noise.total).toBe(6);
-    expect(r.noise.bySource).toEqual({ footstep: 3, egg_drop: 0, ability: 0, interact: 2, impact: 1, decoy: 0 });
+    expect(r.noise.bySource).toEqual({ footstep: 3, egg_drop: 0, ability: 0, interact: 2, impact: 1, decoy: 0, hazard: 0 });
     expect(r.noise.maxLoudness).toBe(0.95);
     expect(r.noise.heardBySource.footstep).toBe(1);
     expect(r.hyde).toMatchObject({ heard: 1, sightings: 1, chases: 1, catches: 1, blockedCatches: 0, hpLost: 35, firstAlertT: 3.2 });
@@ -210,11 +210,15 @@ describe('DiagnosticService — causes only with rule evidence, patterns labelle
         causes++;
         const cited = c.evidenceSeq.map((s) => bySeq.get(s));
         expect(cited.every(Boolean)).toBe(true);
-        const ruleEvent = cited.some((e) => e && ['hyde_mode', 'catch', 'egg_drop', 'egg_damage', 'dnf'].includes(e.type));
+        const ruleEvent = cited.some((e) => e && ['hyde_mode', 'catch', 'egg_drop', 'egg_damage', 'dnf', 'crackstone_mode', 'curse'].includes(e.type));
         expect(ruleEvent, c.code).toBe(true);
         if (c.code.startsWith('heard_')) {
           expect(cited.some((e) => e?.type === 'hyde_heard')).toBe(true);
           expect(cited.some((e) => e?.type === 'hyde_mode' && e.reason === 'heard_noise')).toBe(true);
+        }
+        if (c.code === 'crack_seen' || c.code === 'crack_sensed' || c.code === 'crack_scan_hit') {
+          expect(cited.some((e) => e?.type === 'crackstone_sighted')).toBe(true);
+          expect(cited.some((e) => e?.type === 'crackstone_mode' && e.to === 'CHASE')).toBe(true);
         }
         if (c.code.startsWith('seen_')) {
           expect(cited.some((e) => e?.type === 'hyde_sighted')).toBe(true);
@@ -356,7 +360,8 @@ describe('case-rule failure reasons', () => {
     expect(items[0].evidenceSeq).toEqual([4, 5]);
     expect(items[0].text).toMatch(/^0:41 · Right suspect, but the cited evidence was not the full chain/);
     expect(items[1]).toMatchObject({ ref: 'equipment_match' });
-    expect(items[1].text).toContain('“Groundskeeper’s Tool Roll” (Egg Chamber)');
+    const clue = CASES.crypt_last_witness.clues.find((c) => c.id === 'equipment_match')!;
+    expect(items[1].text).toContain(`“${clue.title}” (${clue.location})`); // the case file's own title + location
     // never names a suspect
     for (const it of items) expect(it.text).not.toMatch(/Thornhill|Isaac|Barry|Marilyn|Night|Dort/);
   });

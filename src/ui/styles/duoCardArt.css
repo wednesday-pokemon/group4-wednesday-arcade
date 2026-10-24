@@ -1,0 +1,75 @@
+/* Duo card art window (UX_DUO_CARDS §2). Reads --type-face-top / --type-face-bottom / --type-accent from an ancestor.
+   No animation, no transitions: spin swaps src every 70-260 ms. */
+.dcart {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--type-face-top, #2e2250), var(--type-face-bottom, #0e0a1e));
+  isolation: isolate;
+}
+.dcart__scene { position: absolute; inset: 0; overflow: hidden; }
+.dcart__scene > * { position: absolute; }
+.dcart__bg {
+  inset: 0; width: 100%; height: 100%; object-fit: cover;
+  transform: scale(1.15); filter: blur(8px) brightness(.5);
+}
+.dcart__tint {
+  inset: 0; background: var(--type-face-top, #2e2250);
+  mix-blend-mode: soft-light; opacity: .45;
+}
+.dcart__portrait {
+  right: -.75rem; top: 0; height: 100%; width: auto; aspect-ratio: 1;
+  object-fit: cover; object-position: var(--char-pos, 50% 0);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 30%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 30%);
+}
+.dcart__crest {
+  right: 6%; top: 50%; width: 5.5rem; height: 5.5rem; transform: translateY(-50%);
+  display: grid; place-items: center; border-radius: 50%;
+  font: 700 2.75rem/1 var(--font-display, serif); color: #e9dfc2;
+  background: radial-gradient(circle at 35% 30%, #4a3a78, #1a1230);
+  border: 2px solid #b8892e;
+}
+.dcart__fog {
+  inset: 0;
+  background: linear-gradient(0deg, var(--type-face-bottom, #0e0a1e) 0, transparent 35%);
+}
+.dcart__ground {
+  left: 4%; bottom: 1%; width: 60%; height: 12%;
+  background: radial-gradient(closest-side, rgba(0,0,0,.6), transparent);
+}
+.dcart[data-float='true'] .dcart__ground { bottom: -1%; width: 44%; left: 11%; height: 9%; opacity: .55; }
+.dcart__pokebox { left: .25rem; bottom: -3%; width: 56%; height: 94%; }
+.dcart__pokemon {
+  display: block; width: 100%; height: 100%; object-fit: contain; object-position: 50% 100%;
+  transform-origin: 50% 100%;
+  transform: translate(var(--pk-x, 0), var(--pk-y, 0)) scale(var(--pk-scale, 1));
+  filter:
+    drop-shadow(0 0 1px rgba(255,255,255,.55))
+    drop-shadow(0 0 10px var(--type-accent, #a891e6))
+    drop-shadow(6px 4px 8px rgba(0,0,0,.55));
+}
+.dcart[data-float='true'] .dcart__pokemon {
+  filter:
+    drop-shadow(0 0 1px rgba(255,255,255,.55))
+    drop-shadow(0 0 10px var(--type-accent, #a891e6))
+    drop-shadow(4px 10px 8px rgba(0,0,0,.28));
+}
+.dcart__vignette { inset: 0; box-shadow: inset 0 0 40px rgba(0,0,0,.6); pointer-events: none; }
+.dcart__frame {
+  position: absolute; inset: 0; pointer-events: none; box-sizing: border-box;
+  border: 3px solid; border-image: linear-gradient(145deg, #f3dc8a, #8a6a24, #d9b25a) 1;
+  box-shadow: inset 0 0 0 1px rgba(10,6,4,.8);
+}
+/* Spin: neutral look, cheapest filters; layer count unchanged. */
+.dcart[data-spinning='true'] .dcart__pokemon { filter: drop-shadow(0 0 8px #a891e6) drop-shadow(5px 4px 6px rgba(0,0,0,.5)); }
+
+/* High contrast: no textures / blur / glows; plain frame. */
+.high-contrast .dcart { background: #000; }
+.high-contrast .dcart__bg, .high-contrast .dcart__tint, .high-contrast .dcart__fog,
+.high-contrast .dcart__ground, .high-contrast .dcart__vignette { display: none; }
+.high-contrast .dcart__pokemon, .high-contrast .dcart[data-float='true'] .dcart__pokemon,
+.high-contrast .dcart[data-spinning='true'] .dcart__pokemon { filter: drop-shadow(0 0 1px #fff); } /* hairline rim only, no glow */
+.high-contrast .dcart__frame { border: 2px solid #fff; border-image: none; box-shadow: none; }

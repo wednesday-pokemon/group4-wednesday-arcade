@@ -9,12 +9,21 @@
 // rows the `mystery-append-events` Edge Function accepts, and handed out in batches with an explicit ack so a failed
 // upload is simply retried (the server ignores exact duplicates).
 import type { CaseId, Duo, RunResult, Stance, StampedEvent } from '../types.ts';
-import type { DuoFactors, ForecastRecord, RecommendationRecord, SupabaseBatch, TelemetrySample } from './types.ts';
+import type { DuoFactors, ForecastRecord, ForecastTarget, RecommendationRecord, SupabaseBatch, TelemetrySample } from './types.ts';
 
 export const MAX_BATCH_EVENTS = 500;
 export const MAX_BATCH_ANALYTICS = 50;
 /** A per-frame position jump longer than this is a teleport (safe release after a catch), not walking. */
 export const MAX_STEP_JUMP_M = 6;
+
+/**
+ * Forecast targets the `mystery-append-events` server accepts and that are therefore UPLOADED. Forecasts of other
+ * targets are still recorded locally (local dashboard, sessionRecord) but never sent, so a server that does not know a
+ * target yet cannot reject the run. Targets: detection_15s · extraction · eta_s (v3.1) and the overhaul's egg_site ·
+ * clue_area · hyde_spawn · hyde_zone (server support: supabase/functions/_shared/mystery-validation.ts + migration) and the
+ * enemy contract's crackstone_risk (migration 20261024000100 — deploy it before kiosks run this client).
+ */
+export const UPLOAD_FORECAST_TARGETS: readonly ForecastTarget[] = ['detection_15s', 'extraction', 'eta_s', 'egg_site', 'clue_area', 'hyde_spawn', 'hyde_zone', 'crackstone_risk'];
 
 export interface TelemetryMeta {
   sessionId: string | null;
@@ -60,9 +69,11 @@ export class TelemetryCollector {
   private readonly forecastAcked = new Set<number>();
   private readonly recs = new Map<number, RecEntry>();
   private ackedSeq = 0;
+  private readonly uploadTargets: ReadonlySet<ForecastTarget>;
 
-  constructor(meta: TelemetryMeta) {
+  constructor(meta: TelemetryMeta, uploadTargets: readonly ForecastTarget[] = UPLOAD_FORECAST_TARGETS) {
     this.meta = meta;
+    this.uploadTargets = new Set(uploadTargets);
   }
 
   // ------------------------------------------------------------------------------------------------- ingestion
@@ -202,7 +213,7 @@ export class TelemetryCollector {
     const thinned = thinForUpload(fresh);
     const events = thinned.slice(0, maxEvents);
     const lastSeq = thinned.length > maxEvents ? events[events.length - 1].seq : (fresh[fresh.length - 1]?.seq ?? this.ackedSeq);
-    const forecasts = this.forecastLog.filter((f) => !this.forecastAcked.has(f.forecastNo)).slice(0, MAX_BATCH_ANALYTICS);
+    const forecasts = this.forecastLog.filter((f) => !this.forecastAcked.has(f.forecastNo) && this.uploadTargets.has(f.target)).slice(0, MAX_BATCH_ANALYTICS);
     const dirty = [...this.recs.values()].filter((e) => e.version > e.acked).slice(0, MAX_BATCH_ANALYTICS);
     if (events.length === 0 && forecasts.length === 0 && dirty.length === 0) {
       if (lastSeq > this.ackedSeq) this.ackedSeq = lastSeq; // only thinned-away events were pending

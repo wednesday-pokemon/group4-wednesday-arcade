@@ -7,6 +7,7 @@ import { caseMap } from '../../../src/mystery/defaults.ts';
 import { POKEMON_IDS, REGISTRIES } from '../../../src/mystery/draft.ts';
 import { playEpisode, type BotEpisode } from '../../../src/mystery/episode.ts';
 import { yawTo } from '../../../src/mystery/geometry.ts';
+import { layoutFromMap } from '../../../src/mystery/layout.ts';
 import { MysteryRun } from '../../../src/mystery/run.ts';
 import {
   CASE_IDS, NIGHTSHADE_IDS, SUSPECT_IDS, type CaseId, type ClueId, type Duo, type NightshadeId, type SuspectId, type Vec2,
@@ -187,8 +188,13 @@ function standNear(run: MysteryRun, goal: Vec2, among: Vec2[]): Vec2 {
   return best!.at;
 }
 
+/** A run with the case map's default layout (first candidate sites) and the Hyde already emerged (power probes). */
 function powerRun(caseId: CaseId, characterId: NightshadeId): MysteryRun {
-  return new MysteryRun({ duo: { characterId, pokemonId: 'aegislash' }, seed: `fx-${caseId}-${characterId}`, caseDef: CASES[caseId] });
+  const run = new MysteryRun({
+    duo: { characterId, pokemonId: 'aegislash' }, seed: `fx-${caseId}-${characterId}`, caseDef: CASES[caseId], layout: layoutFromMap(caseMap(caseId)),
+  });
+  run.emergeHyde();
+  return run;
 }
 
 function pressF(run: MysteryRun) {

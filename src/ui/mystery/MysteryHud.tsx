@@ -1,63 +1,85 @@
-// Mystery HUD (UX_MYSTERY §4): edges only; centre 560×320 stays clear. Red is reserved for the Hyde; every threat state
-// changes word + icon + border style (greyscale-safe).
-//   top-left ObjectivePanel (+ EvidenceToast)   top-centre ThreatMeter (word, suspicion, Caught ○○)   top-right key chips + RiskChip slot
-//   centre (y 32rem) InteractPrompt + ring       bottom-centre CaptionStack above the ThingCaption
-//   bottom-left VitalsPanel (HP, noise + radius, hidden)              bottom-right AbilitySlots F / Q
+// Mystery HUD (UX_OVERHAUL §1, 1366×768 boxes, rem-scaled): edges only, the centre 560×320 stays clear except the
+// reticle. Red is reserved for the Hyde; lantern = objective / primary action; violet = clues; ivory = the egg; cyan =
+// prediction. Every state is word + icon + border (greyscale-safe).
+//   top-left   ObjectivePanel (16,16 · 288×84) + ClueCard (16,112 · 400×≤132)
+//   top-centre Compass (451,12 · 464×36) + threats row (y56): HydeStatus pill 416×40 (+ Joseph Crackstone's squared
+//              plaque 232×40 when the case has him; Hyde alone stays centred) + effect chips + ONE telegraph banner
+//              (400×44, y124: curse > scan; toasts wait, the lock hint hides) + transient toast
+//   top-right  Minimap (⌀224) + Odds (224×≤176) + KeyStrip (Tab · V · Esc)
+//   centre     InteractPrompt / ExamineToast (y 512)      bottom-centre captions + ThingStack (x 403–963)
+//   bottom-left Vitals (272×76)                            bottom-right Abilities Q / R (288×112)
 import type { CSSProperties } from 'react';
-import { CLUE_ICON, THREAT, type AbilityHud, type Caption, type MysteryHudModel, type Toast } from '../../app/mystery/hudModel.ts';
+import type { NavFeed } from '../../app/mystery/hud/navFeed.ts';
+import { CLUE_ICON, THREAT, type AbilityHud, type Caption, type ExamineToastView, type MysteryHudModel, type ThreatEdgeView, type Toast } from '../../app/mystery/hudModel.ts';
+import type { BannerView, CrackHudView } from '../../app/mystery/hud/crackstone.ts';
 import { Icon } from '../Icon.tsx';
-import { ThingNarrator } from './ThingNarrator.tsx';
+import { ClueCard } from './hud/ClueCard.tsx';
+import { Compass } from './hud/Compass.tsx';
+import { Minimap } from './hud/Minimap.tsx';
+import { OddsPanel } from './hud/OddsPanel.tsx';
+import { ThingStackView } from './hud/ThingStack.tsx';
+import { abilityKey, KeyCap, KeyLegend } from './controls.tsx';
+import '../styles/mhud.css';
 
 interface MysteryHudProps {
   hud: MysteryHudModel;
   tutorial: boolean;
   pointerLocked: boolean;
-  showRisk: boolean;
+  /** Settings "Show predictions": the Odds panel, the pill's risk segment and the map tints. */
+  showPredictions: boolean;
+  /** Compass + minimap feed (pulled ≤ 30 Hz by the canvases, outside React render). */
+  nav: () => NavFeed | null;
+  /** Onboarding step 2: lantern outline on the noise meter. */
+  noiseFocus?: boolean;
 }
 
 const TIER_TEXT = { common: 'Common', rare: 'Rare', legendary: 'Legendary' } as const;
 const NOISE_WORD = { silent: 'Silent', quiet: 'Quiet', audible: 'Audible', loud: 'LOUD' } as const;
 const ARROW: Record<NonNullable<Caption['dir']>, string> = { ahead: '▴', behind: '▾', left: '◂', right: '▸' };
 
-export function MysteryHud({ hud, tutorial, pointerLocked, showRisk }: MysteryHudProps) {
-  const hydeLive = !tutorial && hud.status === 'playing';
+export function fmtClock(s: number): string {
+  const v = Math.max(0, Math.ceil(s));
+  return `${Math.floor(v / 60)}:${String(v % 60).padStart(2, '0')}`;
+}
+
+export function MysteryHud({ hud, tutorial, pointerLocked, showPredictions, nav, noiseFocus = false }: MysteryHudProps) {
+  const playing = !tutorial && hud.status === 'playing';
+  const hydeLive = playing && hud.hyde.emerged;
   const mode = hydeLive ? hud.hyde.mode : 'PATROL';
+  const crack = playing ? hud.crack : null;
+  // mist: the Hyde's red while it chases / searches; Crackstone's green while he hunts (R6: never both chasing)
+  const crackMist = !!crack?.hunting && mode !== 'CHASE';
+  const banner = playing ? hud.banner : null;
+  const edge = playing ? hud.threatEdge : null;
   return (
-    <div className={`mhud${hud.hidden ? ' is-hidden' : ''}`} data-testid="mystery-hud">
-      <div className="mhud-mist" data-mode={hydeLive ? mode : 'none'} aria-hidden="true" />
+    <div className={`mhud${hud.hidden ? ' is-hidden' : ''}${noiseFocus ? ' is-noise-focus' : ''}${tutorial ? ' is-tutorial' : ''}`} data-testid="mystery-hud">
+      <div className="mhud-mist" data-mode={crackMist ? 'none' : hydeLive ? mode : 'none'} data-enemy={crackMist ? 'crackstone' : undefined} aria-hidden="true" />
       {hud.hidden && <div className="mhud-vignette" aria-hidden="true" />}
       {hud.catchFlashSeq > 0 && <div key={hud.catchFlashSeq} className="mhud-catch-flash" aria-hidden="true" />}
+      {banner?.kind === 'curse_hit' && <div key={`curse${banner.id}`} className="mhud-curse-flash" aria-hidden="true" />}
 
       <ObjectivePanel hud={hud} tutorial={tutorial} />
-      {hud.evidenceToast && <ToastView t={hud.evidenceToast} className="mhud-evidence-toast" />}
+      {hud.clueCard && <ClueCard c={hud.clueCard} />}
 
-      {hydeLive && <ThreatMeter hud={hud} />}
-      {hydeLive && hud.hyde.edgeAt && <ThreatEdge at={hud.hyde.edgeAt} chase={mode === 'CHASE'} />}
+      <Compass feed={nav} />
+      {playing && (
+        <div className={`mhud-threats${crack ? ' has-crack' : ''}`}>
+          <HydeStatus hud={hud} showRisk={showPredictions} />
+          {crack && <CrackStatus c={crack} />}
+        </div>
+      )}
+      {edge && <ThreatEdge e={edge} />}
+      {banner && <TelegraphBanner b={banner} />}
+      {!pointerLocked && !banner && <p className="mhud-lockhint" data-testid="hud-lockhint">Click to look around</p>}
+      {hud.toast && !banner && <ToastView t={hud.toast} />}
 
-      <div className="mhud-topright">
-        <p className="mhud-chips">
-          <span><kbd>Esc</kbd> Pause</span>
-          <span><kbd>Tab</kbd> Board</span>
-          <span className={hud.hintCooldownS > 0 ? 'is-cooling' : undefined}>
-            <kbd>V</kbd> Hint{hud.hintCooldownS > 0 && <span className="num"> {hud.hintCooldownS} s</span>}
-          </span>
-          <span><kbd>M</kbd></span>
-        </p>
-        {!pointerLocked && <p className="mhud-lockhint">Click the island to look with the mouse</p>}
-        {showRisk && hud.risk && (
-          <p className={`risk-chip risk-chip--${hud.risk.source}`} data-testid="risk-chip" data-band={hud.risk.band}>
-            <Icon name="gauge" />
-            <span>
-              {hud.risk.detectedNow ? 'Risk: High · detected now' : `Risk: ${hud.risk.band === 'low' ? 'Low' : hud.risk.band === 'medium' ? 'Medium' : 'High'} · next 15 s`}
-            </span>
-            <span className="risk-chip__src" data-testid="risk-chip-label">{hud.risk.label}</span>
-          </p>
-        )}
+      <div className="mhud-right">
+        <Minimap feed={nav} />
+        {showPredictions && !tutorial && <OddsPanel odds={hud.odds} />}
+        {!tutorial && <KeyLegend variant="strip" hintCooldownS={hud.hintCooldownS} className="mhud-keystrip" data-testid="hud-keystrip" />}
       </div>
 
-      {hud.toast && <ToastView t={hud.toast} className="mhud-toast" />}
-
-      {hud.prompt && <InteractPrompt prompt={hud.prompt} />}
+      {hud.examineToast ? <ExamineToast t={hud.examineToast} /> : hud.prompt && <InteractPrompt prompt={hud.prompt} />}
       {(hud.power.aimed && hud.power.ready) || (hud.move.aimed && hud.move.ready) ? <span className="mhud-reticle" aria-hidden="true" /> : null}
 
       <div className="mhud-bottom">
@@ -70,7 +92,7 @@ export function MysteryHud({ hud, tutorial, pointerLocked, showRisk }: MysteryHu
             ))}
           </ul>
         )}
-        {hud.thing && <ThingNarrator key={hud.thing.key + hud.thing.text} text={hud.thing.text} pose={hud.thing.pose} why={hud.thing.why} />}
+        {!tutorial && <ThingStackView log={hud.stack.log} card={hud.stack.card} />}
       </div>
 
       <VitalsPanel hud={hud} />
@@ -86,69 +108,139 @@ export function MysteryHud({ hud, tutorial, pointerLocked, showRisk }: MysteryHu
 function ObjectivePanel({ hud, tutorial }: { hud: MysteryHudModel; tutorial: boolean }) {
   const egg = hud.egg;
   const secLow = egg.security < 40;
+  const n = hud.clues.found.length;
+  const objective = tutorial ? `Find ${hud.clues.total} clues. Save the egg.` : hud.objectiveText;
   return (
-    <section className="mhud-panel mhud-objective" aria-label="Objective">
-      <p className="mhud-objective__text" data-testid="hud-objective" aria-live="polite">{tutorial ? 'Practise at the pier' : hud.objectiveText}</p>
-      <p className="mhud-row">
-        <span className="caps">Clues</span>
-        <span className="mhud-clues" aria-label={`${hud.clues.found.length} of ${hud.clues.total} clues found`} data-testid="hud-clues">
-          {hud.clues.order.map((id) => (
-            <span key={id} className={`mhud-clue${hud.clues.found.includes(id) ? ' is-on' : ''}`} aria-hidden="true">
-              <Icon name={CLUE_ICON[id]} />
-            </span>
-          ))}
-          <span className="num">{hud.clues.found.length}/{hud.clues.total}</span>
-        </span>
+    <section className="mhud-panel mhud-objective" aria-label="Objective" data-testid="hud-objective-panel">
+      <p className={`mhud-objective__text${objective.length > 20 ? ' is-long' : ''}`} data-testid="hud-objective" aria-live="polite">{objective}</p>
+      <p className="mhud-objective__clues" data-testid="hud-clues" aria-label={`${n} of ${hud.clues.total} clues found`}>
+        {hud.clues.order.map((id) => (
+          <span key={id} className={`mhud-clue${hud.clues.found.includes(id) ? ' is-on' : ''}${hud.clueCard?.clueId === id && hud.clueCard.leaving ? ' is-new' : ''}`} aria-hidden="true">
+            <Icon name={CLUE_ICON[id]} />
+          </span>
+        ))}
+        <span className="num mhud-objective__count">{n}/{hud.clues.total}</span>
       </p>
       <div className={`mhud-egg mhud-egg--${egg.state}`} data-testid="hud-egg">
         <Icon name="egg" />
-        {egg.state === 'resting' && <span>Egg · not found</span>}
+        {egg.state === 'resting' && <span>{egg.seenLabel ? <>Egg: seen · {egg.seenLabel}</> : 'Egg: not found'}</span>}
         {egg.state === 'carried' && egg.tier && (
           <>
+            <span className={`tier-gem tier-gem--${egg.tier}`} aria-hidden="true" />
             <span><span className={`tier tier--${egg.tier}`}>{TIER_TEXT[egg.tier]}</span> · {egg.points} pts</span>
             <span className={`mhud-egg__sec${secLow ? ' is-low' : ''}`} role="meter" aria-label="Egg security" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(egg.security)}>
               <span style={{ width: `${Math.max(0, Math.min(100, egg.security))}%` }} />
             </span>
-            <span className="mhud-egg__heavy">Heavy: slower, louder</span>
+            <span className="mhud-egg__heavy">slower, louder</span>
           </>
         )}
-        {egg.state === 'dropped' && <strong>Egg DROPPED — go back for it</strong>}
+        {egg.state === 'dropped' && <strong>Egg DROPPED — go back</strong>}
         {egg.state === 'delivered' && <span>Egg secured</span>}
       </div>
     </section>
   );
 }
 
-function ThreatMeter({ hud }: { hud: MysteryHudModel }) {
+function HydeStatus({ hud, showRisk }: { hud: MysteryHudModel; showRisk: boolean }) {
+  if (!hud.hyde.emerged) {
+    return (
+      <section className="mhud-pill" data-mode="DORMANT" aria-label="The Hyde" data-testid="hud-hyde">
+        <p className="mhud-pill__state">
+          <Icon name="hourglass" />
+          <span className="mhud-pill__stack">
+            {hud.crack && <span className="mhud-pill__kicker" aria-hidden="true">HYDE</span>}
+            <span className="mhud-pill__word" data-testid="hud-hyde-dormant">{hud.hyde.emergesInS !== null ? `Hyde emerges in ${fmtClock(hud.hyde.emergesInS)}` : 'Hyde dormant'}</span>
+          </span>
+        </p>
+      </section>
+    );
+  }
   const t = THREAT[hud.hyde.mode];
   const pct = Math.round(hud.hyde.suspicion * 100);
   const live = hud.hyde.mode === 'CHASE' ? 'assertive' : 'polite';
+  const risk = showRisk ? hud.risk : null;
+  const band = risk ? (risk.band === 'low' ? 'Low' : risk.band === 'medium' ? 'Medium' : 'High') : null;
   return (
-    <section className="threat" data-mode={hud.hyde.mode} aria-label="The Hyde" data-testid="hud-hyde">
-      <p className="threat__state" aria-live={live}>
+    <section className="mhud-pill" data-mode={hud.hyde.mode} aria-label="The Hyde" data-testid="hud-hyde">
+      <p className="mhud-pill__state" aria-live={live}>
         <Icon name={t.icon} />
-        <span className="threat__word">{t.word}</span>
-        {hud.hyde.effect && (
-          <span className="threat__effect">· {hud.hyde.effect.word}{hud.hyde.effect.leftS !== null && <span className="num"> {hud.hyde.effect.leftS.toFixed(1)} s</span>}</span>
-        )}
+        <span className="mhud-pill__stack">
+          {hud.crack && <span className="mhud-pill__kicker" aria-hidden="true">HYDE</span>}
+          <span className="mhud-pill__word">{t.word}</span>
+        </span>
       </p>
-      <span className="threat__track" role="meter" aria-label="Hyde suspicion" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
-        <span className="threat__fill" style={{ width: `${pct}%` }} />
+      {risk && (
+        <p className={`mhud-pill__risk risk-chip--${risk.source}`} data-testid="risk-chip" data-band={risk.band}>
+          <Icon name="gauge" />
+          <span className="mhud-pill__risk-text">{risk.detectedNow || hud.hyde.mode === 'CHASE' ? 'Risk: High · detected now' : `Risk: ${band} · next 15 s`}</span>
+          <span className="mhud-pill__src" data-testid="risk-chip-label">{risk.label}</span>
+        </p>
+      )}
+      <span className="mhud-pill__suspicion" role="meter" aria-label="Hyde suspicion" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+        <span style={{ width: `${pct}%` }} />
       </span>
-      <span className="threat__caught" aria-label={`Caught ${hud.catches} of 2`}>
-        Caught {[0, 1].map((i) => <span key={i} className={`pip-claw${i < hud.catches ? ' is-on' : ''}`} />)}
-        <span className="num"> {hud.catches}/2</span>
-      </span>
+      {hud.hyde.effect && (
+        <span className="mhud-pill__effect" data-testid="hud-effect">
+          {hud.hyde.effect.word}{hud.hyde.effect.leftS !== null && <span className="num"> {hud.hyde.effect.leftS.toFixed(1)} s</span>}
+        </span>
+      )}
     </section>
   );
 }
 
-/** Chevron on the screen edge pointing toward the Hyde while it searches/chases off-screen (UX §4 ThreatEdge). */
-function ThreatEdge({ at, chase }: { at: { x: number; y: number; rot: number }; chase: boolean }) {
-  const style: CSSProperties = { left: `${at.x * 100}%`, top: `${at.y * 100}%`, transform: `translate(-50%, -50%) rotate(${at.rot}rad)` };
+/**
+ * Joseph Crackstone's status plaque (UX_ENEMIES §1): a SQUARED plaque (the Hyde is a round pill), caps kicker, hat /
+ * eye / curse icons, a SEGMENTED suspicion underline, a DOUBLE border while he hunts. Word + icon + border carry every
+ * state (greyscale-safe). Assertive only on CHASE / ATTACK.
+ */
+function CrackStatus({ c }: { c: CrackHudView }) {
+  const pct = Math.round(c.meter * 100);
   return (
-    <span className={`mhud-edge${chase ? ' is-chase' : ''}`} style={style} aria-hidden="true" data-testid="hud-threat-edge">
+    <section className="mhud-pill mhud-crack" data-state={c.key} aria-label="Joseph Crackstone" data-testid="hud-crack">
+      <p className="mhud-pill__state" aria-live={c.hunting ? 'assertive' : 'polite'}>
+        <Icon name={c.icon} />
+        <span className="mhud-pill__stack">
+          <span className="mhud-pill__kicker" aria-hidden="true">CRACKSTONE</span>
+          <span className="mhud-pill__word" data-testid="hud-crack-word">{c.word}</span>
+        </span>
+      </p>
+      <span className="mhud-crack__meter" role="meter" aria-label="Crackstone suspicion" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+        <span style={{ width: `${pct}%` }} />
+      </span>
+      {c.effect && (
+        <span className="mhud-pill__effect mhud-crack__effect" data-testid="hud-crack-effect">
+          {c.effect.word}{c.effect.leftS !== null && <span className="num"> {c.effect.leftS.toFixed(1)} s</span>}
+        </span>
+      )}
+    </section>
+  );
+}
+
+/**
+ * ONE telegraph banner (400×44, y124): scan / curse countdown with exposure-aware copy (exposed: 3px double crack;
+ * covered / clear: 1px dashed muted), a 4 px depleting bar (none with reduced motion — the number keeps counting), then
+ * the 1–1.5 s result line. The assertive SR lines are spoken once by the loop (announce), so this is role="status".
+ */
+function TelegraphBanner({ b }: { b: BannerView }) {
+  return (
+    <div className={`mhud-banner is-${b.tone}`} data-kind={b.kind} data-exposure={b.exposure ?? undefined} role="status" data-testid="hud-banner">
+      <Icon name={b.icon} />
+      <p className="mhud-banner__text">
+        <strong className="mhud-banner__head num" data-testid="hud-banner-head">{b.head}</strong>
+        {b.text && <span className="mhud-banner__sub" data-testid="hud-banner-sub">{b.text}</span>}
+      </p>
+      {b.frac !== null && <span className="mhud-banner__bar" aria-hidden="true"><span style={{ width: `${Math.round(b.frac * 1000) / 10}%` }} /></span>}
+    </div>
+  );
+}
+
+/** The ONE chevron on the screen edge (§4 order); the Hyde's plain red / amber chevron, Crackstone's green + icon. */
+function ThreatEdge({ e }: { e: ThreatEdgeView }) {
+  const style: CSSProperties = { left: `${e.at.x * 100}%`, top: `${e.at.y * 100}%`, transform: `translate(-50%, -50%) rotate(${e.at.rot}rad)` };
+  return (
+    <span className={`mhud-edge${e.strong ? ' is-chase' : ''}${e.enemy === 'crack' ? ' is-crack' : ''}`} style={style} aria-hidden="true" data-testid="hud-threat-edge" data-enemy={e.enemy}>
       <Icon name="chevronUp" />
+      {e.icon && <span className="mhud-edge__icon" style={{ transform: `rotate(${-e.at.rot}rad)` }}><Icon name={e.icon} /></span>}
     </span>
   );
 }
@@ -157,18 +249,36 @@ function InteractPrompt({ prompt }: { prompt: NonNullable<MysteryHudModel['promp
   const r = 17;
   const c = 2 * Math.PI * r;
   return (
-    <div className="mhud-prompt" data-testid="hud-prompt">
+    <div className="mhud-prompt" data-testid="hud-prompt" data-kind={prompt.kind}>
       <p className="mhud-prompt__row">
         <span className="mhud-prompt__cap">
           <svg viewBox="0 0 40 40" aria-hidden="true">
             <circle cx="20" cy="20" r={r} className="mhud-prompt__ring-bg" />
             {prompt.progress > 0 && <circle cx="20" cy="20" r={r} className="mhud-prompt__ring" strokeDasharray={`${c * prompt.progress} ${c}`} />}
           </svg>
-          <kbd>E</kbd>
+          <KeyCap k="E" />
         </span>
-        <span>{prompt.label}</span>
+        <span>{prompt.label.replace(/^Hold E: /, 'Hold: ')}</span>
       </p>
-      {prompt.warning && <p className="mhud-prompt__warn">{prompt.warning}</p>}
+      {prompt.standStill && <p className="mhud-prompt__warn">Stand still to search</p>}
+      {prompt.warning && <p className="mhud-prompt__warn" data-testid="hud-prompt-warning">{prompt.warning}</p>}
+    </div>
+  );
+}
+
+function ExamineToast({ t }: { t: ExamineToastView }) {
+  return (
+    <div className={`mhud-examine mhud-examine--${t.kind}`} data-testid="hud-examine-toast" role="status">
+      <p className="mhud-examine__row">
+        <Icon name={t.kind === 'passage' || t.kind === 'switch' ? 'key' : t.kind === 'empty' ? 'search' : 'eye'} />
+        <span>
+          {t.head && <strong className="mhud-examine__head">{t.head}</strong>}
+          <span className="mhud-examine__text">{t.text}</span>
+        </span>
+      </p>
+      {t.odds && (
+        <p className="mhud-examine__odds" data-testid="hud-examine-odds"><Icon name="gauge" /> {t.odds}</p>
+      )}
     </div>
   );
 }
@@ -183,7 +293,9 @@ function VitalsPanel({ hud }: { hud: MysteryHudModel }) {
         <span className="caps">HP</span>
         <span className="mhud-bar__track"><span className="mhud-bar__fill" style={{ width: `${hpPct}%` }} /></span>
         <span className="mhud-bar__value num" data-testid="hud-hp">{Math.round(hud.hp)}</span>
-        {low && <span className="mhud-bar__low">Low</span>}
+        <span className="mhud-caught" aria-label={`Caught ${hud.catches} of 2`} data-testid="hud-caught">
+          Caught {[0, 1].map((i) => <span key={i} className={`pip-claw${i < hud.catches ? ' is-on' : ''}`} />)}
+        </span>
       </div>
       <div className={`mhud-noise mhud-noise--${hud.noise.band}`} data-testid="hud-noise">
         <span className="caps">Noise</span>
@@ -192,9 +304,15 @@ function VitalsPanel({ hud }: { hud: MysteryHudModel }) {
         </span>
         <span className="mhud-noise__word">
           {NOISE_WORD[hud.noise.band]}
-          {hud.noise.radiusM > 0 && <span className="mhud-noise__radius num"> · heard within {Math.round(hud.noise.radiusM)} m</span>}
+          {hud.noise.radiusM > 0 && <span className="mhud-noise__radius num"> · {Math.round(hud.noise.radiusM)} m</span>}
         </span>
       </div>
+      {hud.cursedLeftS !== null && (
+        <p className="mhud-cursed" data-testid="hud-cursed">
+          <Icon name="curse" />
+          <span>CURSED · slowed <span className="num">{hud.cursedLeftS.toFixed(1)} s</span></span>
+        </p>
+      )}
       {hud.hidden && (
         <p className={`mhud-hidden${hud.tooClose ? ' is-close' : ''}`} data-testid="hud-hidden">
           <Icon name="eyeClosed" />
@@ -212,8 +330,8 @@ function AbilitySlot({ a }: { a: AbilityHud }) {
   return (
     <div className={`mhud-ability is-${state}`} data-testid={`hud-ability-${a.key}`} key={a.denied ? `d${a.denied.seq}` : 'ok'} data-denied={a.denied ? true : undefined}>
       <span className="mhud-ability__ring" style={{ ['--cd' as string]: `${pct}%` }}>
-        <img src={a.art} alt="" width={48} height={48} />
-        <kbd className="mhud-ability__key">{a.key}</kbd>
+        <img src={a.art} alt="" width={40} height={40} />
+        <KeyCap k={abilityKey(a.key)} className="mhud-ability__key" />
       </span>
       <span className="mhud-ability__text">
         <span className="mhud-ability__name">{a.name}{a.loud && <span className="loud-tag">LOUD</span>}</span>
@@ -223,9 +341,9 @@ function AbilitySlot({ a }: { a: AbilityHud }) {
   );
 }
 
-function ToastView({ t, className }: { t: Toast; className: string }) {
+function ToastView({ t }: { t: Toast }) {
   return (
-    <p key={t.id} className={`${className} mtoast mtoast--${t.tone}`} role="status" data-testid={className}>
+    <p key={t.id} className={`mhud-toast mtoast mtoast--${t.tone}`} role="status" data-testid="hud-toast">
       <Icon name={t.icon} />
       <span>
         <strong>{t.headline}</strong>

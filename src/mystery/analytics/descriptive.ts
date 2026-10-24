@@ -2,13 +2,17 @@
 // stance and the per-frame distance when tracked). One session → SessionReport; many sessions → the Laptop 1 aggregate,
 // per case and combined. Clue statistics are always computed WITHIN a case (each case has its own clue set), so mixing
 // records of different cases never mixes their clues.
+// Joseph Crackstone (enemy contract): SessionReport.crackstone (encounters by via, detections by via, escapes by reason,
+// scans warned / passed / hit, curses cast / hit / blocked / dodged) and the aggregate's Crackstone block + the board KPI
+// fields cursesCast / cursesHit / cursesDodgedPct ("Curses dodged %" = misses / casts; null at n = 0; small sample < 10).
+import { caseWorld } from '../data/caseWorlds.ts';
 import type { CaseId, Duo, HydeMode, NoiseSource, RunResult, Stance, StampedEvent, Verdict } from '../types.ts';
 import { CASE_IDS } from '../types.ts';
 import { accusationKind, caseInfo, clueCountFor, isCaseId, lastAccusation, LEGACY_CLUE_COUNT, recordCaseId } from './caseInfo.ts';
 import type { TelemetryCollector } from './telemetry.ts';
-import type { AbilityUse, AccusationKind, DuoFactors, SessionRecord, SessionReport, StanceTimes } from './types.ts';
+import type { AbilityUse, AccusationKind, CrackstoneReport, DuoFactors, SessionRecord, SessionReport, StanceTimes } from './types.ts';
 
-export const NOISE_SOURCES: readonly NoiseSource[] = ['footstep', 'egg_drop', 'ability', 'interact', 'impact', 'decoy'];
+export const NOISE_SOURCES: readonly NoiseSource[] = ['footstep', 'egg_drop', 'ability', 'interact', 'impact', 'decoy', 'hazard'];
 export const HYDE_MODES: readonly HydeMode[] = ['PATROL', 'INVESTIGATE_SOUND', 'SEARCH', 'CHASE', 'COOLDOWN'];
 export const ALERT_MODES: readonly HydeMode[] = ['INVESTIGATE_SOUND', 'SEARCH', 'CHASE'];
 const STANCES: readonly Stance[] = ['idle', 'walk', 'crouch', 'sprint'];
@@ -70,6 +74,66 @@ export function stanceAt(events: readonly StampedEvent[], t: number, initial: St
     }
   }
   return { stance: cur, seq };
+}
+
+/** The case world of a case id has a Crackstone (public design data). */
+function caseHasCrackstone(caseId: CaseId | null): boolean {
+  if (!caseId) return false;
+  try {
+    return Boolean(caseWorld(caseId)?.crackstone);
+  } catch {
+    return false;
+  }
+}
+
+/** Crackstone counts from the event log (see CrackstoneReport for the definitions). */
+export function crackstoneReport(events: readonly StampedEvent[], present = false): CrackstoneReport {
+  const r: CrackstoneReport = {
+    present, encounters: 0, encountersByVia: { sight: 0, proximity: 0, scan: 0 }, detections: { sight: 0, proximity: 0, scan: 0 },
+    escapes: 0, escapesByReason: { lost_sight: 0, leash: 0, other: 0 }, deferrals: 0,
+    scans: { warned: 0, passed: 0, hit: 0 }, curses: { cast: 0, hit: 0, blocked: 0, dodged: 0, hpLost: 0 }, firstEncounterT: null,
+  };
+  const engaged = (m: string) => m === 'CHASE' || m === 'ATTACK';
+  for (const e of events) {
+    switch (e.type) {
+      case 'crackstone_mode':
+        r.present = true;
+        if (e.to === 'CHASE' && e.from !== 'ATTACK' && (e.reason === 'saw_player' || e.reason === 'sensed_player' || e.reason === 'scan_hit')) {
+          r.encounters++;
+          r.encountersByVia[e.reason === 'saw_player' ? 'sight' : e.reason === 'sensed_player' ? 'proximity' : 'scan']++;
+          if (r.firstEncounterT === null) r.firstEncounterT = e.t;
+        } else if (engaged(e.from) && !engaged(e.to)) {
+          if (e.reason === 'deferred') r.deferrals++;
+          else if (e.reason !== 'curse_done') {
+            r.escapes++;
+            r.escapesByReason[e.reason === 'lost_sight' ? 'lost_sight' : e.reason === 'leash' ? 'leash' : 'other']++;
+          }
+        } else if (e.reason === 'deferred') r.deferrals++;
+        break;
+      case 'crackstone_sighted':
+        r.present = true;
+        r.detections[e.via]++;
+        break;
+      case 'crackstone_scan':
+        r.present = true;
+        if (e.phase === 'warning') r.scans.warned++;
+        else if (e.hit) r.scans.hit++;
+        else r.scans.passed++;
+        break;
+      case 'curse':
+        r.present = true;
+        if (e.phase === 'cast') r.curses.cast++;
+        else if (e.phase === 'hit') {
+          r.curses.hit++;
+          if (e.blocked) r.curses.blocked++;
+          r.curses.hpLost += e.hpLost;
+        } else r.curses.dodged++;
+        break;
+      default:
+        break;
+    }
+  }
+  return r;
 }
 
 export function describeSession(input: DescribeInput): SessionReport {
@@ -193,6 +257,7 @@ export function describeSession(input: DescribeInput): SessionReport {
       delivered, deliveredT, points,
     },
     abilities: { F, Q },
+    crackstone: crackstoneReport(ev, caseHasCrackstone(caseId)),
     hints,
     verdict: status === 'finished' ? (result?.verdict ?? verdict) : null,
     accusation: {
@@ -318,9 +383,35 @@ export interface DescriptiveAggregate {
   stanceMix: StanceTimes; // shares over all ended runs
   topAbilities: { key: 'F' | 'Q'; abilityId: string; uses: number; successes: number }[];
   pickRate: { characters: PickRate[]; pokemon: PickRate[] };
+  /** Joseph Crackstone over the ended runs of the scope that had him (case world or his events). */
+  crackstone: CrackstoneAggregate;
+  /** UX §8 KPI "Curses dodged %": curses cast / landed (blocked or not) / missed over ended runs; pct null at n = 0. */
+  cursesCast: number;
+  cursesHit: number;
+  cursesDodged: number;
+  cursesDodgedPct: number | null;
+  /** Fewer than 10 curses cast: the board says "small sample". */
+  cursesSmallSample: boolean;
   /** Per-case table: always the three cases (over ALL case records, independent of `scope`) + the combined row. */
   cases: CaseSummary[];
   combined: CaseSummary;
+  smallSample: boolean;
+}
+
+export interface CrackstoneAggregate {
+  /** Ended runs with a Crackstone. */
+  runs: number;
+  encounters: number;
+  encountersPerRun: number | null;
+  encountersByVia: { sight: number; proximity: number; scan: number };
+  detections: { sight: number; proximity: number; scan: number };
+  escapes: number;
+  escapesByReason: { lost_sight: number; leash: number; other: number };
+  /** Escapes / encounters (0-100), null without encounters. */
+  escapePct: number | null;
+  scansWarned: number;
+  scansHit: number;
+  curses: { cast: number; hit: number; blocked: number; dodged: number; hpLost: number };
   smallSample: boolean;
 }
 
@@ -523,6 +614,27 @@ export function aggregateSessions(records: readonly SessionRecord[], options: Ag
       }
     }
   }
+  const crackRuns = ended.filter((x) => x.rep.crackstone.present);
+  const crack: CrackstoneAggregate = {
+    runs: crackRuns.length, encounters: 0, encountersPerRun: null, encountersByVia: { sight: 0, proximity: 0, scan: 0 },
+    detections: { sight: 0, proximity: 0, scan: 0 }, escapes: 0, escapesByReason: { lost_sight: 0, leash: 0, other: 0 }, escapePct: null,
+    scansWarned: 0, scansHit: 0, curses: { cast: 0, hit: 0, blocked: 0, dodged: 0, hpLost: 0 }, smallSample: crackRuns.length < 10,
+  };
+  for (const x of crackRuns) {
+    const c = x.rep.crackstone;
+    crack.encounters += c.encounters;
+    for (const k of ['sight', 'proximity', 'scan'] as const) {
+      crack.encountersByVia[k] += c.encountersByVia[k];
+      crack.detections[k] += c.detections[k];
+    }
+    crack.escapes += c.escapes;
+    for (const k of ['lost_sight', 'leash', 'other'] as const) crack.escapesByReason[k] += c.escapesByReason[k];
+    crack.scansWarned += c.scans.warned;
+    crack.scansHit += c.scans.hit;
+    for (const k of ['cast', 'hit', 'blocked', 'dodged', 'hpLost'] as const) crack.curses[k] += c.curses[k];
+  }
+  crack.encountersPerRun = crackRuns.length ? crack.encounters / crackRuns.length : null;
+  crack.escapePct = crack.encounters ? (100 * crack.escapes) / crack.encounters : null;
   const firstAlerts = ended.map((x) => x.rep.hyde.firstAlertT).filter((v): v is number => v !== null);
   const withEvents = ended.filter((x) => x.hasEvents);
   return {
@@ -549,6 +661,12 @@ export function aggregateSessions(records: readonly SessionRecord[], options: Ag
     stanceMix: shares(stanceSum),
     topAbilities: [...abil.values()].sort((a, b) => b.uses - a.uses || a.abilityId.localeCompare(b.abilityId)).slice(0, 5),
     pickRate: pickRates(inScope),
+    crackstone: crack,
+    cursesCast: crack.curses.cast,
+    cursesHit: crack.curses.hit,
+    cursesDodged: crack.curses.dodged,
+    cursesDodgedPct: crack.curses.cast ? (100 * crack.curses.dodged) / crack.curses.cast : null,
+    cursesSmallSample: crack.curses.cast < 10,
     cases,
     combined,
     smallSample: ended.length < 10,

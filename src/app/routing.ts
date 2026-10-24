@@ -8,6 +8,8 @@
 //                                                prologue=0 skips the case-file reveal + Thing's story; case=<caseId>
 //                                                forces that case for this ephemeral session); `seed`
 //                                                alone reproduces that seed's three-card offer. Never persisted.
+//                                                TEST FIXTURE: &crackstone=0 plays the case without Joseph Crackstone
+//                                                (read by useMysteryLoop; never on the LIVE station).
 //   /?mode=rowing[&character=..&pokemon=..][&tutorial=0]
 //                                                the previous v3.0 real-time rowing journey (kept reachable);
 //                                                `mode=play` is an alias

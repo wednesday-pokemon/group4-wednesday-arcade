@@ -152,13 +152,152 @@ export interface MapDef {
   cover: CoverDef[];
   hidingSpots: HidingSpotDef[];
   rooms: RoomDef[];
-  clues: CluePlacement[]; // exactly the three clues
-  eggSpawn: Vec2; // in the egg chamber
+  /**
+   * HIDDEN TRUTH for this session: the three clues at their chosen sites. The sim, the bot and the renderer's near-range
+   * glint may read it; minimap / HUD / analytics must NOT (they use `world` + MysteryRun.investigation()).
+   */
+  clues: CluePlacement[];
+  /** HIDDEN TRUTH: the chosen egg site for this session (same rule as `clues`). */
+  eggSpawn: Vec2;
   tower: { x: number; z: number; radius: number }; // Iago Tower deposit zone
   safeReleasePoints: Vec2[]; // where a grabbed player is released (far from the Hyde)
   powerSwitch?: PowerSwitchDef;
   landmarks: { id: string; kind: 'pier' | 'research_hall' | 'crypt' | 'egg_shrine' | 'iago_tower' | 'greenhouse' | 'lamp' | 'gate'; x: number; z: number; yaw: number; scale: number }[];
+  /** The case's world (themes, candidate sites, zones, interactables, hazards). Present on every case map. */
+  world?: CaseWorldDef;
 }
+
+// ----------------------------------------------------------------------------------------------------- case worlds
+// Overhaul (docs/overhaul/OVERHAUL_CONTRACT.md). Pure data in src/mystery/data/caseWorlds.ts (game-designer).
+// Every probability shown to the player is computed from these priors + public observations (never from MapDef.clues /
+// eggSpawn / SessionLayout).
+
+/** A named investigation area (minimap circle, advice target): "Greenhouse Annex". */
+export interface AreaDef { id: string; name: string; x: number; z: number; radiusM: number }
+
+/** A spot where a clue or the egg MAY be. One site per clue group / one egg site is drawn per session with `prior`. */
+export interface SiteDef {
+  id: string;
+  areaId: string;
+  roomId: RoomId;
+  x: number;
+  z: number;
+  /** Prior probability within its group (a clue's sites, or the egg sites); each group sums to 1. */
+  prior: number;
+  /** Short place label ("Potting bench"). */
+  label: string;
+  /** Renderer prop that stands here whether or not the item is present (so props never give the answer away). */
+  prop: 'desk' | 'cabinet' | 'shelf' | 'crate' | 'altar' | 'console' | 'locker' | 'workbench' | 'nest' | 'sarcophagus' | 'planter';
+}
+
+/** The candidate sites of one clue (1–3; ≥ 2 for most clues so the search is uncertain). */
+export interface ClueSiteGroup { clueId: ClueId; searchS: number; sites: SiteDef[] }
+
+/** A candidate egg site. `traceText` = what a trace pointing here says ("Nest straw leads toward the potting shed."). */
+export interface EggSiteDef extends SiteDef { traceText: string }
+
+/** Where the Hyde may emerge. Drawn once per session at emergence time (see HydeSpawnDef rule in the contract). */
+export interface HydeSpawnDef { id: string; name: string; zoneId: string; x: number; z: number; yaw: number; weight: number }
+
+/** A risk-map zone (axis-aligned rectangle, same polygon convention as RoomDef). Zones tile the walkable island. */
+export interface ZoneDef { id: string; name: string; polygon: Vec2[] }
+
+/** A suspicious object anyone can examine with E (short hold). May yield an egg trace. */
+export interface ExamineDef {
+  id: string;
+  x: number;
+  z: number;
+  label: string; // E prompt: "Examine the cracked vial"
+  text: string; // result, ≤ 90 chars
+  givesTrace: boolean;
+  prop: 'vial' | 'books' | 'lab' | 'vines' | 'lantern' | 'machine' | 'cobweb' | 'radio' | 'alarm' | 'map' | 'footprints';
+}
+
+/** A lever anyone can pull (E hold) that permanently opens `wallId` (one of the case's extraWalls): a hidden passage. */
+export interface PassageDef { id: string; leverX: number; leverZ: number; label: string; wallId: string; text: string }
+
+export type HazardDef =
+  /** Walking/sprinting on it adds `loudnessAdd` to each footstep (crouching is silent): glass, floorboards, rubble, puddles. */
+  | { kind: 'noisy_floor'; id: string; name: string; polygon: Vec2[]; loudnessAdd: number; look: 'glass' | 'boards' | 'rubble' | 'puddle' }
+  /** Rotating beam: a visible, not-hidden player inside it (LOS) raises an alarm noise at their position (cooldown). */
+  | { kind: 'searchlight'; id: string; name: string; x: number; z: number; rangeM: number; coneDeg: number; periodS: number; phase: number; loudness: number; cooldownS: number };
+
+export type CaseTheme = 'archive' | 'crypt' | 'signal';
+
+/**
+ * Joseph Crackstone's haunt in one case (docs/overhaul/ENEMY_CONTRACT.md). PUBLIC data: the cursed area's name and
+ * outline are shown to the player (minimap, Thing); his live position is not (rule R4).
+ */
+export interface CrackstoneDef {
+  /** Cursed area name, shown to the player ("Archive Stacks"). */
+  areaName: string;
+  /** Cursed area outline (axis-aligned rectangle or convex polygon, same convention as RoomDef). */
+  polygon: Vec2[];
+  /** Closed patrol loop (≥ 3 waypoints) inside / along the cursed area; every segment walkable for his radius. */
+  patrol: Vec2[];
+  /** Where he stands when play starts (on or next to the loop, ≥ 25 m from the pier start). */
+  start: { x: number; z: number; yaw: number };
+  /** He gives up a chase this far (m) from the cursed area's centroid (rule R5). */
+  leashM: number;
+  /** Per-case presence (e.g. stronger in the crypt): scan interval override (s) and sight range × mult. */
+  scanEveryS?: number;
+  sightRangeMult?: number;
+}
+
+export interface CaseWorldDef {
+  caseId: CaseId;
+  theme: CaseTheme;
+  areas: AreaDef[];
+  clueSites: ClueSiteGroup[]; // exactly the case's three clues
+  eggSites: EggSiteDef[]; // exactly 3, priors sum to 1
+  /** P(a trace points at the TRUE egg site); otherwise it points uniformly at one of the other sites. */
+  traceAccuracy: number;
+  hydeSpawns: HydeSpawnDef[]; // 3, weights sum to 1, each ≥ minSpawnDistanceM from the player start
+  zones: ZoneDef[]; // 5–8 rectangles that together cover every walkable cell
+  /** Case-specific structures added to the shared island (bookshelf rows, collapsed corridors, patrol fences …). */
+  extraWalls: WallDef[];
+  extraCover: CoverDef[];
+  extraHiding: HidingSpotDef[];
+  passage: PassageDef | null;
+  examines: ExamineDef[];
+  hazards: HazardDef[];
+  /** The case's second enemy (sight-based); null / absent = no Crackstone on this map. */
+  crackstone?: CrackstoneDef | null;
+}
+
+/** HIDDEN per-session draw (seeded PRF keys 'site:<clueId>', 'site:egg', 'trace:<sourceId>', 'hyde:spawn'). */
+export interface SessionLayout { clueSites: Partial<Record<ClueId, string>>; eggSiteId: string }
+
+/** An egg trace the player found: it points at `siteId` (generated from the true site with world.traceAccuracy). */
+export interface EggTrace { sourceId: string; siteId: string; t: number }
+
+/**
+ * PUBLIC investigation state — only what the player has observed. Analytics (posteriors), minimap and advice read this
+ * plus the CaseWorldDef priors; never SessionLayout / MapDef.clues / MapDef.eggSpawn.
+ */
+export interface InvestigationState {
+  /** Candidate clue sites seen empty (player came within siteCheckM with line of sight, or searched them). */
+  checkedClueSites: string[];
+  /** Clue sites where the clue was seen or found: clueId → siteId. */
+  knownClueSites: Partial<Record<ClueId, string>>;
+  checkedEggSites: string[];
+  /** Site where the egg was seen resting (null until seen; stays set after pickup). */
+  eggSeenAt: string | null;
+  traces: EggTrace[];
+  examined: string[];
+  passageOpen: boolean;
+  hydeEmerged: boolean;
+  hydeEmergedAt: number | null; // sim t
+  hydeEmergesInS: number | null; // countdown before emergence (public: Thing warns), null after
+  /** Last time the player could see the Hyde (LOS, ≤ sight.playerSeesHydeM), and where. */
+  lastHydeSighting: { t: number; x: number; z: number } | null;
+  /** Last time the player could see Joseph Crackstone (same rule), and where; null / absent if never / no Crackstone. */
+  lastCrackstoneSighting?: { t: number; x: number; z: number } | null;
+}
+
+/** Physical key label for each ability SLOT. Slot ids stay 'F' (character power) / 'Q' (Pokémon move) everywhere in
+ *  data, events and the server; players press Q for the power and R for the move (F also works for the power). */
+export const ABILITY_KEY_LABEL: Readonly<Record<'F' | 'Q', string>> = { F: 'Q', Q: 'R' };
 
 // ----------------------------------------------------------------------------------------------------- case
 
@@ -178,6 +317,12 @@ export const CASE_IDS: readonly CaseId[] = ['poisoned_archive', 'crypt_last_witn
 export interface ClueDef {
   id: ClueId;
   title: string;
+  /** ≤ 26 chars, for tight UI (HUD card, evidence slot) when `title` is longer. */
+  shortTitle?: string;
+  /** TL;DR card (overhaul): one short sentence, ≤ 90 chars, what the evidence shows. */
+  short?: string;
+  /** TL;DR "Meaning:" line, ≤ 60 chars — a link in the chain, never "X did it". */
+  meaning?: string;
   roomId: RoomId;
   /** Where it lies, as the locked card shows it ("Greenhouse Annex"). */
   location: string;
@@ -209,9 +354,8 @@ export interface CaseDef {
   suspects: SuspectDef[];
   clues: ClueDef[];
   notes: CaseNoteDef[];
-  /** Where this case's three clues lie on the shared island (searchS = seconds of searching). */
-  placements: CluePlacement[];
-  egg: { x: number; z: number; roomId: RoomId; objective: string };
+  /** Clue + egg positions are no longer fixed: candidate sites live in CaseWorldDef (data/caseWorlds.ts). */
+  egg: { objective: string };
   /** Case-specific display names for rooms of the shared island ("Research Archive"). */
   roomNames: Partial<Record<RoomId, string>>;
   /** Thing's case-specific lines (prologue panels 2–3 + in-run objective/hint copy). */
@@ -255,7 +399,7 @@ export interface PlayerState {
   invulnerableUntil: number;
   hidden: boolean; // inside a hiding spot while crouched
   roomId: RoomId | null;
-  interacting: { target: 'clue' | 'egg'; id: string; progress: number } | null;
+  interacting: { target: 'clue' | 'egg' | 'examine' | 'lever'; id: string; progress: number } | null;
 }
 
 export type EggState = 'resting' | 'carried' | 'dropped' | 'delivered';
@@ -273,6 +417,27 @@ export interface HydeRuntime {
   path: Vec2[]; // remaining nav path (renderer/premonition may draw it)
   stunnedUntil: number; slowedUntil: number; slowMult: number; distractedUntil: number;
   grabbing: boolean; // short grab animation window
+}
+
+/** Joseph Crackstone's AI states (ENEMY_CONTRACT sim rules 1–8). */
+export type CrackstoneMode = 'PATROL' | 'INVESTIGATE' | 'CHASE' | 'ATTACK' | 'SEARCH' | 'RETURN';
+export type CrackstoneDetectVia = 'sight' | 'proximity' | 'scan';
+export type CrackstoneModeReason = 'saw_player' | 'sensed_player' | 'scan_hit' | 'lost_sight' | 'leash' | 'reached_target' | 'gave_up' | 'search_timeout' | 'returned' | 'curse_cast' | 'curse_done' | 'curse_missed' | 'stunned' | 'lured' | 'deferred';
+
+export interface CrackstoneRuntime {
+  mode: CrackstoneMode;
+  modeT: number;
+  x: number; z: number; yaw: number; speed: number;
+  suspicion: number; // 0..1
+  canSeePlayer: boolean;
+  lastKnown: Vec2 | null;
+  target: Vec2 | null;
+  path: Vec2[];
+  stunnedUntil: number; slowedUntil: number; slowMult: number; distractedUntil: number;
+  /** PUBLIC telegraph: supernatural scan pending ('warning', he stands still, ring grows) or just fired ('pulse'). */
+  scan: { phase: 'warning' | 'pulse'; startedAt: number; pulseAt: number; radiusM: number } | null;
+  /** PUBLIC telegraph: curse circle on the ground; lands at `landsAt` on a player still inside it (with LOS). */
+  curse: { x: number; z: number; radiusM: number; startedAt: number; landsAt: number } | null;
 }
 
 export type RunStatus = 'tutorial' | 'playing' | 'accusing' | 'finished' | 'dnf';
@@ -293,9 +458,21 @@ export interface ActiveEffects {
   hydeStunned: boolean;
   hydePetrified: boolean; // stun applied by a gaze/pin effect (renderer shows stone/pinned look)
   hydeSlowed: boolean;
-  blockGrab: boolean; // next grab blocked (catch still counts)
+  blockGrab: boolean; // next grab (or Crackstone curse) blocked (a grab's catch still counts)
   eggShield: boolean;
   switchPowered: boolean;
+  /** Crackstone counterparts (all false / null without a Crackstone). */
+  crackstoneDistracted: boolean;
+  crackstoneStunned: boolean;
+  crackstonePetrified: boolean;
+  crackstoneSlowed: boolean;
+  /** Crackstone's predicted path (premonition), when he is in range. */
+  crackstonePremonitionPath: Vec2[] | null;
+  /** A reveal effect currently shows enemies (Hyde / Crackstone) within `enemyRevealRangeM` (0 = anywhere). */
+  enemiesRevealed: boolean;
+  enemyRevealRangeM: number;
+  /** Player slowed by a landed curse (movement × tuning crackstone.curseSlowMult). */
+  cursed: boolean;
   last: { key: 'F' | 'Q'; abilityId: string; kinds: AbilityEffectKind[]; t: number } | null;
 }
 
@@ -316,7 +493,7 @@ export interface MysteryInput {
 
 // ----------------------------------------------------------------------------------------------------- events
 
-export type NoiseSource = 'footstep' | 'egg_drop' | 'ability' | 'interact' | 'impact' | 'decoy';
+export type NoiseSource = 'footstep' | 'egg_drop' | 'ability' | 'interact' | 'impact' | 'decoy' | 'hazard';
 export type GameEvent =
   | { type: 'noise'; source: NoiseSource; x: number; z: number; loudness: number; radiusM: number }
   | { type: 'stance'; stance: Stance }
@@ -335,6 +512,19 @@ export type GameEvent =
   | { type: 'ability_used'; key: 'F' | 'Q'; abilityId: string; kinds: AbilityEffectKind[]; success: boolean; detail: string }
   | { type: 'ability_denied'; key: 'F' | 'Q'; reason: 'cooldown' | 'no_target' }
   | { type: 'hint_requested' }
+  // ---- overhaul (telemetry only; not rule events)
+  | { type: 'hyde_emerged'; spawnId: string; x: number; z: number }
+  | { type: 'site_checked'; site: 'clue' | 'egg'; siteId: string; found: boolean }
+  | { type: 'trace_found'; sourceId: string; siteId: string }
+  | { type: 'examined'; examineId: string }
+  | { type: 'passage_opened'; passageId: string }
+  | { type: 'hazard_triggered'; hazardId: string }
+  // ---- Joseph Crackstone (ENEMY_CONTRACT; telemetry + rule events)
+  | { type: 'crackstone_mode'; from: CrackstoneMode; to: CrackstoneMode; reason: CrackstoneModeReason }
+  | { type: 'crackstone_sighted'; via: CrackstoneDetectVia; distanceM: number }
+  | { type: 'crackstone_lost' }
+  | { type: 'crackstone_scan'; phase: 'warning' | 'pulse'; radiusM: number; hit: boolean }
+  | { type: 'curse'; phase: 'cast' | 'hit' | 'miss'; hpLost: number; blocked: boolean }
   | { type: 'accusation'; suspectId: SuspectId | null; correct: boolean; cluesFound: number; evidence: string[]; deductionCorrect: boolean }
   | { type: 'finish'; verdict: Verdict; score: number }
   | { type: 'dnf'; reason: DnfReason };
@@ -362,7 +552,34 @@ export interface StateSnapshot {
   powerReady: boolean;
   moveReady: boolean;
   objective: Objective;
+  /** Overhaul: the Hyde has emerged (before that it is absent). */
+  hydeEmerged: boolean;
+  /** Overhaul: the player can currently see the Hyde (LOS within sight.playerSeesHydeM). */
+  hydeVisible: boolean;
+  /** Enemy contract: Joseph Crackstone is in this case (false = no second enemy; the fields below are then defaults). */
+  crackstonePresent: boolean;
+  crackstoneMode: CrackstoneMode;
+  /** Distance to Crackstone (m); HYDE_ABSENT_DISTANCE_M (999) without a Crackstone. */
+  crackstoneDistanceM: number;
+  crackstoneOccluded: boolean;
+  crackstoneVisible: boolean;
+  crackstoneSuspicion: number;
 }
+
+/** StateSnapshot fields when there is no Crackstone (fixtures, older dataset rows). 999 = HYDE_ABSENT_DISTANCE_M. */
+export const CRACKSTONE_ABSENT_SNAPSHOT: Pick<StateSnapshot,
+  'crackstonePresent' | 'crackstoneMode' | 'crackstoneDistanceM' | 'crackstoneOccluded' | 'crackstoneVisible' | 'crackstoneSuspicion'> = {
+  crackstonePresent: false, crackstoneMode: 'PATROL', crackstoneDistanceM: 999, crackstoneOccluded: true, crackstoneVisible: false,
+  crackstoneSuspicion: 0,
+};
+
+/** ActiveEffects fields when nothing affects Crackstone / no enemy reveal / no curse. */
+export const CRACKSTONE_NO_EFFECTS: Pick<ActiveEffects,
+  'crackstoneDistracted' | 'crackstoneStunned' | 'crackstonePetrified' | 'crackstoneSlowed' | 'crackstonePremonitionPath'
+  | 'enemiesRevealed' | 'enemyRevealRangeM' | 'cursed'> = {
+  crackstoneDistracted: false, crackstoneStunned: false, crackstonePetrified: false, crackstoneSlowed: false,
+  crackstonePremonitionPath: null, enemiesRevealed: false, enemyRevealRangeM: 0, cursed: false,
+};
 
 export type Objective = 'find_clues' | 'find_egg' | 'retrieve_egg' | 'deliver_egg' | 'accuse' | 'done';
 

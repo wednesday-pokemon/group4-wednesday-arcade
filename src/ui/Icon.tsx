@@ -58,6 +58,10 @@ const PATHS = {
   signpost: <><path d="M12 3v3" /><path d="M18.5 13h-13L2 9.5 5.5 6h13L22 9.5Z" /><path d="M12 13v8" /></>,
   barChart: <><path d="M3 3v18h18" /><path d="M18 17V9" /><path d="M13 17V5" /><path d="M8 17v-3" /></>,
   chevronUp: <path d="m18 15-6-6-6 6" />,
+  // enemy contract (UX_ENEMIES §1): Joseph Crackstone — pilgrim hat, curse glyph, scanning eye
+  hat: <><path d="M3 18h18" /><path d="M7 18 8.5 5h7L17 18" /><rect x="10" y="12" width="4" height="3" /></>,
+  curse: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /><path d="M12 3v5M4.2 16.5l4.3-2.5M19.8 16.5l-4.3-2.5" /></>,
+  scanEye: <><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /><circle cx="12" cy="12" r="3" /><path d="M3 5a13 13 0 0 1 18 0" /></>,
 } satisfies Record<string, ReactElement>;
 
 export type IconName = keyof typeof PATHS;

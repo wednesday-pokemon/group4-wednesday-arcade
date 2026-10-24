@@ -4,12 +4,15 @@
 // - the browser loads it ONLY with a dynamic import after the visitor has committed the accusation
 //   (src/app/mystery/integration.ts loadCaseSolution), so it never ships in the pre-accusation bundle.
 //   tests/unit/mystery/caseSecrecy.test.ts fails if any browser module imports this file statically.
+//
+// Version 2 (overhaul 2026-10-23): answers, links and innocents are unchanged; the bump follows CaseDef.version
+// (positions are now drawn from candidate sites, TL;DR fields added, two clue texts broadened for multi-site clues).
 import type { CaseId, CaseSolution } from '../types.ts';
 
 export const CASE_SOLUTIONS: Record<CaseId, CaseSolution> = {
   poisoned_archive: {
     caseId: 'poisoned_archive',
-    version: 1,
+    version: 2,
     culprit: 'thornhill',
     supportingEvidence: ['falsified_transfer', 'botanical_residue', 'access_ledger'],
     links: {
@@ -28,7 +31,7 @@ export const CASE_SOLUTIONS: Record<CaseId, CaseSolution> = {
   },
   crypt_last_witness: {
     caseId: 'crypt_last_witness',
-    version: 1,
+    version: 2,
     culprit: 'isaac',
     supportingEvidence: ['sabotaged_gate', 'tunnel_access_record', 'equipment_match'],
     links: {
@@ -47,7 +50,7 @@ export const CASE_SOLUTIONS: Record<CaseId, CaseSolution> = {
   },
   midnight_signal: {
     caseId: 'midnight_signal',
-    version: 1,
+    version: 2,
     culprit: 'barry',
     supportingEvidence: ['falsified_patrol_log', 'alarm_override', 'watchtower_signal'],
     links: {

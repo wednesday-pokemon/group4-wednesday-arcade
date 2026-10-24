@@ -139,3 +139,91 @@
 .mdash-acc__seg--unsolved { background: var(--c-border-strong); }
 .mdash-acc__seg--dnf { background: var(--c-hyde, #9b2c4a); }
 .lp-badge--case { border: 1px solid var(--c-lantern); color: var(--c-lantern); }
+
+/* ---- Overhaul (UX_OVERHAUL §10): header KPI ribbon + StationLiveCard rows. Status = icon + word (never colour alone);
+   red only for the Hyde (CHASING); numbers in the sans face, proportional for stat tiles, tabular for the live clock. */
+.mdash__head--kpi { gap: 0.75rem; min-width: 0; }
+.mdash__head--kpi .mdash__title { font-size: var(--fs-lg); white-space: nowrap; }
+.mdash-kpis { display: flex; gap: 0.5rem; margin: 0 0 0 auto; min-width: 0; }
+.mdash-kpi { display: grid; align-content: center; min-width: 6rem; padding: 0.1rem 0.65rem 0.15rem; border-radius: var(--r-md); background: var(--c-hud); border: 1px solid var(--c-border); }
+.mdash-kpi dt { font-size: 0.75rem; color: var(--c-text-muted); white-space: nowrap; line-height: 1.2; }
+.mdash-kpi dd { margin: 0; display: flex; align-items: baseline; gap: 0.35rem; line-height: 1.15; }
+.mdash-kpi__v { font: var(--fw-semi) var(--fs-md) / 1.1 var(--font-body); color: var(--c-text); }
+.mdash-kpi__small { font-size: 0.6875rem; font-style: italic; color: var(--c-text-muted); white-space: nowrap; }
+
+.mdash.mdash--kpi { padding: 0.8rem 1.25rem; gap: 0.6rem; }
+.mdash__grid.mdash__grid--cases.mdash__grid--live { grid-template-rows: minmax(12.75rem, auto) auto minmax(10.5rem, auto) minmax(14.5rem, auto); gap: 0.6rem; }
+.mdash-card.mstation { gap: 0.1rem; padding-top: 0.5rem; padding-bottom: 0.45rem; }
+.mstation > * { flex: none; }
+.mstation.is-chase { border: 2px solid var(--c-hyde); box-shadow: 0 0 18px rgba(229, 72, 77, 0.3); }
+.mstation.is-lost { border-style: dashed; border-color: var(--c-warning); }
+.mstation.is-dnf .mdash-phase .icon { opacity: 0.55; }
+.mdash-phase { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
+.mdash-phase .icon { width: 0.9rem; height: 0.9rem; }
+.mstation__r1 { display: flex; align-items: center; gap: 0.5rem; min-height: 1.5rem; }
+.mstation__label { margin: 0; white-space: nowrap; }
+.mstation__chasing { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0 0.5rem; border-radius: var(--r-pill); border: 1px solid var(--c-hyde); color: var(--c-hyde-text, #ff8a8a); font-weight: var(--fw-bold); font-size: 0.75rem; letter-spacing: 0.06em; }
+.mstation__chasing .icon { width: 0.85rem; height: 0.85rem; }
+.mstation__time { margin-left: auto; font: var(--fw-bold) var(--fs-lg) / 1 var(--font-body); font-variant-numeric: tabular-nums; }
+.mstation__idle { margin: 0; }
+.mstation__r2 { display: flex; align-items: center; gap: 0.5rem; min-height: 1.5rem; min-width: 0; }
+.mstation__faces { display: inline-flex; flex: none; }
+.mstation__faces img { width: 1.5rem; height: 1.5rem; border-radius: 50%; object-fit: cover; object-position: 50% 20%; border: 1.5px solid var(--c-border-strong); background: var(--c-surface-2); }
+.mstation__faces img + img { margin-left: -0.35rem; }
+.mstation__nick { font-size: var(--fs-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 10rem; }
+.mstation__duo { color: var(--c-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.mstation__case { margin: 0; min-height: 1.05rem; line-height: 1.25; color: var(--c-text-2); font-size: 0.8125rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mstation__track { display: flex; align-items: center; gap: 0.4rem; min-height: 1.45rem; min-width: 0; white-space: nowrap; }
+.mstation__step { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--c-text-muted); }
+.mstation__step .icon { width: 0.95rem; height: 0.95rem; }
+.mstation__egg.is-on { color: var(--c-egg-common); }
+.mstation__egg.is-dropped { color: var(--c-lantern); }
+.mstation__tower.is-on { color: var(--c-lantern); }
+.mstation__arrow { color: var(--c-text-muted); }
+.mstation__obj { margin-left: auto; padding: 0 0.5rem; border-radius: var(--r-pill); border: 1px solid var(--c-lantern); color: var(--c-lantern); font-weight: var(--fw-bold); font-size: 0.75rem; }
+.mstation__r5 { display: flex; align-items: center; gap: 0.7rem; min-height: 1.45rem; white-space: nowrap; min-width: 0; }
+.mstation__hp { display: inline-flex; align-items: center; gap: 0.3rem; }
+.mstation__hp .icon { width: 0.85rem; height: 0.85rem; color: var(--c-text-muted); }
+.mstation__hpbar { display: inline-block; width: 6rem; height: 6px; background: var(--c-surface-2); }
+.mstation__hpbar > span { display: block; height: 100%; background: var(--c-text-2); border-radius: 0 3px 3px 0; }
+.mstation__hpbar > span.is-low { background: var(--c-lantern); }
+.mstation__hyde { display: inline-flex; align-items: center; gap: 0.25rem; margin-left: auto; padding: 0 0.45rem; border-radius: var(--r-pill); border: 1px solid var(--c-border-strong); }
+.mstation__hyde .icon { width: 0.85rem; height: 0.85rem; }
+.mstation__hyde.is-chase { border-color: var(--c-hyde); color: var(--c-hyde-text, #ff8a8a); }
+.mstation__r6 { margin: 0; display: flex; align-items: center; gap: 0.75rem; min-height: 1.35rem; white-space: nowrap; overflow: hidden; }
+.mstation__src { color: var(--c-text-muted); font-weight: var(--fw-regular); }
+.mstation__r7 { margin: 0; display: flex; align-items: center; gap: 0.4rem; min-width: 0; min-height: 1.5rem; }
+.mstation__head { flex: none; font-size: 0.6875rem; letter-spacing: 0.06em; font-weight: var(--fw-bold); color: var(--c-text-muted); white-space: nowrap; }
+.mstation__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-2); }
+.mstation__followed { flex: none; margin-left: auto; white-space: nowrap; font-size: 0.75rem; color: var(--c-text-muted); }
+.mstation__age { margin-top: auto; min-height: 0.9rem; line-height: 1.1; }
+
+/* ---- Joseph Crackstone on the station card (UX_ENEMIES §8): his MODE only (never his position); a DOUBLE green border
+   + "HUNTED" chip while he chases (shape differs from the Hyde's solid red CHASING frame — never both, R6). */
+.mstation.is-hunted { border: 2px double var(--c-crack); box-shadow: 0 0 18px rgba(168, 224, 99, 0.25); }
+.mstation__hunted { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0 0.5rem; border-radius: var(--r-sm); border: 1px solid var(--c-crack); color: var(--c-crack-text); font-weight: var(--fw-bold); font-size: 0.75rem; letter-spacing: 0.06em; }
+.mstation__hunted .icon { width: 0.85rem; height: 0.85rem; }
+.mstation__crack { display: inline-flex; align-items: center; gap: 0.25rem; max-width: 6.25rem; padding: 0 0.45rem; border-radius: var(--r-sm); border: 1px solid var(--c-border-strong); white-space: nowrap; overflow: hidden; }
+.mstation__crack .icon { width: 0.85rem; height: 0.85rem; flex: none; color: var(--c-crack); }
+.mstation__crack.is-hunting { border: 3px double var(--c-crack); color: var(--c-crack-text); font-weight: var(--fw-bold); }
+.mstation__r5 > .mstation__crack:not(.mstation__hyde + .mstation__crack) { margin-left: auto; }
+.mstation__r5 > .mstation__hyde + .mstation__crack { margin-left: -0.3rem; }
+.mstation__case { display: flex; gap: 0.6rem; }
+/* R5 with both enemy chips: a shorter HP bar and tighter gaps keep the Crackstone chip whole (≤ 100 px) */
+.mstation__r5:has(.mstation__crack) { gap: 0.45rem; }
+.mstation__r5:has(.mstation__crack) .mstation__hpbar { width: 4rem; }
+.mstation__casetext { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mstation__chases { flex: none; margin-left: auto; color: var(--c-text); font-weight: var(--fw-semi); }
+
+/* ---- P3 (deploy carry-over): the header never lets the KPI tiles slide under the "Live · verified" badge — badges and
+   buttons keep their size, the six tiles use short labels (full label + n in the tooltip) and may only shrink to their
+   label; at 1366 the title steps down one size and the "N verified runs" note (the Runs tile says it) gives way. */
+.mdash__head--kpi > :not(.mdash-kpis) { flex: none; }
+.mdash-kpis { flex: 1 1 auto; justify-content: flex-end; min-width: 0; gap: 0.4rem; }
+.mdash-kpi { min-width: 0; flex: 0 0 auto; padding: 0.1rem 0.5rem 0.15rem; }
+.mdash-kpi dd { flex-wrap: nowrap; }
+@media (max-width: 1500px) {
+  .mdash__head--kpi .mdash__title { font-size: var(--fs-md); }
+  .mdash__head--kpi .mdash__count { display: none; }
+  .mdash__head--kpi .badge { padding: 0 0.6rem; }
+}

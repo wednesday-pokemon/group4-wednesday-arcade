@@ -215,6 +215,28 @@ async function caseAttempt(page, c, label) {
   const allFound = c.clues.every((id) => found.includes(id));
   let plan = c.plan;
   if (plan === 'solve' && !allFound) plan = 'weak_evidence';
+  // Ruling R3: with fewer than all clues the panel is gated (data-step="gated") — only "Leave the case unsolved".
+  const gated = (await page.getAttribute(tid('accuse-panel'), 'data-step')) === 'gated';
+  assert(gated === !allFound, `${label}: accusation gated exactly when a clue is missing (gated=${gated}, found ${found.length})`);
+  if (gated) {
+    assert(!(await page.$('[data-testid^="radio-"]')), `${label}: no suspect can be named with ${found.length} clues`);
+    assert((await page.textContent(tid('accuse-panel'))).includes(`Find all ${c.clues.length} clues to accuse.`), `${label}: gate explains why`);
+    await page.click(tid('btn-leave-unsolved'));
+    await page.waitForSelector(tid('accuse-confirm'));
+    await page.waitForTimeout(600);
+    await page.click(tid('btn-accuse-confirm'));
+    await page.waitForSelector(tid('screen-results'), { timeout: 30000 });
+    const v = await page.getAttribute(tid('screen-results'), 'data-verdict');
+    assert(v === 'not_accused' || v === 'egg_secured_mystery_unsolved', `${label}: gated run ends unsolved (got ${v})`);
+    const sub = await page.textContent(tid('verdict-sub'));
+    assert(sub.includes('left the case unsolved') && sub.includes(`of ${c.clues.length} clues`), `${label}: unsolved copy (${sub})`);
+    assert(!sub.includes(NAMES[c.culprit]), `${label}: unsolved copy never names the culprit`);
+    const res = (await state(page)).result;
+    assert(res?.accused === null && (res?.evidence ?? []).length === 0, `${label}: nobody accused, nothing cited`);
+    await page.screenshot({ path: `${OUT}/${label}-results.png` });
+    console.log(`${c.number} ✓ ${c.id}: reveal → prologue → tutorial → accusation gated (${found.length}/${c.clues.length} clues) → ${v}`);
+    return true;
+  }
   const suspect = plan === 'wrong_suspect' ? Object.keys(NAMES).find((k) => k !== c.culprit) : c.culprit;
   const cite = plan === 'solve'
     ? [...c.clues]

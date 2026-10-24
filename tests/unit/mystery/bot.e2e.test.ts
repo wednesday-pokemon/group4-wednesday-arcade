@@ -1,6 +1,6 @@
 // End-to-end: the scripted bot plays full visits on buildIsland() (3 clues → egg → Iago Tower → accusation).
+// (All 126 duos × all 3 cases: botDuos.<case>.test.ts.)
 import { describe, expect, it } from 'vitest';
-import { allPairs } from '../../../src/mystery/draft.ts';
 import { playEpisode, type BotEpisode } from '../../../src/mystery/episode.ts';
 import { NIGHTSHADE_IDS } from '../../../src/mystery/types.ts';
 import { POKEMON_IDS } from '../../../src/mystery/draft.ts';
@@ -50,13 +50,4 @@ describe('bot end-to-end on buildIsland()', () => {
     expect(c.timedOut + s.timedOut).toBe(0);
     expect(s.finished).toBe(21);
   }, 180_000);
-
-  it('all 126 duos can finish (no softlock for any pairing), with abilities enabled', () => {
-    const eps = allPairs().map((duo, i) => playEpisode(duo, `e2e-all-${i}`, { profile: 'stealthy', useAbilities: true, startDelayMaxS: 0 }));
-    const bad = eps.filter((e) => e.timedOut || e.result?.outcome !== 'finished' || e.result.cluesFound.length !== 3);
-    const dnfs = bad.filter((e) => e.result?.outcome === 'dnf').length;
-    console.log('126 duos', JSON.stringify(summary(eps)));
-    expect(eps.filter((e) => e.timedOut)).toHaveLength(0);
-    expect(dnfs).toBeLessThanOrEqual(6); // DNFs are fair outcomes; softlocks (timeouts) are not
-  }, 300_000);
 });

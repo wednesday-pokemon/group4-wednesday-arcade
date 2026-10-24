@@ -7,7 +7,7 @@ import { caseById, POISONED_ARCHIVE } from '../../mystery/data/cases.ts';
 import { NIGHTSHADES } from '../../mystery/data/nightshades.ts';
 import { PARTNERS } from '../../mystery/data/partners.ts';
 import { buildCard, draftOffer } from '../../mystery/draft.ts';
-import type { CaseDef, CaseId, CaseSolution, Duo, DuoCard, DuoOffer, NightshadeDef, NightshadeId, PokemonPartnerDef } from '../../mystery/types.ts';
+import type { CaseDef, CaseId, CaseSolution, Duo, DuoCard, DuoOffer, MapDef, NightshadeDef, NightshadeId, PokemonPartnerDef } from '../../mystery/types.ts';
 import type { MysteryRunCtor, MysterySceneCtor } from './runTypes.ts';
 
 /** 'preview' only exists in sessions stored before the draft landed; openSession() upgrades those (same seed). */
@@ -64,4 +64,15 @@ export async function loadSceneCtor(): Promise<MysterySceneCtor> {
 /** What is connected (exposed in render_game_to_text). */
 export function integrationStatus() {
   return { draft: true, nightshades: true, partners: true, case: true, thing: true, run: true, scene: true };
+}
+
+/**
+ * TEST FIXTURE (`?mode=mystery…&crackstone=0`, local demo only): the case's island WITHOUT Joseph Crackstone, so the
+ * "crackstone: null" HUD (centred Hyde pill, no Crackstone UI) can be verified in the real app. The run then uses the
+ * map's default placements (no seeded layout) — never offered on a kiosk path.
+ */
+export async function loadCrackstoneFreeMap(id: CaseId): Promise<MapDef> {
+  const { caseMap } = await import('../../mystery/defaults.ts');
+  const m = caseMap(id);
+  return { ...m, ...(m.world ? { world: { ...m.world, crackstone: null } } : {}) };
 }

@@ -1,11 +1,15 @@
-// PauseOverlay (UX_MYSTERY §7): opened whenever pointer lock is lost (or Esc without a lock). The sim clock is stopped.
-// [Resume — click to continue] re-requests pointer lock; on rejection it keeps showing "Click again to resume".
-// Tabs: Controls (headed by the exact Stay Silent line) and Settings. [Leave the case] asks for confirmation.
+// PauseOverlay (UX_MYSTERY §7, UX_OVERHAUL §9): opened whenever pointer lock is lost (or Esc without a lock). The sim
+// clock is stopped. [Resume — click to continue] re-requests pointer lock; on rejection it keeps showing "Click again to
+// resume". Tabs: Controls (R1: headed by the exact Stay Silent line, then the FULL KeyLegend from the one control
+// reference — Q power, R move, M mute here only, Ctrl only while the kiosk keyboard lock is active, never F) and
+// Settings ("Predictions" = the old "Risk estimate" switch). [Leave the case] asks for confirmation.
 import { useEffect, useId, useRef, useState } from 'react';
 import { useModalPresence } from '../../app/keyboard.ts';
+import { ctrlCrouchEnabled } from '../../app/mystery/kiosk.ts';
 import { STAY_SILENT_LINE } from '../../app/mystery/thingLines.ts';
 import { setMotionPref, updateSettings, useSettings, type Settings } from '../../app/settings.ts';
 import { Button } from '../components/Button.tsx';
+import { KeyLegend } from './controls.tsx';
 
 interface MysteryPauseProps {
   tutorial: boolean;
@@ -15,23 +19,6 @@ interface MysteryPauseProps {
   onResume: () => Promise<boolean>;
   onSkipTutorial: () => void;
   onLeave: () => void;
-}
-
-export function controlsList(powerName: string, moveName: string): [string, string][] {
-  return [
-    ['W A S D', 'Move'],
-    ['Mouse or ← → ↑ ↓', 'Look'],
-    ['Shift', 'Sprint (LOUD)'],
-    ['C', 'Crouch (quiet)'],
-    ['E', 'Search / pick up / deposit'],
-    ['Hold E', 'Set the egg down'],
-    ['F', powerName],
-    ['Q', moveName],
-    ['Tab', 'Evidence board'],
-    ['V', 'Ask Thing'],
-    ['Esc', 'Pause'],
-    ['M', 'Mute'],
-  ];
 }
 
 export function MysteryPause({ tutorial, powerName, moveName, onResume, onSkipTutorial, onLeave }: MysteryPauseProps) {
@@ -84,12 +71,8 @@ export function MysteryPause({ tutorial, powerName, moveName, onResume, onSkipTu
 function ControlsHelp({ powerName, moveName }: { powerName: string; moveName: string }) {
   return (
     <div role="tabpanel" className="mpause__panel" data-testid="controls-help">
-      <p className="mpause__silent">{STAY_SILENT_LINE}</p>
-      <dl className="mpause__controls">
-        {controlsList(powerName, moveName).map(([k, v]) => (
-          <div key={k}><dt><kbd className="kcap">{k}</kbd></dt><dd>{v}</dd></div>
-        ))}
-      </dl>
+      <p className="mpause__silent" data-testid="controls-silent">{STAY_SILENT_LINE}</p>
+      <KeyLegend variant="full" power={powerName} move={moveName} ctrlCrouch={ctrlCrouchEnabled()} className="mpause__legend" />
     </div>
   );
 }
@@ -121,7 +104,7 @@ function SettingsPanel() {
       {choice('Reduced motion', 'motionPref', [['system', 'System'], ['on', 'On'], ['off', 'Off']], (v) => setMotionPref(v))}
       {choice('Captions', 'captionSize', [['normal', 'Normal'], ['large', 'Large']])}
       {choice('Sound', 'muted', [[false, 'On'], [true, 'Muted']])}
-      {choice('Risk estimate', 'showRisk', [[true, 'Show'], [false, 'Hide']])}
+      {choice('Predictions', 'showRisk', [[true, 'Show'], [false, 'Hide']])}
       {choice('High contrast', 'highContrast', [[false, 'Off'], [true, 'On']])}
     </div>
   );

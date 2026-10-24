@@ -5,7 +5,9 @@
 // stored ones are counted as duplicates and ignored. Gaps in seq are allowed (the client may drop cosmetic events such
 // as footstep noise); back-filling below lastSeq is not.
 // 200 -> { sessionId, accepted, duplicates, lastSeq, lastT, eventCount, terminal, progress, forecastsInserted,
-//          recommendationsUpserted }
+//          recommendationsUpserted, forecastsDropped, recommendationsDropped }
+// Analytics records are best-effort: an invalid forecast / recommendation is dropped and counted (warn log
+// `mystery_analytics_dropped`), never a rejection — a rejected append would leave the visitor's run unverified.
 // 422 EVENT_REJECTED { seq, rule } (order/rule violation; whole batch rejected, nothing stored)
 // 409 SEQ_CONFLICT { seq, lastSeq } | NOT_SELECTED | SESSION_CLOSED { status, abandonedReason }
 import { requireCaller, requireStation } from '../_shared/auth.ts';
@@ -26,6 +28,10 @@ serve('mystery-append-events', async (req, ctx) => {
   const body = parseMysteryAppend(await readJson(req, MAX_APPEND_BYTES));
   const data = requireData();
   const egg = requireEggRules();
+  const dropped = { forecastsDropped: body.dropped.forecasts, recommendationsDropped: body.dropped.recommendations };
+  if (body.dropped.forecasts + body.dropped.recommendations > 0) {
+    ctx.log('warn', 'mystery_analytics_dropped', { sessionId: body.sessionId, ...dropped, reasons: body.dropped.reasons });
+  }
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const row = await loadMysterySession(admin, body.sessionId, stationId);
@@ -35,7 +41,7 @@ serve('mystery-append-events', async (req, ctx) => {
     const ack = (extra: Record<string, unknown>) => ({
       sessionId: row.id, accepted: 0, duplicates, lastSeq: row.last_seq, lastT: Number(row.last_t),
       eventCount: row.event_count, terminal: progress.terminal?.type ?? null, progress: progressSummary(progress),
-      forecastsInserted: 0, recommendationsUpserted: 0, ...extra,
+      forecastsInserted: 0, recommendationsUpserted: 0, ...dropped, ...extra,
     });
 
     // Pure resend of already-stored events: acknowledge without writing (works even after finalization).

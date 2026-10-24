@@ -11,6 +11,7 @@ import { useEffect, useRef, useState, type Dispatch, type MutableRefObject } fro
 import type { Accusation, CaseDef, Duo, RoomId } from '../../mystery/types.ts';
 import { Button } from '../../ui/components/Button.tsx';
 import type { DuoCardView } from '../../ui/mystery/duoView.ts';
+import type { PublicMapState } from '../../ui/mystery/map/mapData.ts';
 import { EvidenceBoard } from '../../ui/mystery/EvidenceBoard.tsx';
 import { MysteryHud } from '../../ui/mystery/MysteryHud.tsx';
 import { MysteryPause } from '../../ui/mystery/MysteryPause.tsx';
@@ -20,6 +21,7 @@ import { markScreenMounted } from '../keyboard.ts';
 import { useSettings } from '../settings.ts';
 import type { MysteryAction, MysteryOverlay, MysteryScreen } from './flow.ts';
 import { GAME_CODES } from './input.ts';
+import { ctrlCrouchEnabled } from './kiosk.ts';
 import { appendRecord, browserStorage } from './records.ts';
 import { useMysteryLoop, type AutopilotProfile } from './useMysteryLoop.ts';
 
@@ -33,6 +35,8 @@ declare global {
   interface Window {
     /** TEST-ONLY: drive the live run with the game-developer's seeded Bot (src/mystery/bot.ts). */
     mysteryAutopilot?: (profile: AutopilotProfile | null) => Promise<boolean>;
+    /** TEST-ONLY (`&testhooks=1`, local demo): the live run object, for staged HUD screenshots (output/enemies/hud). */
+    mysteryTestRun?: () => unknown;
   }
 }
 
@@ -208,6 +212,8 @@ export default function PlayView(p: PlayViewProps) {
     window.addEventListener('contextmenu', onContext);
     document.addEventListener('pointerlockchange', onLockChange);
     window.mysteryAutopilot = (profile) => loopRef.current.setAutopilot(profile);
+    const testHooks = !p.hideSeed && new URLSearchParams(window.location.search).get('testhooks') === '1';
+    if (testHooks) window.mysteryTestRun = () => loopRef.current.run();
     return () => {
       window.removeEventListener('keydown', onKeyDown, { capture: true });
       window.removeEventListener('keyup', onKeyUp, { capture: true });
@@ -216,6 +222,7 @@ export default function PlayView(p: PlayViewProps) {
       window.removeEventListener('contextmenu', onContext);
       document.removeEventListener('pointerlockchange', onLockChange);
       delete window.mysteryAutopilot;
+      delete window.mysteryTestRun;
       if (document.pointerLockElement) document.exitPointerLock();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -258,6 +265,7 @@ export default function PlayView(p: PlayViewProps) {
 
   // Tutorial signals from real state.
   const startPos = useRef<{ x: number; z: number } | null>(null);
+  const boardMapRef = useRef<{ open: boolean; state: PublicMapState | null }>({ open: false, state: null });
   const practiceMax = useRef(0);
   if (run && !startPos.current) startPos.current = { x: run.player.x, z: run.player.z };
   const prompt = loop.hud?.prompt;
@@ -282,6 +290,11 @@ export default function PlayView(p: PlayViewProps) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const egg = run?.egg;
+  // The Tab map is a snapshot: the sim + clock are paused while the overlay is open (taken once per opening).
+  const boardOpen = loop.phase === 'ready' && ((p.overlay === 'board' && playing) || p.screen === 'accusing');
+  if (boardOpen && !boardMapRef.current.open) boardMapRef.current = { open: true, state: loop.mapState() };
+  else if (!boardOpen && boardMapRef.current.open) boardMapRef.current = { open: false, state: null };
+  const boardMap = boardMapRef.current.state;
   return (
     <main className="mys-play" data-testid={p.screen === 'tutorial' ? 'screen-tutorial' : p.screen === 'accusing' ? 'screen-accusing' : 'screen-play'} data-paused={paused || undefined}>
       <div
@@ -305,17 +318,25 @@ export default function PlayView(p: PlayViewProps) {
       )}
 
       {loop.phase === 'ready' && loop.hud && p.screen !== 'accusing' && (
-        <div className={tutStep === 'silent' ? 'mhud-wrap is-noise-focus' : 'mhud-wrap'}>
-          <MysteryHud hud={loop.hud} tutorial={p.screen === 'tutorial'} pointerLocked={locked} showRisk={settings.showRisk} />
+        <div className="mhud-wrap">
+          <MysteryHud
+            hud={loop.hud}
+            tutorial={p.screen === 'tutorial'}
+            pointerLocked={locked}
+            showPredictions={settings.showRisk}
+            nav={loop.nav}
+            noiseFocus={tutStep === 'silent'}
+          />
         </div>
       )}
 
       {loop.phase === 'ready' && p.screen === 'tutorial' && (
         <MysteryTutorial
           signals={signals}
-          vars={{ character: p.card.characterShort, pokemon: p.card.pokemonName, power: p.card.power.name, move: p.card.move.name }}
+          vars={{ character: p.card.characterShort, pokemon: p.card.pokemonName, power: p.card.power.name, move: p.card.move.name, clues: caseDef.clues.length }}
           card={p.card}
           paused={paused}
+          ctrlCrouch={ctrlCrouchEnabled()}
           onStep={setTutStep}
           onDone={endTutorial}
         />
@@ -336,6 +357,8 @@ export default function PlayView(p: PlayViewProps) {
             cluesFound={run?.cluesFound ?? []}
             roomName={roomName}
             mode={p.screen === 'accusing' ? 'accuse' : 'review'}
+            mapState={boardMap}
+            showPredictions={settings.showRisk}
             onClose={() => p.dispatch({ type: 'closeOverlay' })}
             onAccuse={(a: Accusation) => void loop.accuse(a)}
           />

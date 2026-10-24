@@ -5,6 +5,7 @@
 // Cases: the session's case_id (assigned by mystery_create_session) selects the CaseDef AND the server's own answer key
 // (CaseSolution from the generated registry). The answer key never leaves the server before finalize (caseReveal).
 import { MYSTERY_DATA, MYSTERY_EGG, type MysteryData, type MysteryEggRules } from './mystery-registry.generated.ts';
+import { DEFAULT_TUNING } from './mystery/config.ts';
 import { draftOffer } from './mystery/draft.ts';
 import { eggTierForSeed, round1, scoreFor } from './mystery/scoring.ts';
 import { evidenceSupports, isCorrectSuspect, sanitizeEvidence, solutionMatches, verdictFor } from './mystery/caseLogic.ts';
@@ -121,13 +122,20 @@ export function expectedEggTier(seed: string, egg: MysteryEggRules = requireEggR
   return eggTierForSeed(seed, egg.tierWeights);
 }
 
-/** Validation context of ONE session: the clue / suspect ids of the session's case and the seed's egg tier. */
-export function rulesContext(seed: string, caseDef: CaseDef, egg: MysteryEggRules): RulesContext {
+/** The player's max HP the browser sim starts every run with (shared tuning; the same for every duo). */
+export const PLAYER_MAX_HP: number = DEFAULT_TUNING.player.maxHp;
+
+/**
+ * Validation context of ONE session: the clue / suspect ids of the session's case, the seed's egg tier and the max HP
+ * (a dnf 'hp_depleted' needs catch + curse HP loss ≥ maxHp; enemy contract rule R7).
+ */
+export function rulesContext(seed: string, caseDef: CaseDef, egg: MysteryEggRules, maxHp: number = PLAYER_MAX_HP): RulesContext {
   return {
     clueIds: caseDef.clues.map((c) => c.id),
     suspectIds: caseDef.suspects.map((s) => s.id),
     eggPoints: { ...egg.points },
     expectedTier: expectedEggTier(seed, egg),
+    maxHp,
   };
 }
 

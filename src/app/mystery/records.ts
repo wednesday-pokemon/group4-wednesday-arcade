@@ -5,7 +5,7 @@
 // Pure functions over an injected Storage so they are unit-testable. Never stores seeds or who was accused.
 import { thinForUpload } from '../../mystery/analytics/telemetry.ts';
 import type { SessionRecord } from '../../mystery/analytics/types.ts';
-import type { CaseId, Duo, HydeMode } from '../../mystery/types.ts';
+import type { CaseId, CrackstoneMode, Duo, HydeMode } from '../../mystery/types.ts';
 
 export const RECORDS_KEY = 'raven.mystery.records';
 export const LIVE_KEY = 'raven.mystery.live';
@@ -78,6 +78,12 @@ export interface LiveStatus {
   advice: { text: string; followed: boolean | null } | null;
   activeTimeS: number | null;
   updatedAt: number;
+  /** Joseph Crackstone (UX_ENEMIES §8; optional — older stations omit it): in this case? his public MODE (never his position). */
+  crackstonePresent?: boolean;
+  crackstoneMode?: CrackstoneMode | null;
+  /** Chase onsets per enemy (frontend, UX_ENEMIES §8 "Chases H2 · C1"; optional). */
+  chasesHyde?: number;
+  chasesCrack?: number;
 }
 
 export function writeLive(storage: Store, s: LiveStatus): void {

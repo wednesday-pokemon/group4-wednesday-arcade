@@ -9,16 +9,38 @@ Home → nickname → three random duo cards (choose one) → **case-file reveal
 skippable, reduced motion) → **Thing's case-specific prologue** → tutorial → investigation → egg → Iago Tower →
 **accusation = suspect + cited evidence** (one shot) → results (case resolution) + analytics.
 
-## Cases (data: `src/mystery/data/cases.ts`, answers: `src/mystery/data/solutions.ts`)
-| # | id | culprit (secret) | clues | egg |
-|---|---|---|---|---|
-| 01 | `poisoned_archive` | thornhill | falsified_transfer (research_room), botanical_residue (greenhouse terrace, room `path`), access_ledger (crypt) | egg_chamber shrine |
-| 02 | `crypt_last_witness` | isaac | sabotaged_gate (crypt), tunnel_access_record (shortcut = Maintenance Tunnel), equipment_match (egg_chamber) | crypt burial vault |
-| 03 | `midnight_signal` | barry | falsified_patrol_log (shortcut = Guard Post Passage), alarm_override (research_room = Security Control Room), watchtower_signal (courtyard) | greenhouse potting shed |
+## Content version 2 (overhaul 2026-10-23)
+- `CaseDef.version` and `CaseSolution.version` are **2** for all three cases (answers, links, innocents unchanged).
+- Clue and egg positions are no longer fixed: each clue has 1–2 candidate sites and the egg 3, drawn once per session
+  with the priors in `src/mystery/data/caseWorlds.ts` (`CaseWorldDef`; design `docs/MYSTERY_DESIGN.md` §10). The
+  session's draw is hidden truth (`run.layout`, `MapDef.clues` / `eggSpawn`).
+- `ClueDef.location` reads true for every candidate site ("Greenhouse Annex or Restricted Vault"); `ClueDef.roomId` is
+  the first site's room. Multi-site clues use a generic `interactLabel`. Two texts were broadened so they hold at every
+  site: `equipment_match` ("stashed underground", was "by the Hyde's cage") and `watchtower_signal` ("flashed from
+  beside the egg path", was "from this yard").
+- **TL;DR card fields** on all 9 clues: `short` (≤ 90 chars, one plain sentence: what the evidence shows) and
+  `meaning` (≤ 60 chars, the link it establishes; never a verdict). The deduction structure is unchanged: the culprit
+  is named in all three `short`s; each innocent appears in exactly one clue (its `meaning` says why they are cleared).
+  Case 03 `watchtower_signal` keeps naming Barry only as "the guard" in `short` / `meaning` too.
+- Egg copy never names a site: `egg.objective` = "Find the egg."; `thing.findEgg` generic; `thing.whereHint` lists
+  the candidate clue areas.
+- Case-specific room names now also cover `egg_chamber` (Restricted Vault / Catacombs / Old Kennel) and, in Cases 01–02,
+  `shortcut` / `research_room` (Rare Book Stacks; Lamp Room).
+- ClueDef titles longer than the 26-char UI budget (kept, `shortTitle` requested from the orchestrator):
+  `falsified_transfer` (30), `botanical_residue` (28), `access_ledger` (36).
 
-Same island, walls, cover, hiding spots and Hyde patrol for all cases; a case moves its 3 clues + the egg and renames
-rooms (`buildIsland(caseDef)`, map id `raven_island_v31:<caseId>`, `caseMap(caseId)` in `src/mystery/defaults.ts`).
-Every case is solvable with any duo: powers may help (reveal, scent trail), never required.
+## Cases (data: `src/mystery/data/cases.ts`, answers: `src/mystery/data/solutions.ts`)
+| # | id | culprit (secret) | clues (candidate sites → prior) | egg (candidate sites → prior) |
+|---|---|---|---|---|
+| 01 | `poisoned_archive` | thornhill | falsified_transfer (archive desk .6 / Rare Book Stacks .4), botanical_residue (greenhouse shelf .6 / Restricted Vault .4), access_ledger (Records Crypt 1) | potting store .5 / vault shrine .3 / crypt reliquary .2 |
+| 02 | `crypt_last_witness` | isaac | sabotaged_gate (crypt gate 1), tunnel_access_record (Maintenance Tunnel .55 / Lamp Room .45), equipment_match (by the cage .6 / burial-vault niche .4) | vault altar .5 / catacomb nest .3 / gatehouse .2 |
+| 03 | `midnight_signal` | barry | falsified_patrol_log (guard post .55 / checkpoint booth .45), alarm_override (control room 1), watchtower_signal (yard recorder .6 / west relay .4) | potting shed .5 / yard crates .3 / old kennel .2 |
+
+Same base island, cover, hiding spots and Hyde patrol for all cases; since v2 each case also adds its own walls,
+cover and hiding spots (`CaseWorldDef.extraWalls/extraCover/extraHiding`), one lever passage, three examinable objects
+and its hazards, and renames rooms (`buildIsland(caseDef)`, map id `raven_island_v31:<caseId>`, `caseMap(caseId)` in
+`src/mystery/defaults.ts`). Every case is solvable with any duo and without the lever: powers may help (reveal,
+scent trail), never required.
 
 Deduction design (every case): 3 clues = METHOD, OPPORTUNITY, BROKEN ALIBI against the same person. The culprit is
 named in all three clues, each innocent in exactly one (the clue that clears them). Two case-file notes are held from

@@ -4,6 +4,7 @@
 // React-free (MysteryApp reads it through LiveStationHandle / LiveRunContext); integration-tested against the fake
 // server in tests/integration/mystery*.test.ts.
 import type { MysteryAnalytics } from '../../mystery/analytics/index.ts';
+import type { HeartbeatAnalytics } from '../../mystery/analytics/live.ts';
 import type { Duo } from '../../mystery/types.ts';
 import type { StationId } from '../../game/index.ts';
 import { classifyFailure } from '../../lib/supabase/mysteryApi.ts';
@@ -86,7 +87,13 @@ function stepError(err: unknown, session: LiveSessionData | null = null): LiveSt
   }
 }
 
-export function heartbeatFrom(stationId: StationId, s: LiveStatus, sync: LiveUiState['sync']): MysteryHeartbeat {
+/**
+ * The heartbeat for Laptop 1. `a` = the live analytics numbers of the running visit (MysteryAnalytics.heartbeat()),
+ * null between visits. Ids travel as tokens and the newest Thing item as { kind, code, ref, followed } — never free text.
+ */
+export function heartbeatFrom(stationId: StationId, s: LiveStatus, sync: LiveUiState['sync'], a: HeartbeatAnalytics | null = null): MysteryHeartbeat {
+  const r3 = (x: number) => Math.round(x * 1000) / 1000;
+  const inRun = a !== null && (s.phase === 'investigating' || s.phase === 'carrying' || s.phase === 'accusing' || s.phase === 'results' || s.phase === 'dnf');
   return {
     v: 1,
     stationId,
@@ -102,6 +109,25 @@ export function heartbeatFrom(stationId: StationId, s: LiveStatus, sync: LiveUiS
     eggSecurity: s.egg?.security ?? null,
     activeTimeS: s.activeTimeS,
     sync,
+    objective: inRun ? (a.objective as MysteryHeartbeat['objective']) : null,
+    cluesTotal: inRun ? a.cluesTotal : null,
+    chases: inRun ? a.chases : null,
+    escapes: inRun ? a.escapes : null,
+    hydeEmerged: inRun ? a.hydeEmerged : null,
+    hydeZone: inRun && a.hydeZone ? { id: a.hydeZone.id, p: r3(a.hydeZone.p) } : null,
+    eggSite: inRun && a.eggSite && !a.eggLocated ? { id: a.eggSite.id, p: r3(a.eggSite.p) } : null,
+    eggLocated: inRun ? a.eggLocated : null,
+    extraction: inRun && a.extraction ? r3(a.extraction.p) : null,
+    extractionSource: inRun && a.extraction ? a.extraction.source : null,
+    thing: inRun && a.lastThing ? { kind: a.lastThing.kind, code: a.lastThing.code, ref: a.lastThing.ref, followed: a.lastThing.followed } : null,
+    // enemy contract (UX_ENEMIES §8): his public mode / chase flag / counts — never his position. The local live status
+    // (records.ts LiveStatus.crackstoneMode / crackstonePresent, frontend-filled) is the fallback between analytics ticks.
+    crackstonePresent: a?.crackstonePresent ?? s.crackstonePresent ?? null,
+    crackstoneMode: inRun ? a.crackstoneMode : (s.crackstoneMode ?? null),
+    crackstoneChase: inRun ? a.crackstoneChase : (s.crackstoneMode === 'CHASE' || s.crackstoneMode === 'ATTACK' ? true : s.crackstoneMode ? false : null),
+    crackstoneChases: inRun ? a.crackstoneChases : null,
+    crackstoneEscapes: inRun ? a.crackstoneEscapes : null,
+    crackstoneRisk: inRun && a.crackstoneRisk !== null ? Math.round(a.crackstoneRisk * 100) / 100 : null,
   };
 }
 
@@ -146,7 +172,13 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
 
   function sendHeartbeat(): void {
     if (!lastStatus || disposed) return;
-    watch.heartbeat(heartbeatFrom(stationId, lastStatus, ui.sync));
+    let numbers: HeartbeatAnalytics | null = null;
+    try {
+      numbers = run?.analytics.heartbeat?.() ?? null;
+    } catch {
+      numbers = null; // analytics must never break the liveness signal
+    }
+    watch.heartbeat(heartbeatFrom(stationId, lastStatus, ui.sync, numbers));
   }
 
   function noteStatus(s: LiveStatus): void {

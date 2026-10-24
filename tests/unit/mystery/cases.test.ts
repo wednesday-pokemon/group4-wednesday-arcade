@@ -3,6 +3,7 @@
 // all three clues, each innocent in exactly one — the clue that clears them; two case-file notes support nobody.
 import { describe, expect, it } from 'vitest';
 import { CASES, caseById, isCaseId, ROOM_LABELS } from '../../../src/mystery/data/cases.ts';
+import { caseWorld } from '../../../src/mystery/data/caseWorlds.ts';
 import { CASE_SOLUTIONS, caseSolution } from '../../../src/mystery/data/solutions.ts';
 import { CASE_IDS, CLUE_IDS, SUSPECT_IDS, type CaseDef, type RoomId, type SuspectId } from '../../../src/mystery/types.ts';
 
@@ -35,6 +36,8 @@ function publicStrings(def: CaseDef): [string, string][] {
   for (const c of def.clues) {
     out.push([`${c.id}.title`, c.title], [`${c.id}.text`, c.text], [`${c.id}.deduction`, c.deduction],
       [`${c.id}.thing.found`, c.thing.found], [`${c.id}.thing.vision`, c.thing.vision], [`${c.id}.interactLabel`, c.interactLabel]);
+    if (c.short) out.push([`${c.id}.short`, c.short]);
+    if (c.meaning) out.push([`${c.id}.meaning`, c.meaning]);
   }
   for (const n of def.notes) out.push([`${n.id}.title`, n.title], [`${n.id}.text`, n.text]);
   for (const s of def.suspects) out.push([`${s.id}.alibi`, s.alibiOrContext]);
@@ -83,16 +86,17 @@ for (const id of CASE_IDS) {
   const innocents = SUSPECT_IDS.filter((s) => s !== sol.culprit);
 
   describe(`${def.number} ${def.title}`, () => {
-    it('3 clues + 3 placements with matching ids and rooms; 2 notes; same three suspects', () => {
+    it('3 clues, each with one candidate-site group in the case world; 2 notes; same three suspects', () => {
       expect(def.clues).toHaveLength(3);
-      expect(def.placements).toHaveLength(3);
-      expect(def.placements.map((p) => p.clueId)).toEqual(clueIds);
-      for (const c of def.clues) {
-        const p = def.placements.find((x) => x.clueId === c.id)!;
-        expect(p.roomId, c.id).toBe(c.roomId);
-        expect(p.searchS).toBeGreaterThanOrEqual(1.5);
-        expect(p.searchS).toBeLessThanOrEqual(4);
+      const world = caseWorld(id);
+      expect(world.caseId).toBe(id);
+      expect(world.clueSites.map((g) => g.clueId)).toEqual(clueIds);
+      for (const g of world.clueSites) {
+        expect(g.sites.length, g.clueId).toBeGreaterThanOrEqual(1);
+        expect(g.searchS).toBeGreaterThanOrEqual(1.5);
+        expect(g.searchS).toBeLessThanOrEqual(4);
       }
+      expect(def.egg.objective.length).toBeGreaterThan(5);
       expect(def.notes).toHaveLength(2);
       expect(def.suspects.map((s) => s.id)).toEqual([...SUSPECT_IDS]);
       for (const s of def.suspects) {
@@ -100,7 +104,16 @@ for (const id of CASE_IDS) {
         expect(s.alibiOrContext.length).toBeGreaterThan(10);
       }
       for (const r of Object.keys(def.roomNames)) expect(Object.keys(ROOM_LABELS)).toContain(r as RoomId);
-      expect(def.version).toBeGreaterThanOrEqual(1);
+      expect(def.version).toBeGreaterThanOrEqual(2); // overhaul content version (OVERHAUL_CONTRACT)
+    });
+
+    it('TL;DR cards: every clue has `short` (≤ 90 chars) and `meaning` (≤ 60 chars)', () => {
+      for (const c of def.clues) {
+        expect(c.short, `${c.id}.short`).toBeTruthy();
+        expect(c.meaning, `${c.id}.meaning`).toBeTruthy();
+        expect(c.short!.length, `${c.id}.short`).toBeLessThanOrEqual(90);
+        expect(c.meaning!.length, `${c.id}.meaning`).toBeLessThanOrEqual(60);
+      }
     });
 
     it('answer key belongs to this case: id, version, supporting evidence = the 3 clues', () => {

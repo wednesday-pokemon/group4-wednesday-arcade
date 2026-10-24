@@ -11,6 +11,20 @@
 // Claims the client makes (accusation.correct / deductionCorrect, finish.verdict/score) are NOT trusted: finalize
 // recomputes them from the session's case + the server's own answer key and records whether they matched
 // (mystery_results.claim_matches). The clue ids come from the SESSION'S case (RulesContext.clueIds).
+//
+// Overhaul telemetry (2026-10-23, docs/overhaul/OVERHAUL_CONTRACT.md): hyde_emerged, site_checked, trace_found,
+// examined, passage_opened, hazard_triggered (+ noise source 'hazard'). They are TELEMETRY, not rule events: typed and
+// bounded here, stored for analytics, never part of RULE_EVENT_TYPES / ruleFingerprint / computeResult. The server never
+// needs clue or egg POSITIONS (the per-session layout is drawn by the browser sim from the seed); it only checks ids.
+//
+// Joseph Crackstone (2026-10-24, docs/overhaul/ENEMY_CONTRACT.md, migration 20261024000100): crackstone_mode,
+// crackstone_sighted, crackstone_lost and crackstone_scan are TELEMETRY (same policy as above; crackstone_sighted does
+// NOT feed `sightings`, which stays the Hyde-sighting count of mystery_sessions / mystery_results). `curse` is a RULE
+// event (rule R7: a landed curse costs HP but is not a catch): strict payload; phase 'hit' adds hpLost to progress.hpLost
+// and counts in progress.curses (both in ruleFingerprint); a blocked hit (block_grab) must report hpLost 0; 'cast' /
+// 'miss' must report hpLost 0; no hit after the deposit. A dnf 'hp_depleted' is accepted only when the recorded HP loss
+// (catches + curse hits) reaches the player's max HP (RulesContext.maxHp; heals only raise the bar, so this is a
+// necessary condition of a genuine HP death) — the sim must emit `curse {phase:'hit'}` BEFORE its `dnf`.
 import type { ClueId, DnfReason, EggState, SuspectId, Verdict } from './mystery/types.ts';
 import { HttpError } from './errors.ts';
 import { jsonEqual } from './validation.ts';
@@ -20,15 +34,38 @@ export type LiveEggTier = 'common' | 'rare' | 'legendary';
 export const MYSTERY_EVENT_TYPES = [
   'noise', 'stance', 'room_enter', 'hyde_mode', 'hyde_heard', 'hyde_sighted', 'hyde_lost', 'catch',
   'clue_search_start', 'clue_found', 'egg_pickup', 'egg_drop', 'egg_damage', 'egg_delivered',
-  'ability_used', 'ability_denied', 'hint_requested', 'accusation', 'finish', 'dnf',
+  'ability_used', 'ability_denied', 'hint_requested',
+  // overhaul telemetry (not rule events)
+  'hyde_emerged', 'site_checked', 'trace_found', 'examined', 'passage_opened', 'hazard_triggered',
+  // Joseph Crackstone (enemy contract): four telemetry types + the `curse` rule event
+  'crackstone_mode', 'crackstone_sighted', 'crackstone_lost', 'crackstone_scan', 'curse',
+  'accusation', 'finish', 'dnf',
 ] as const;
 export type MysteryEventType = (typeof MYSTERY_EVENT_TYPES)[number];
 
-/** Types the rules depend on (finalize re-validates exactly these from the database). */
+/**
+ * Types the rules depend on (finalize re-validates exactly these from the database). Mirrored by the partial index
+ * mystery_events_rule_idx (latest definition: migration 20261024000100, which added 'curse').
+ */
 export const RULE_EVENT_TYPES: readonly MysteryEventType[] = [
   'catch', 'clue_found', 'egg_pickup', 'egg_drop', 'egg_damage', 'egg_delivered', 'accusation', 'finish', 'dnf',
-  'hyde_sighted', 'hint_requested',
+  'hyde_sighted', 'hint_requested', 'curse',
 ];
+
+/** The six overhaul telemetry types (stored for analytics; no rule depends on them). */
+export const OVERHAUL_TELEMETRY_TYPES: readonly MysteryEventType[] = [
+  'hyde_emerged', 'site_checked', 'trace_found', 'examined', 'passage_opened', 'hazard_triggered',
+];
+
+/** Joseph Crackstone telemetry (analytics only; `curse` is NOT here — it is a rule event). */
+export const CRACKSTONE_TELEMETRY_TYPES: readonly MysteryEventType[] = [
+  'crackstone_mode', 'crackstone_sighted', 'crackstone_lost', 'crackstone_scan',
+];
+
+/** Content ids carried by telemetry (site / spawn / examine / passage / hazard / clue ids): snake_case, ≤ 40 chars. */
+export const SAFE_ID_RE = /^[a-z][a-z0-9_]{0,39}$/;
+/** Bound for world coordinates in telemetry payloads (the island is ~90 × 120 m). */
+export const MAX_COORD_M = 1000;
 
 export const MAX_T = 14400; // 4 h of ACTIVE play: far beyond any real run, rejects garbage
 export const MAX_SEQ = 10_000_000;
@@ -36,6 +73,14 @@ export const MAX_BATCH_EVENTS = 500;
 export const MAX_STRING = 160;
 /** Evidence ids cited with one accusation (the deduction board offers three clues + two case-file notes). */
 export const MAX_EVIDENCE = 5;
+/** Distances carried by enemy telemetry (m). */
+export const MAX_DISTANCE_M = 1000;
+/** Crackstone's scan radius cap (m): a tuning radius is ~10–20 m; the whole island fits in ~150 m. */
+export const MAX_SCAN_RADIUS_M = 100;
+/** HP one landed curse may cost (the player has 100 max HP; a curse can never cost more than a full bar). */
+export const MAX_CURSE_HP = 100;
+/** Tolerance of the hp_depleted check (HP values are integers; this only absorbs float noise). */
+export const HP_EPSILON = 0.5;
 
 export interface RulesContext {
   clueIds: readonly ClueId[];
@@ -43,6 +88,11 @@ export interface RulesContext {
   eggPoints: Record<LiveEggTier, number>;
   /** Tier drawn from the session seed with the shared scoring module; null = do not check. */
   expectedTier: LiveEggTier | null;
+  /**
+   * The player's max HP (shared DEFAULT_TUNING.player.maxHp). A dnf 'hp_depleted' needs recorded HP loss (catch +
+   * curse hits) ≥ maxHp. null / absent = do not check.
+   */
+  maxHp?: number | null;
 }
 
 /** A parsed, structurally valid event as stored in mystery_events. */
@@ -72,7 +122,10 @@ export interface MysteryProgress {
     claimedCorrect: boolean; claimedClues: number; claimedDeduction: boolean;
   } | null;
   catches: number;
+  /** HP lost to Hyde catches + landed Crackstone curses (as reported by the events; blocked hits report 0). */
   hpLost: number;
+  /** Landed Crackstone curses (curse phase 'hit', blocked or not). Not a catch (rule R7). */
+  curses: number;
   sightings: number;
   hints: number;
   terminal:
@@ -84,14 +137,18 @@ export interface MysteryProgress {
 export function initialProgress(): MysteryProgress {
   return {
     v: 1, lastSeq: -1, lastT: 0, cluesFound: [], egg: 'resting', eggSecurity: 100, pickups: 0, delivered: null,
-    accusation: null, catches: 0, hpLost: 0, sightings: 0, hints: 0, terminal: null,
+    accusation: null, catches: 0, hpLost: 0, curses: 0, sightings: 0, hints: 0, terminal: null,
   };
 }
 
 /** Restores progress from the jsonb column ({} for a fresh session). */
 export function progressFromRow(raw: unknown): MysteryProgress {
   if (raw && typeof raw === 'object' && (raw as { v?: unknown }).v === 1) {
-    return structuredClone(raw as MysteryProgress);
+    const p = structuredClone(raw as MysteryProgress);
+    // progress stored before the Crackstone fields existed: a curse-free run (no curse event could have been accepted)
+    if (typeof p.curses !== 'number') p.curses = 0;
+    if (typeof p.hpLost !== 'number') p.hpLost = 0;
+    return p;
   }
   return initialProgress();
 }
@@ -108,28 +165,48 @@ type Field =
   | { k: 'bool' }
   | { k: 'enum'; values: readonly string[] }
   | { k: 'str' }
+  | { k: 'id' } // SAFE_ID_RE
   | { k: 'nstr' } // string or null
   | { k: 'strs'; max: number; len: number };
 
 const num = (min = -1e6, max = 1e6): Field => ({ k: 'num', min, max });
 const int = (min: number, max: number): Field => ({ k: 'int', min, max });
 const bool: Field = { k: 'bool' };
-const en = (...values: string[]): Field => ({ k: 'enum', values });
+const en = (...values: readonly string[]): Field => ({ k: 'enum', values });
 const str: Field = { k: 'str' };
+const id: Field = { k: 'id' };
+const coord = num(-MAX_COORD_M, MAX_COORD_M);
 const strs: Field = { k: 'strs', max: 16, len: 40 };
 const evidenceIds: Field = { k: 'strs', max: MAX_EVIDENCE, len: 40 };
 
-const NOISE_SOURCES = ['footstep', 'egg_drop', 'ability', 'interact', 'impact', 'decoy'];
-const STANCES = ['idle', 'walk', 'crouch', 'sprint'];
-const ROOMS = ['pier', 'path', 'research_room', 'crypt', 'egg_chamber', 'shortcut', 'courtyard', 'tower'];
-const HYDE_MODES = ['PATROL', 'INVESTIGATE_SOUND', 'SEARCH', 'CHASE', 'COOLDOWN'];
-const HYDE_REASONS = ['heard_noise', 'saw_player', 'lost_sight', 'search_timeout', 'cooldown_done', 'reached_target', 'stunned', 'lured', 'grabbed'];
+// Enums mirror the unions in src/mystery/types.ts (NoiseSource, Stance, RoomId, HydeMode, hyde_mode reason). Exported so
+// supabase/tests/unit/mystery-overhaul.test.ts can compare them with the synced types.ts and catch drift before a live
+// run is rejected (e.g. the sim's 'gave_up' reason was missing here until 2026-10-23).
+export const NOISE_SOURCES = ['footstep', 'egg_drop', 'ability', 'interact', 'impact', 'decoy', 'hazard'] as const;
+export const STANCES = ['idle', 'walk', 'crouch', 'sprint'] as const;
+export const ROOMS = ['pier', 'path', 'research_room', 'crypt', 'egg_chamber', 'shortcut', 'courtyard', 'tower'] as const;
+export const HYDE_MODES = ['PATROL', 'INVESTIGATE_SOUND', 'SEARCH', 'CHASE', 'COOLDOWN'] as const;
+export const HYDE_REASONS = [
+  'heard_noise', 'saw_player', 'lost_sight', 'search_timeout', 'cooldown_done', 'reached_target', 'stunned', 'lured',
+  'grabbed', 'gave_up',
+] as const;
+// Joseph Crackstone (types.ts CrackstoneMode / CrackstoneModeReason / CrackstoneDetectVia and the inline phase unions of
+// crackstone_scan / curse). Drift-checked against the synced types.ts by mystery-overhaul.test.ts.
+export const CRACKSTONE_MODES = ['PATROL', 'INVESTIGATE', 'CHASE', 'ATTACK', 'SEARCH', 'RETURN'] as const;
+export const CRACKSTONE_REASONS = [
+  'saw_player', 'sensed_player', 'scan_hit', 'lost_sight', 'leash', 'reached_target', 'gave_up', 'search_timeout',
+  'returned', 'curse_cast', 'curse_done', 'curse_missed', 'stunned', 'lured', 'deferred',
+] as const;
+export const CRACKSTONE_VIA = ['sight', 'proximity', 'scan'] as const;
+export const CRACKSTONE_SCAN_PHASES = ['warning', 'pulse'] as const;
+export const CURSE_PHASES = ['cast', 'hit', 'miss'] as const;
 const VERDICTS: readonly Verdict[] = ['case_solved', 'egg_secured_mystery_unsolved', 'not_accused'];
 
 /**
  * Payload schema per type, mirroring the GameEvent union in src/mystery/types.ts. Rule types are strict (exact keys);
- * the rest validate the known keys and tolerate a few extra primitive keys so a cosmetic sim addition does not
- * reject a live run.
+ * the rest validate every declared key (required, typed, bounded) and tolerate up to MAX_EXTRA_KEYS extra short
+ * primitive keys, so a cosmetic sim addition cannot turn a whole live run "unverified" (a rejected batch stops the
+ * upload). The overhaul telemetry types follow the same policy; their ids must match SAFE_ID_RE.
  */
 const SCHEMAS: Record<MysteryEventType, { fields: Record<string, Field>; strict: boolean }> = {
   noise: { fields: { source: en(...NOISE_SOURCES), x: num(), z: num(), loudness: num(0, 10), radiusM: num(0, 1000) }, strict: false },
@@ -149,6 +226,23 @@ const SCHEMAS: Record<MysteryEventType, { fields: Record<string, Field>; strict:
   ability_used: { fields: { key: en('F', 'Q'), abilityId: str, kinds: strs, success: bool, detail: str }, strict: false },
   ability_denied: { fields: { key: en('F', 'Q'), reason: en('cooldown', 'no_target') }, strict: false },
   hint_requested: { fields: {}, strict: false },
+  // ---- overhaul telemetry (not rule events)
+  hyde_emerged: { fields: { spawnId: id, x: coord, z: coord }, strict: false },
+  site_checked: { fields: { site: en('clue', 'egg'), siteId: id, found: bool }, strict: false },
+  trace_found: { fields: { sourceId: id, siteId: id }, strict: false },
+  examined: { fields: { examineId: id }, strict: false },
+  passage_opened: { fields: { passageId: id }, strict: false },
+  hazard_triggered: { fields: { hazardId: id }, strict: false },
+  // ---- Joseph Crackstone: telemetry (lenient like the Hyde telemetry) + the curse RULE event (strict)
+  crackstone_mode: {
+    fields: { from: en(...CRACKSTONE_MODES), to: en(...CRACKSTONE_MODES), reason: en(...CRACKSTONE_REASONS) }, strict: false,
+  },
+  crackstone_sighted: { fields: { via: en(...CRACKSTONE_VIA), distanceM: num(0, MAX_DISTANCE_M) }, strict: false },
+  crackstone_lost: { fields: {}, strict: false },
+  crackstone_scan: {
+    fields: { phase: en(...CRACKSTONE_SCAN_PHASES), radiusM: num(0, MAX_SCAN_RADIUS_M), hit: bool }, strict: false,
+  },
+  curse: { fields: { phase: en(...CURSE_PHASES), hpLost: num(0, MAX_CURSE_HP), blocked: bool }, strict: true },
   accusation: {
     fields: { suspectId: { k: 'nstr' }, correct: bool, cluesFound: int(0, 3), evidence: evidenceIds, deductionCorrect: bool },
     strict: true,
@@ -156,6 +250,16 @@ const SCHEMAS: Record<MysteryEventType, { fields: Record<string, Field>; strict:
   finish: { fields: { verdict: en(...VERDICTS), score: num(-1e6, 1e6) }, strict: true },
   dnf: { fields: { reason: en('second_catch', 'hp_depleted') }, strict: true },
 };
+
+/** Declared payload keys of a type (drift tests compare them with the GameEvent union of the synced types.ts). */
+export function eventFieldNames(type: MysteryEventType): string[] {
+  return Object.keys(SCHEMAS[type].fields);
+}
+
+/** True when a type accepts exactly its declared keys (rule events); telemetry tolerates a few extra primitives. */
+export function isStrictEvent(type: MysteryEventType): boolean {
+  return SCHEMAS[type].strict;
+}
 
 const MAX_EXTRA_KEYS = 6;
 
@@ -182,6 +286,9 @@ function checkField(seq: number, name: string, f: Field, v: unknown): void {
       return;
     case 'str':
       if (typeof v !== 'string' || v.length > MAX_STRING) bad(`must be a string of at most ${MAX_STRING} characters`);
+      return;
+    case 'id':
+      if (typeof v !== 'string' || !SAFE_ID_RE.test(v)) bad('must be a snake_case id of at most 40 characters');
       return;
     case 'nstr':
       if (v !== null && (typeof v !== 'string' || v.length > MAX_STRING)) bad('must be a short string or null');
@@ -308,6 +415,19 @@ export function applyEvent(p: MysteryProgress, e: ParsedEvent, ctx: RulesContext
       p.hpLost += payload.hpLost as number;
       break;
     }
+    case 'curse': {
+      // rule R7: a landed curse costs HP (never a catch, never the egg); cast / miss cost nothing
+      const hpLost = payload.hpLost as number;
+      if (payload.phase !== 'hit') {
+        if (hpLost !== 0) reject(seq, 'curse_hp', `event ${seq}: a curse ${String(payload.phase)} costs no HP (hpLost must be 0)`);
+        break;
+      }
+      if (afterDeposit) reject(seq, 'curse_after_deposit', `event ${seq}: no curse can land after the deposit`);
+      if (payload.blocked === true && hpLost !== 0) reject(seq, 'curse_hp', `event ${seq}: a blocked curse costs no HP (hpLost must be 0)`);
+      p.curses++;
+      p.hpLost += hpLost;
+      break;
+    }
     case 'finish':
       if (!p.accusation) reject(seq, 'finish_order', `event ${seq}: finish only after the accusation`);
       p.terminal = { type: 'finish', seq, t, claimedVerdict: payload.verdict as Verdict, claimedScore: payload.score as number };
@@ -316,6 +436,9 @@ export function applyEvent(p: MysteryProgress, e: ParsedEvent, ctx: RulesContext
       if (afterDeposit) reject(seq, 'dnf_after_deposit', `event ${seq}: dnf after the egg was delivered`);
       const reason = payload.reason as DnfReason;
       if (reason === 'second_catch' && p.catches < 2) reject(seq, 'dnf_reason', `event ${seq}: second_catch DNF before catch #2`);
+      if (reason === 'hp_depleted' && typeof ctx.maxHp === 'number' && p.hpLost < ctx.maxHp - HP_EPSILON) {
+        reject(seq, 'dnf_reason', `event ${seq}: hp_depleted DNF with only ${p.hpLost} of ${ctx.maxHp} HP lost (catch + curse hits)`);
+      }
       p.terminal = { type: 'dnf', seq, t, reason };
       break;
     }
@@ -350,10 +473,14 @@ export function canonicalJson(x: unknown): string {
   return JSON.stringify(x);
 }
 
-/** The rule-relevant fields two progress values must agree on (append-time state stored as jsonb vs finalize replay). */
+/**
+ * The rule-relevant fields two progress values must agree on (append-time state stored as jsonb vs finalize replay).
+ * hpLost + curses since 20261024000100 (both derive only from rule events: catch + curse).
+ */
 export function ruleFingerprint(p: MysteryProgress): string {
   return canonicalJson([
     p.cluesFound, p.delivered, p.accusation, p.catches, p.terminal, p.egg, p.eggSecurity, p.sightings, p.hints,
+    p.hpLost ?? 0, p.curses ?? 0,
   ]);
 }
 

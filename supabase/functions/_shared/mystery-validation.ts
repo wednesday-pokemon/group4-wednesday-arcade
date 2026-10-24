@@ -98,10 +98,35 @@ export function parseMysterySelect(raw: unknown): MysterySelectBody {
 }
 
 // ------------------------------------------------------------------------------------------------- append
+/**
+ * Forecast targets (mirrored by the mystery_forecasts_target_check constraint, latest: migration 20261024000100; the client list
+ * is src/mystery/analytics/types.ts FORECAST_TARGETS). Every target except `eta_s` (seconds) is a probability in [0, 1].
+ * Overhaul targets (2026-10-23) state the probability of ONE candidate, named by a flat string feature (the client
+ * currently issues the top candidate; one row per candidate is equally valid):
+ *   egg_site   P(the egg rests at site)            features.site  = EggSiteDef id   (Bayesian posterior)
+ *   clue_area  P(area holds ≥ 1 uncollected clue)  features.area  = AreaDef id
+ *   hyde_zone  P(the Hyde is in zone)              features.zone  = ZoneDef id      (zone filter, after emergence)
+ *   hyde_spawn P(the Hyde emerges at spawn)        features.spawn = HydeSpawnDef id (before emergence)
+ * Enemy contract (2026-10-24, migration 20261024000100):
+ *   crackstone_risk  P(Joseph Crackstone can see / scan the player within the forecast horizon) — RULE-BASED estimate
+ *                    from his public patrol route + sight / scan rules (modelLabel 'rule_based'); optional flat
+ *                    features (e.g. horizon_s, area, mode) — none required.
+ * Features stay ≤ 40 flat primitives (keys ≤ 40 chars, strings ≤ 40 chars); nothing is required, so a renamed feature
+ * can never reject an upload.
+ */
+export const FORECAST_TARGETS = [
+  'detection_15s', 'extraction', 'eta_s', 'egg_site', 'clue_area', 'hyde_zone', 'hyde_spawn', 'crackstone_risk',
+] as const;
+export type ForecastTarget = (typeof FORECAST_TARGETS)[number];
+
+export function isForecastTarget(x: unknown): x is ForecastTarget {
+  return typeof x === 'string' && (FORECAST_TARGETS as readonly string[]).includes(x);
+}
+
 export interface ForecastIn {
   forecastNo: number;
   t: number;
-  target: 'detection_15s' | 'extraction' | 'eta_s';
+  target: ForecastTarget;
   value: number;
   modelLabel: 'ml' | 'rule_based';
   modelVersion: string | null;
@@ -134,7 +159,7 @@ export function parseForecast(raw: unknown, i: number): ForecastIn {
   const o = raw as Json;
   onlyKeys(o, ['forecastNo', 't', 'target', 'value', 'modelLabel', 'modelVersion', 'features'], `${f}.`);
   const target = o.target;
-  if (target !== 'detection_15s' && target !== 'extraction' && target !== 'eta_s') invalid(`${f}.target`, 'target must be detection_15s, extraction or eta_s');
+  if (!isForecastTarget(target)) invalid(`${f}.target`, `target must be one of ${FORECAST_TARGETS.join(', ')}`);
   const value = o.value;
   if (typeof value !== 'number' || !Number.isFinite(value)) invalid(`${f}.value`, 'value must be a finite number');
   if (target !== 'eta_s' && (value < 0 || value > 1)) invalid(`${f}.value`, 'a probability must be between 0 and 1');
@@ -185,33 +210,68 @@ export function parseRecommendation(raw: unknown, i: number): RecommendationIn {
   };
 }
 
+/** Analytics records that failed validation and were left out of the batch (counts + up to 5 reasons for the log). */
+export interface DroppedAnalytics {
+  forecasts: number;
+  recommendations: number;
+  reasons: string[];
+}
+
 export interface MysteryAppendBody {
   sessionId: string;
   events: ParsedEvent[];
   forecasts: ForecastIn[];
   recommendations: RecommendationIn[];
+  dropped: DroppedAnalytics;
 }
 
-function analyticsList<T>(raw: unknown, field: string, parse: (x: unknown, i: number) => T, key: (x: T) => number): T[] {
-  if (raw === undefined || raw === null) return [];
+const MAX_DROP_REASONS = 5;
+
+/**
+ * Analytics records are BEST-EFFORT (since the 2026-10-23 overhaul): the list itself must be well-formed (an array of at
+ * most MAX_ANALYTICS_PER_BATCH entries), but a single invalid record — a NaN posterior, a 41-character feature string, an
+ * unknown target, a repeated number — is DROPPED and counted instead of rejecting the request. A rejected append stops
+ * the kiosk's upload and leaves the visitor's run unverified (off the leaderboard), which an analytics row must never
+ * cause. Events stay strict (they are the verified record). Every accepted record still satisfies every SQL CHECK.
+ */
+function analyticsList<T>(
+  raw: unknown, field: 'forecasts' | 'recommendations', parse: (x: unknown, i: number) => T, key: (x: T) => number,
+  reasons: string[],
+): { items: T[]; dropped: number } {
+  if (raw === undefined || raw === null) return { items: [], dropped: 0 };
   if (!Array.isArray(raw)) invalid(field, `${field} must be an array`);
   if (raw.length > MAX_ANALYTICS_PER_BATCH) invalid(field, `at most ${MAX_ANALYTICS_PER_BATCH} ${field} per batch`);
-  const out = raw.map(parse);
+  const items: T[] = [];
   const seen = new Set<number>();
-  for (const x of out) {
-    if (seen.has(key(x))) invalid(field, `${field} contains the same number twice`);
-    seen.add(key(x));
-  }
-  return out;
+  let dropped = 0;
+  raw.forEach((x, i) => {
+    try {
+      const v = parse(x, i);
+      if (seen.has(key(v))) invalid(`${field}[${i}]`, `${field}[${i}] repeats a number already in this batch`);
+      seen.add(key(v));
+      items.push(v);
+    } catch (e) {
+      if (!(e instanceof HttpError)) throw e;
+      dropped++;
+      if (reasons.length < MAX_DROP_REASONS) reasons.push(`${String(e.details?.field ?? field)}: ${e.message}`.slice(0, 160));
+    }
+  });
+  return { items, dropped };
 }
 
 export function parseMysteryAppend(raw: unknown): MysteryAppendBody {
   const body = asObject(raw);
   onlyKeys(body, ['sessionId', 'events', 'forecasts', 'recommendations']);
-  const forecasts = analyticsList(body.forecasts, 'forecasts', parseForecast, (x) => x.forecastNo);
-  const recommendations = analyticsList(body.recommendations, 'recommendations', parseRecommendation, (x) => x.recNo);
-  const events = parseEventBatch(body.events ?? [], forecasts.length + recommendations.length > 0);
-  return { sessionId: sessionId(body, true), events, forecasts, recommendations };
+  const reasons: string[] = [];
+  const forecasts = analyticsList(body.forecasts, 'forecasts', parseForecast, (x) => x.forecastNo, reasons);
+  const recommendations = analyticsList(body.recommendations, 'recommendations', parseRecommendation, (x) => x.recNo, reasons);
+  // an analytics-only call (no events) stays valid even when every record in it was dropped
+  const sentAnalytics = forecasts.items.length + forecasts.dropped + recommendations.items.length + recommendations.dropped;
+  const events = parseEventBatch(body.events ?? [], sentAnalytics > 0);
+  return {
+    sessionId: sessionId(body, true), events, forecasts: forecasts.items, recommendations: recommendations.items,
+    dropped: { forecasts: forecasts.dropped, recommendations: recommendations.dropped, reasons },
+  };
 }
 
 // ------------------------------------------------------------------------------------------------- finalize

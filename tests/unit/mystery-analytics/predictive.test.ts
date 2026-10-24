@@ -58,10 +58,14 @@ describe('PredictiveService', () => {
   }, 60_000);
 
   it('outputs probabilities in [0, 1] with a band and top factors over many live snapshots', () => {
-    const ep = episode({ characterId: 'morticia', pokemonId: 'trevenant' }, 'pred-1', { profile: 'careless', sprintProb: 0.6 });
+    let chased = 0;
+    // a few careless episodes (the overhauled Hyde emerges after ~20 s and calms down after a chase, so one seed may
+    // never be chased): keep going until a chase has been seen
+    for (const seed of ['pred-1', 'pred-1b', 'pred-1c', 'pred-1d']) {
+    if (chased > 0) break;
+    const ep = episode({ characterId: 'morticia', pokemonId: 'trevenant' }, seed, { profile: 'careless', sprintProb: 0.8, startDelayMaxS: 0 });
     const duo = duoNumbers(ep.collector.meta.factors);
     const samples = ep.collector.samples;
-    let chased = 0;
     for (let i = 0; i < samples.length; i++) {
       const x = { snapshot: samples[i].snapshot, prev: samples[i - 1]?.snapshot ?? null, context: samples[i].context, duo };
       const r = svc.detection(x);
@@ -81,6 +85,7 @@ describe('PredictiveService', () => {
       const ex = svc.extraction(x);
       expect(ex.p).toBeGreaterThanOrEqual(0);
       expect(ex.p).toBeLessThanOrEqual(1);
+    }
     }
     expect(chased).toBeGreaterThan(0);
   }, 60_000);

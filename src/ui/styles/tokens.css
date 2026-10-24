@@ -43,6 +43,26 @@ html { font-size: clamp(15px, min(1.1713vw, 2.0833vh), 22.5px); }
   --c-egg-rare: #4fd8e8;
   --c-egg-legendary: #f2c94c;
 
+  /* Overhaul HUD encoding (UX_OVERHAUL): red = the Hyde only · lantern = objective · violet = clues · ivory = the egg ·
+     cyan = prediction. Layer colours tag the four analytics in Thing's stack. */
+  --c-hyde: #e5484d;
+  --c-hyde-text: #ff8a8a;
+  --c-predict: #5cc0e6;
+  --c-layer-desc: #d4cbb5;
+  --c-layer-diag: #b3a8ff;
+  --c-layer-pred: #5cc0e6;
+  --c-layer-presc: #6fd6a0;
+  /* Enemy contract (UX_ENEMIES §0): Joseph Crackstone = sickly witch-light green (not teal: cyan-mint is prediction /
+     success / the rare egg). 12.2:1 on --c-bg; greyscale luminance .63 vs the Hyde red's .22. */
+  --c-crack: #a8e063;
+  --c-crack-text: #c4ef8a;
+  --c-crack-soft: rgba(168, 224, 99, 0.14);
+  --c-map-void: #070a14;
+  --c-map-ground: #121733;
+  --c-map-room: #1b2046;
+  --c-map-wall: #6b6aa8;
+  --c-map-water: #0d1d33;
+
   /* Weather */
   --c-wx-clear: #d9d4f2;
   --c-wx-currents: #5cc0e6;
@@ -117,6 +137,8 @@ html { font-size: clamp(15px, min(1.1713vw, 2.0833vh), 22.5px); }
   --c-text: #fff; --c-text-2: #fff; --c-text-muted: #e6e6e6; --c-title-silver: #fff;
   --c-accent: #c4b8ff; --c-accent-text: #d9d2ff; --c-lantern: #ffc766; --c-focus: #ffff00;
   --c-success: #8cf0b8; --c-danger: #ff9a9a;
+  --c-predict: #8fe3ff; --c-layer-pred: #8fe3ff; --c-hyde-text: #ffb4b4;
+  --c-crack: #c8ff80; --c-crack-text: #e0ffb8;
   --shadow-1: none; --shadow-2: none; --glow-accent: none; --glow-lantern: none; --glow-rare: none; --glow-legendary: none;
 }
 .high-contrast .panel, .high-contrast .card { border-width: 2px; }

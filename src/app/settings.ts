@@ -13,7 +13,10 @@ export interface Settings {
   crouchToggle: boolean;
   /** Captions are always on (UX §7); only their size is a choice. */
   captionSize: 'normal' | 'large';
-  /** Show the HUD risk estimate chip (Phase 4). */
+  /**
+   * "Show predictions" (UX_OVERHAUL §11; persisted key kept as `showRisk`): the HUD Odds panel, the Hyde pill's risk
+   * segment and the map's probability tints / numbers. Off = names and facts only.
+   */
   showRisk: boolean;
   /** Reduced motion follows the system unless forced. */
   motionPref: 'system' | 'on' | 'off';
@@ -22,6 +25,9 @@ export interface Settings {
 const KEY = 'raven-regatta:settings:v1';
 
 /** Per-visitor preferences, reset on "New investigation" (UX_MYSTERY §7). */
+/** Display labels for settings rows (Pause → Settings, frontend B). */
+export const SETTING_LABELS = { showRisk: 'Show predictions' } as const;
+
 export const VISITOR_DEFAULTS = { lookSensitivity: 5, invertY: false, crouchToggle: true, captionSize: 'normal', showRisk: true } as const satisfies Partial<Settings>;
 
 function prefersReducedMotion(): boolean {
@@ -45,6 +51,7 @@ let current: Settings = load();
 const listeners = new Set<() => void>();
 
 function applyClasses(s: Settings): void {
+  if (typeof document === 'undefined') return; // node (unit tests / SSR): no <html> to decorate
   const root = document.documentElement.classList;
   root.toggle('captions-large', s.captionSize === 'large');
   root.toggle('reduced-motion', s.reducedMotion);

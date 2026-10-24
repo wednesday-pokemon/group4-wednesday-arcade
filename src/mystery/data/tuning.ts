@@ -5,6 +5,21 @@
 //   M = metres, S = seconds, Mps = metres/second, PerS = units per second, Mult = multiplier (1 = neutral),
 //   loudness = 0..1 noise emission, security = 0..100 egg condition, hp = hit points.
 // Pure data (shared with Deno Edge Functions): no Math.random, no Date, no DOM.
+//
+// Overhaul re-tune (2026-10-23, target: a first-timer's visit of 5–7 min incl. ~90–120 s of menus, i.e. ~200–300 s of
+// active play; "suspense but fair"). Rationale and pacing math: docs/MYSTERY_DESIGN.md §10.7–§10.8.
+//   NEW  hyde.emergeAfterS 20, hyde.calmAfterChaseS 10, hyde.calmHearingMult 0.5, sight.playerSeesHydeM 18,
+//        investigation.siteCheckM 5, player.examineS 1.0, player.leverS 1.5, noise.lever 0.5.
+//   CHANGED player.hintCooldownS 10 → 8 (three progressive hint levels reach the exact spot in 16 s, not 20 s).
+//   CHANGED (caseWorlds.ts) every clue group searchS = 2.5 (the three 3.0 s clues lose 0.5 s; one number to learn).
+//   UNCHANGED on purpose: all movement / Hyde speeds, hearing radii, sight, suspicion and grab numbers — the
+//        walk < chase < sprint ordering is the core fairness promise and the bot sweep validated it; the new
+//        emergence delay + calm window already lower encounter pressure, so slowing the Hyde too would kill suspense.
+//
+// Enemy contract (2026-10-24, docs/overhaul/ENEMY_CONTRACT.md): NEW section `crackstone` — Joseph Crackstone, the deaf,
+// sight-based guardian of one area per case (haunts in caseWorlds.ts). Rationale and escape math: docs/MYSTERY_DESIGN.md
+// §11. Changed vs the orchestrator's proposal: scanEveryS 26 → 25, scanJitterS 6 → 4 (interval 21–29 s), scanWarnS
+// 2.0 → 2.2, scanRadiusM 11 → 10, curseWindupS 1.3 → 1.4, curseSlowS 3 → 2.5. No existing number changed.
 import { EGG_POINTS } from '../../game/constants.ts';
 
 export const MYSTERY_TUNING = {
@@ -19,10 +34,23 @@ export const MYSTERY_TUNING = {
     crouchSpeedMps: 1.6,
     sprintSpeedMps: 5.5,
     accelMps2: 20, // how fast speed reaches the target (snappy but not instant)
-    interactRangeM: 1.8, // E reaches a clue / egg / switch within this distance of the player centre
-    hintCooldownS: 10, // V (Thing hint) cooldown (UX spec §4)
+    interactRangeM: 1.8, // E reaches a clue / egg / switch / examine / lever within this distance of the player centre
+    hintCooldownS: 8, // V (Thing hint) cooldown; overhaul 10 → 8 so hint levels 1→2→3 take 16 s
     eggDropHoldS: 0.8, // hold E this long to set the carried egg down; a tap never drops it (UX ruling 4)
     practiceSearchS: 1.0, // tutorial practice crate at the pier (island.ts PRACTICE_CRATE)
+    /** Overhaul: hold E on a suspicious object (× interactTimeMult); short so examining never feels like a chore. */
+    examineS: 1.0,
+    /** Overhaul: hold E on a passage lever (not scaled by interactTimeMult — a lever is the same for everyone). */
+    leverS: 1.5,
+  },
+
+  /** Overhaul: candidate-site checks (Bayesian evidence for the egg / clue-area posteriors). */
+  investigation: {
+    /**
+     * A candidate site within this distance of the player with line of sight (walls + high cover) counts as checked.
+     * 5 m ≈ a room corner seen from the aisle; detection inside it is certain, so "checked empty" has likelihood 0.
+     */
+    siteCheckM: 5,
   },
 
   /** Carrying the egg: slower and a little louder. Sprint stays allowed (fair escape). */
@@ -43,6 +71,8 @@ export const MYSTERY_TUNING = {
     clueSearch: 0.15, // emitted when a search starts and every searchNoiseIntervalS while searching
     searchNoiseIntervalS: 1.0,
     deposit: 0.2, // egg placed in Iago Tower
+    /** Overhaul: a passage lever grinding open ('interact' source) → heard within ~8.5 m (≈ 4 m through one wall). */
+    lever: 0.5,
     /** Footstep cadence: one footstep noise event per interval while moving in that stance. */
     footstepIntervalS: { crouch: 0.7, walk: 0.5, sprint: 0.32 },
   },
@@ -78,6 +108,11 @@ export const MYSTERY_TUNING = {
     hidingRevealDefaultM: 2,
     instantChaseM: 3, // a visible player this close triggers CHASE immediately (no ramp)
     eyeHeightM: 2.1, // for renderer / debug only; LOS is 2D against walls & high cover
+    /**
+     * Overhaul: the PLAYER sees the Hyde (hydeVisible, lastHydeSighting) with LOS within this range. 18 m > the Hyde's
+     * own 13 m, so a watchful player always spots it ~5 m (≈ 2 s of patrol) before it can spot them in the open.
+     */
+    playerSeesHydeM: 18,
   },
 
   /**
@@ -108,6 +143,18 @@ export const MYSTERY_TUNING = {
     cooldownS: 5, // COOLDOWN (walk back to the patrol loop, reduced hearing) → PATROL
     cooldownAfterGrabS: 6,
     waypointReachedM: 1.0,
+    /**
+     * Overhaul: the Hyde is absent for this many seconds of active play, then emerges at a seeded spawn
+     * (CaseWorldDef.hydeSpawns, renormalised over spawns ≥ minSpawnDistanceM from the player). 20 s ≈ 60 m of walking:
+     * enough to read the objective and reach the first building, short enough that the threat arrives early.
+     */
+    emergeAfterS: 20,
+    /**
+     * Overhaul fairness window: after a CHASE ends (lost sight → SEARCH, or a grab), hearing × calmHearingMult for this
+     * long, so a player who just escaped is not instantly re-acquired by the next footstep (≈ one search + cooldown).
+     */
+    calmAfterChaseS: 10,
+    calmHearingMult: 0.5, // walk heard at 3.5 m instead of 7 m during the calm window
   },
 
   grab: {
@@ -154,6 +201,72 @@ export const MYSTERY_TUNING = {
     distractSightMult: 0.3, // documented in the contract; repeated here for one source of numbers
     defaultLureLoudness: 0.8, // when a lure effect's magnitude is 0
     healCapToMaxHp: true,
+  },
+
+  /**
+   * Enemy contract (2026-10-24): Joseph Crackstone. DEAF on purpose (no hearing keys — noise is the Hyde's job); he
+   * detects by sight, proximity and a telegraphed scan, and is leashed to his case's haunt (CaseWorldDef.crackstone:
+   * per-case scanEveryS / sightRangeMult overrides and leashM). Mapped to SimTuning.crackstone in src/mystery/config.ts.
+   * Design + escape math: docs/MYSTERY_DESIGN.md §11.
+   */
+  crackstone: {
+    /** Body + turning: a tall, slow walker. Turns slower than the Hyde (4.0) so slipping behind him is a real skill. */
+    radiusM: 0.5,
+    turnRateRadPerS: 3.0,
+    /**
+     * Mode speeds (m/s). PATROL 1.5 is deliberate (a 40–90 s lap is easy to read); walk 3.2 < CHASE 3.5 < slowest
+     * legal sprint 4.22 (carrying) — the same fairness promise as the Hyde, with a 0.7 m/s escape margin (Hyde 0.22).
+     * ATTACK 0: he stands still while the curse winds up.
+     */
+    speedMps: { PATROL: 1.5, INVESTIGATE: 2.2, CHASE: 3.5, ATTACK: 0, SEARCH: 1.8, RETURN: 1.8 },
+    patrolPauseS: 1.2, // look-around pause at every waypoint (he slowly turns: the player's window to cross his path)
+    /**
+     * His own cone: narrower than the Hyde's (90° vs 100°) but longer (14 m vs 13 m) — he is the "eyes" enemy.
+     * Crouching in the open: seen at 14 × 0.6 = 8.4 m (fog 5.4 m). Player sees him at playerSeesCrackstoneM 20 m,
+     * so even Case 02's × 1.15 (16.1 m) leaves the first look to a watchful player.
+     */
+    sight: { coneDeg: 90, rangeClearM: 14, rangeFogM: 9, crouchRangeMult: 0.6, instantChaseM: 2.5 },
+    proximityM: 2.5, // senses a non-hidden player this close all around (LOS; crouching does not help) — don't tail him
+    /** Seen: + sightGainPerS × (1 + (1 − d / range)) per second → 1.0 s ramp at max range, ~0.5 s point-blank. */
+    suspicion: { sightGainPerS: 1.0, chaseAt: 1, decayPerS: 0.2 },
+    /** Timers (s) / distances (m): shorter than the Hyde's (4 / 8 / 12) — breaking his sight is rewarded quickly. */
+    chaseLossS: 3.5,
+    searchS: 7,
+    searchRadiusM: 6,
+    investigateMaxS: 10,
+    waypointReachedM: 1.0,
+    returnSightMult: 0.6, // RETURNing: 14 → 8.4 m, so a player who just escaped is not re-acquired at once
+    /**
+     * Supernatural scan (in PATROL / SEARCH): every 25 ± 4 s (21–29 s; per-case override), a 2.2 s warning (ring +
+     * banner + chime; contract minimum 1.8 s), then a pulse that hits a non-hidden player within 10 m WITH LOS
+     * (crouching does not help, walls / high cover / hiding do). 2.2 s = ~0.6 s first-timer reaction + 1.6 s of
+     * walking (5.1 m): from anywhere in the outer half of the ring a walker gets out; closer in, a wall or hiding spot
+     * (rarely > 4 m away in his haunts) is the answer.
+     */
+    scanEveryS: 25,
+    scanJitterS: 4,
+    scanWarnS: 2.2,
+    scanRadiusM: 10,
+    scanPulseShowS: 0.6, // flash duration (render / HUD only)
+    /**
+     * Curse (ATTACK): cast in CHASE within 7 m with LOS; a 1.8 m circle on the player's spot lands after 1.4 s.
+     * Leaving it from the centre: walk 3.2 → 0.56 s, slowest carrying walk 2.45 → 0.73 s (+0.6 s reaction = 1.33 s
+     * < 1.4 s); a moving player is out before it lands — it punishes standing still under his gaze. One curse per
+     * encounter in practice (cooldown 10 s > chaseLossS + reaction). 15 HP = 3/7 of a Hyde grab; never a catch,
+     * never egg damage (rule R7). The 2.5 s slow (× 0.75) is fully covered by curseInvulnerableS 2.5, so no enemy can
+     * exploit it (keeps "sprint beats every chase").
+     */
+    curseRangeM: 7,
+    curseRadiusM: 1.8,
+    curseWindupS: 1.4,
+    curseCooldownS: 10,
+    curseHp: 15,
+    curseSlowMult: 0.75,
+    curseSlowS: 2.5,
+    curseInvulnerableS: 2.5,
+    lureRangeM: 20, // a decoy this close pulls him too (rule R8); 20 m ≈ the Hyde lure ranges (10–22 m)
+    playerSeesCrackstoneM: 20, // HUD / minimap / lastCrackstoneSighting; > his best sight 16.1 m (Case 02)
+    releaseMinDistM: 12, // Hyde-grab release prefers safe points ≥ this from him (> his 10 m scan, ≈ his 14 m sight)
   },
 
   /** Clamp range for the COMBINED (Nightshade × Pokémon) PlayMods, applied in combineMods(). */

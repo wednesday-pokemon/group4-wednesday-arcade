@@ -134,8 +134,11 @@ flowchart LR
 
 ## 7. Mystery v3.1 "The Silent Evidence" (rules `mystery-v3.1`)
 
-Additive backend: `supabase/migrations/20261021000500..800`, functions `mystery-*`, `admin-reset` (`scope`). Setup and
-client contract: `docs/SUPABASE_SETUP.md` §12. Status: tested offline (PGlite + Vitest + round-trip); **not deployed**.
+Additive backend: `supabase/migrations/20261021000500..800`, `20261022000100_mystery_cases.sql` (three cases),
+`20261023000100_mystery_overhaul.sql` (telemetry + live forecasts, §7.7), `20261024000100_mystery_crackstone.sql` (second
+enemy + curse, §7.8), functions `mystery-*`, `admin-reset` (`scope`).
+Setup and client contract: `docs/SUPABASE_SETUP.md` §12. Status: tested offline (PGlite + Vitest + round-trip); everything
+through `20261023000100` deployed 2026-10-24 (owner); `20261024000100` **not deployed yet**.
 
 ### 7.1 What changed in the trust model
 
@@ -188,7 +191,7 @@ per-frame state are never stored (events only; the 1 Hz snapshots stay in the br
 | M-06 | **Replay / duplicate / divergent resend** | (session, seq) unique; a resent event is ignored only if byte-identical to the stored one, otherwise 409 `SEQ_CONFLICT`; optimistic concurrency on `last_seq` (`STALE_EVENTS`, auto-retried) | unit "resend dedupe"; 005 STALE_EVENTS / seq-below-last; round-trip resends store nothing twice |
 | M-07 | **Double finalization / result edits** | `mystery_results` PK = session; a second finalize returns the stored row (`replay`); immutability trigger; finalize re-validates every stored rule event from scratch and cross-checks it with the incremental state | 005 "second call returns the SAME stored row", "exactly one result row", immutable; round-trip |
 | M-08 | **Cross-station access** | Station from JWT only (bodies have no station field; unknown keys → 422); every RPC re-checks `station_id`; RLS own-station-or-operator on every detail table; other station's ids → 404 | 004 station A/B isolation, unprovisioned user; unit "rejects stationId in body" |
-| M-09 | **Storage / CPU abuse** | 256 KB body, ≤ 500 events and ≤ 50 forecasts/recommendations per call, ≤ 20 000 events per session, strict payload schemas, string caps, 6 creates/min/station | unit parser tests; 005 RATE_LIMITED |
+| M-09 | **Storage / CPU abuse** | 256 KB body, ≤ 500 events and ≤ 50 forecasts/recommendations per call (invalid analytics records dropped, §7.7 M-17), ≤ 20 000 events per session, strict payload schemas, string caps, 6 creates/min/station | unit parser tests; 005 RATE_LIMITED |
 | M-10 | **Test data on the public board** | `testSeed` accepted only with server secret `MYSTERY_ALLOW_TEST_SEEDS=true` (403 otherwise); `is_test` rows excluded from all views and from the anon policy | 005 "test-seed run is stored but never ranked"; unit TEST_SEED_FORBIDDEN |
 | M-11 | **Back-filled predictions** (analytics honesty) | Forecast rows are immutable at issue (resend ignored); `model_label ∈ {ml, rule_based}`; recommendation `accepted/outcome` are fill-only | 005 forecast/recommendation tests |
 | M-12 | **Browser/server rule drift** (different offers, tiers or verdicts) | `npm run sync:shared` copies the pure modules byte-for-byte (fails on impure code or out-of-tree imports); identity test; redeploy after every sync | `supabase/tests/unit/shared-identity.test.ts` |
@@ -237,10 +240,54 @@ step, so sending the compact per-step input stream instead of events would let t
 
 Same JSON request logs (`fn`, `requestId`, `status`, `durationMs`) plus `mystery_session_created`,
 `mystery_duo_selected`, `mystery_events_appended` (accepted/duplicates/lastSeq), `mystery_stale_retry`,
-`mystery_finalized` (outcome, score, verdict, `claimMatches`; warn when false) and `mystery_progress_mismatch` (error:
+`mystery_finalized` (outcome, score, verdict, `claimMatches`; warn when false), `mystery_analytics_dropped` (warn: invalid
+forecast / recommendation records left out, with up to 5 reasons) and `mystery_progress_mismatch` (error:
 stored events vs stored state disagree — investigate). Suggested alerts: any `INVALID_TRANSITION` or
-`mystery_progress_mismatch`; `EVENT_REJECTED` rate > 5 % of append calls (sim/validator drift after a deploy);
-`claimMatches=false` on more than an occasional run.
+`mystery_progress_mismatch`; `EVENT_REJECTED` rate > 5 % of append calls (sim/validator drift after a deploy — e.g. the
+frontend went live before the functions); any `CASE_OUTDATED` after the first minutes of a deploy (mixed function
+versions); `mystery_analytics_dropped` on most runs (client analytics drift); `claimMatches=false` on more than an
+occasional run.
+
+### 7.7 Overhaul review (2026-10-23: case worlds, randomized sites, telemetry, live forecasts)
+
+Scope: migration `20261023000100_mystery_overhaul.sql`, `_shared/mystery-events.ts`, `_shared/mystery-validation.ts`,
+the generated `_shared/mystery/**` (case content v2, `data/caseWorlds.ts`). Setup + deploy order:
+`docs/SUPABASE_SETUP.md` §12.7. Nothing new is readable by `anon`; no new grant, policy, column or Realtime table.
+
+**New data and who can read it**
+
+| Data | Where | Who can read |
+|---|---|---|
+| Per-session layout (which candidate site holds each clue / the egg, Hyde spawn) | nowhere on the server; derived in the browser from the seed + the public `caseWorlds.ts` priors | the owning kiosk (it has the seed) |
+| Telemetry that reveals that layout after the fact (`site_checked{found}`, `trace_found`, `hyde_emerged`) | `mystery_events` | owning station, operator (same RLS as every event); never anon, never Realtime |
+| Live forecasts `egg_site` / `clue_area` / `hyde_zone` / `hyde_spawn` | `mystery_forecasts` | owning station, operator |
+
+**Threats**
+
+| ID | Threat | Severity | Mitigation / status | Verified by |
+|---|---|---|---|---|
+| M-15 | **Layout derivable from the seed.** The seed is necessarily on the kiosk (the browser runs the sim, LIVE and LOCAL); `layout.ts` + the public PRF + `caseWorlds.ts` let a devtools user compute every clue site, the egg site and the Hyde spawn before searching. | Low | Accepted. Impact: a faster run (less searching) → a better time/score on the leaderboard. It cannot change the egg tier/points (seed-bound, M-03), the verdict (server answer key, M-04) or anything on the other station. It is strictly weaker than the already-accepted fabricated-stream risk (§7.4: a devtools user can post a whole consistent run). A server-held layout would need a server-authoritative "is the clue here?" oracle on every interaction (latency, impossible in LOCAL mode) — not justified for a school booth. Operational: kiosk/fullscreen lock, staff at the stations, operator deletion of implausible results (`received_at` vs `active_time_s`). | design review; `mystery-sim-contract.test.ts` (the server needs no positions) |
+| M-16 | **Forged telemetry** (fake `site_checked`, `trace_found`, `hyde_emerged`, `hazard_triggered`) | Low | Shape-validated only (ids `^[a-z][a-z0-9_]{0,39}$`, enums, booleans, finite bounded numbers, ≤ 6 extra short primitives); telemetry is never a rule event, so it cannot change catches, clues, egg, verdict or score; it only pollutes the forging station's own analytics rows. Bounded by the 20 000-event budget and 256 KB bodies. | `mystery-overhaul.test.ts` "interleaved telemetry leaves … the result unchanged"; `007` "telemetry never changes the rule projections" |
+| M-17 | **Analytics record kills verification** (one NaN / over-long feature / unknown target → 422 → kiosk stops uploading → visitor's run unverified, off the board) | Medium → **fixed** | Forecast / recommendation records are now best-effort: invalid ones are dropped and counted (`forecastsDropped`, `recommendationsDropped`, warn log), the events are stored. List shape (array, ≤ 50) and every SQL CHECK still enforced; accepted records are unchanged. | `mystery.test.ts` "an invalid analytics record is DROPPED…"; `007` CHECK backstops |
+| M-18 | **Sim/validator enum drift** — the sim emitted `hyde_mode` reason `gave_up`, which the server rejected: any live run in which the Hyde abandoned an unreachable investigation would have turned unverified | High → **fixed** | `gave_up` accepted. Drift guards now fail the build first: server enums vs the synced `types.ts` unions (event types, noise sources, stances, rooms, Hyde modes/reasons), TS lists vs the latest SQL CHECK lists, client `FORECAST_TARGETS` ⊆ server, and 48 real bot episodes per run of the suite uploaded through the server rules with the result compared to the browser's `RunResult`. | `mystery-overhaul.test.ts`, `mystery-sim-contract.test.ts` |
+| M-19 | **Deploy skew** (new frontend + old functions → `EVENT_REJECTED: type` for every run; mixed function versions → `CASE_OUTDATED`; a session open across the switch → `CASE_OUTDATED`) | Medium (operational) | Runbook order: DB → all mystery functions in one command → frontend, between visitors, after an operator reset of both kiosks; rollback frontend + functions together. | `docs/SUPABASE_SETUP.md` §12.7 |
+| M-20 | **Hidden truth on public surfaces** — the Laptop 1 board and the heartbeat broadcast are visible to everyone in the booth (incl. the player at the other kiosk) | Advisory | Must show only public state (`InvestigationState`-derived posteriors, counts), never the layout, `map.clues`, `map.eggSpawn` or the seed of a live session; the heartbeat stays enums + clamped numbers (§7.5). Owned by the client (fullstack / frontend); the database exposes no layout to anon. | client leakage-guard tests (owners) |
+
+Answer keys are unchanged by the overhaul: `CaseSolution` v2 carries the same culprits and supporting evidence, stays in
+the server registry, and leaves the server only in the finalize `reveal`.
+
+### 7.8 Joseph Crackstone review (2026-10-24: second enemy, curse, crackstone_risk)
+
+Scope: migration `20261024000100_mystery_crackstone.sql`, `_shared/mystery-events.ts`, `_shared/mystery-rules.ts`,
+`_shared/mystery-validation.ts`. Setup + deploy order: `docs/SUPABASE_SETUP.md` §12.8. **RLS, grants, column privileges and
+the Realtime publication are unchanged**: Crackstone telemetry and `curse` rows live in `mystery_events`, `crackstone_risk`
+in `mystery_forecasts` — owning station + operator only, never `anon`, never Realtime (pgTAP `008`). Crackstone's
+position is never stored server-side; `crackstone_sighted.distanceM` / scan radius are bounded numbers, not coordinates.
+
+| ID | Threat | Severity | Mitigation / status | Verified by |
+|---|---|---|---|---|
+| M-21 | **Forged / inconsistent curse HP** (a curse that "costs" HP while blocked, HP on a cast / miss, a curse after the deposit, a fake `hp_depleted` DNF) | Low | `curse` is a strict RULE event: phase enum, `hpLost` finite 0..100, 0 unless `phase = hit` and not `blocked`; no hit after the deposit or the terminal event; it is never a catch (`second_catch` still needs two `catch` events). A dnf `hp_depleted` is accepted only when catch + curse HP loss ≥ max HP (heals only raise that bar). HP loss is part of `ruleFingerprint`, so finalize re-validates it from the stored rows. A DNF has no score, so forging one gains nothing; under-reporting HP loss is the accepted fabricated-stream risk (§7.4). | `mystery-crackstone.test.ts`, `mystery-sim-contract.test.ts` (Crackstone stream), `008` |
+| M-22 | **Sim/validator drift or deploy skew for the new types** (a Crackstone client against the overhaul server → `422 EVENT_REJECTED: type` → runs unverified) | Medium (operational) | Drift guards extended: Crackstone unions + every GameEvent member's payload keys vs the server schema, TS lists vs the latest CHECK / rule-index definitions. Runbook: DB → all six functions in one command → frontend, hard-reload laptops. | `mystery-overhaul.test.ts`; `docs/SUPABASE_SETUP.md` §12.8 |
 
 ## 7.5 Mystery station heartbeat (added 2026-10-21, live client)
 Each kiosk broadcasts an ephemeral Realtime heartbeat every 2 s on the public topic `raven-mystery-live` so Laptop 1 can show

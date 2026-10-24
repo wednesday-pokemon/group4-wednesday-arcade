@@ -42,6 +42,21 @@ describe('MysteryRun API on buildIsland()', () => {
     expect(run.t).toBeLessThanOrEqual(run.tuning.maxFrameS + 1e-9);
   });
 
+  it('investigation() is a fresh public copy; the Hyde emerges once, emergeAfterS into the visit, ≥ minSpawnM away', () => {
+    const run = new MysteryRun({ duo: { characterId: 'enid', pokemonId: 'gengar' }, seed: 's1' });
+    const a = run.investigation();
+    a.checkedClueSites.push('x');
+    a.traces.push({ sourceId: 'x', siteId: 'y', t: 0 });
+    expect(run.investigation()).toMatchObject({ checkedClueSites: [], traces: [], hydeEmerged: false, hydeEmergesInS: run.tuning.hyde.emergeAfterS });
+    const ev = [];
+    for (let i = 0; i < Math.ceil((run.tuning.hyde.emergeAfterS + 1) * 10); i++) ev.push(...run.update(0.1, input()));
+    const em = ev.filter((e) => e.type === 'hyde_emerged');
+    expect(em).toHaveLength(1);
+    expect(em[0].t).toBeCloseTo(run.tuning.hyde.emergeAfterS, 1);
+    expect(run.hydeEmerged).toBe(true);
+    expect(Math.hypot(run.hyde.x - run.player.x, run.hyde.z - run.player.z)).toBeGreaterThanOrEqual(run.tuning.hyde.minSpawnM - 1);
+  });
+
   it('noiseRadiusM / boardAllowed / hydeBearing helpers', () => {
     const run = new MysteryRun({ duo: { characterId: 'enid', pokemonId: 'gengar' }, seed: 's1' });
     expect(run.noiseRadiusM()).toBe(0);
@@ -81,7 +96,17 @@ describe('MysteryRun API on buildIsland()', () => {
     expect(ep.snapshots.length).toBeGreaterThan(30);
     for (let i = 1; i < ep.snapshots.length; i++) expect(ep.snapshots[i].t - ep.snapshots[i - 1].t).toBeCloseTo(1, 1);
     const keys = Object.keys(ep.snapshots[0]).sort();
-    expect(keys).toEqual(['catches', 'cluesFound', 'eggSecurity', 'eggState', 'hidden', 'hp', 'hydeDistanceM', 'hydeMode', 'hydeOccluded',
-      'hydeSuspicion', 'moveReady', 'objective', 'powerReady', 'recentNoise', 'roomId', 'speed', 'stance', 't'].sort());
+    expect(keys).toEqual(['catches', 'cluesFound', 'crackstoneDistanceM', 'crackstoneMode', 'crackstoneOccluded', 'crackstonePresent',
+      'crackstoneSuspicion', 'crackstoneVisible', 'eggSecurity', 'eggState', 'hidden', 'hp', 'hydeDistanceM', 'hydeEmerged', 'hydeMode', 'hydeOccluded',
+      'hydeSuspicion', 'hydeVisible', 'moveReady', 'objective', 'powerReady', 'recentNoise', 'roomId', 'speed', 'stance', 't'].sort());
+    // Case 01 has Joseph Crackstone: present in every snapshot, never 999 m once play runs
+    for (const s of ep.snapshots) expect(s).toMatchObject({ crackstonePresent: true });
+    expect(ep.snapshots[0].crackstoneDistanceM).toBeLessThan(999);
+    // the Hyde is absent until it emerges: snapshots before report it as far away (999 m) and not visible
+    const emergedAt = ep.events.find((e) => e.type === 'hyde_emerged')!.t;
+    for (const s of ep.snapshots) {
+      expect(s.hydeEmerged).toBe(s.t > emergedAt);
+      if (!s.hydeEmerged) expect(s).toMatchObject({ hydeDistanceM: 999, hydeVisible: false });
+    }
   });
 });

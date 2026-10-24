@@ -179,6 +179,8 @@ export function CaseReveal({ caseDef, tools, onDone, initialPhase }: CaseRevealP
         </span>
       </header>
 
+      {/* the area under the header: centres the folder stack (and, once ready, stack + brief as one group) */}
+      <div className="case-reveal__body">
       <div className="case-reveal__stage" aria-hidden={!ready || undefined}>
         <ol className="case-reveal__files" aria-label="Case files">
           {files.map((f, slot) => {
@@ -216,6 +218,7 @@ export function CaseReveal({ caseDef, tools, onDone, initialPhase }: CaseRevealP
         )}
       </div>
 
+      <div className="case-reveal__briefwrap">
       <section
         className={`case-reveal__brief${ready ? ' is-ready' : ''}`}
         aria-labelledby="case-brief-title"
@@ -243,6 +246,8 @@ export function CaseReveal({ caseDef, tools, onDone, initialPhase }: CaseRevealP
           <p className="case-reveal__thing-line">Thing taps the file: this one is yours.</p>
         </div>
       </section>
+      </div>
+      </div>
     </main>
   );
 }

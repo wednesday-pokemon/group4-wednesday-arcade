@@ -3,6 +3,8 @@
 import type { MysteryRun } from '../run.ts';
 import { pathLength } from '../nav.ts';
 import type { AbilityDef, AbilityEffectKind, ClueId, Vec2 } from '../types.ts';
+import { clueSiteProbabilities, eggPosterior } from './bayes.ts';
+import { investigationOf, publicEggPosition, worldOf } from './publicState.ts';
 import type { DuoFactors, LiveContext } from './types.ts';
 
 /** Effect kinds that act on the Hyde (they can break or prevent a detection). */
@@ -30,20 +32,43 @@ export interface ObjectiveTarget {
   clueId: ClueId | null;
 }
 
-/** Where the current objective points: nearest missing clue, the egg (resting / dropped) or the tower. */
+/**
+ * Where the current objective points, from PUBLIC information only (overhaul): carrying → the tower; dropped → the
+ * egg where it fell (the player saw it); missing clues → the NEAREST candidate site that may still hold an uncollected
+ * clue (posterior > 0; a known site when the clue was seen); otherwise the egg's seen site, else its most probable
+ * candidate site (Bayesian; ties → nearest). Never the session's hidden clue / egg placement.
+ */
 export function objectiveTarget(run: MysteryRun): ObjectiveTarget | null {
   const egg = run.egg;
   const p = run.player;
   if (run.status !== 'playing') return null;
   if (egg.state === 'carried') return { kind: 'tower', x: run.map.tower.x, z: run.map.tower.z, clueId: null };
-  if (egg.state === 'dropped') return { kind: 'dropped_egg', x: egg.x, z: egg.z, clueId: null };
-  const missing = run.map.clues.filter((c) => !run.cluesFound.includes(c.clueId));
-  if (missing.length > 0) {
-    let best = missing[0];
-    for (const c of missing) if (Math.hypot(c.x - p.x, c.z - p.z) < Math.hypot(best.x - p.x, best.z - p.z)) best = c;
-    return { kind: 'clue', x: best.x, z: best.z, clueId: best.clueId };
+  const world = worldOf(run);
+  const inv = investigationOf(run);
+  if (egg.state === 'dropped') {
+    const at = publicEggPosition(run, inv, world);
+    return at ? { kind: 'dropped_egg', x: at.x, z: at.z, clueId: null } : null;
   }
-  if (egg.state === 'resting') return { kind: 'egg', x: egg.x, z: egg.z, clueId: null };
+  if (!world) return null;
+  const d = (q: Vec2) => Math.hypot(q.x - p.x, q.z - p.z);
+  if (run.cluesFound.length < run.caseDef.clues.length) {
+    const sites = clueSiteProbabilities(world, inv, run.cluesFound).filter((s) => s.p > 1e-9);
+    if (sites.length > 0) {
+      let best = sites[0];
+      for (const s of sites) if (d(s) < d(best)) best = s;
+      return { kind: 'clue', x: best.x, z: best.z, clueId: best.clueId };
+    }
+  }
+  if (egg.state === 'resting') {
+    const post = eggPosterior(world, inv);
+    let best: { x: number; z: number; p: number } | null = null;
+    for (const s of post) {
+      const def = world.eggSites.find((e) => e.id === s.siteId);
+      if (!def) continue;
+      if (!best || s.p > best.p + 1e-9 || (Math.abs(s.p - best.p) <= 1e-9 && d(def) < d(best))) best = { x: def.x, z: def.z, p: s.p };
+    }
+    if (best) return { kind: 'egg', x: best.x, z: best.z, clueId: null };
+  }
   return null;
 }
 
