@@ -35,10 +35,12 @@ function checkLive(run: MysteryRun, L: LiveAnalytics, seen: Set<string>): void {
   const emerged = (run as unknown as { hydeEmerged?: boolean }).hydeEmerged ?? true;
   // Hyde: exact spawn rule before emergence ("Rule-based estimate"), zone filter after ("Bayesian estimate")
   if (f.hyde.phase === 'before_emergence') {
-    expect(emerged).toBe(false);
+    // final: also while the director has the Hyde away (despawned / cooling down) — then the next spawn's odds
+    expect(emerged && run.hydeActive).toBe(false);
     expect(f.hyde.label).toBe('Rule-based estimate');
     expect(f.hyde.emergesInS).toBeGreaterThanOrEqual(0);
-    if (f.hyde.spawns.length) expect(sum(f.hyde.spawns)).toBeCloseTo(1, 9);
+    // the director's exact distribution: sums to 1, or all 0 while no spawn is eligible (it waits and retries)
+    if (f.hyde.spawns.some((s) => s.p > 0)) expect(sum(f.hyde.spawns)).toBeCloseTo(1, 9);
     expect(f.detection).toBeNull();
   } else {
     expect(emerged).toBe(true);
@@ -259,8 +261,9 @@ describe('live() during whole bot episodes (4 Hz)', () => {
         const sites = [...world.clueSites.flatMap((g) => g.sites), ...world.eggSites];
         expect(sites.some((s) => s.x === l3.target!.x && s.z === l3.target!.z)).toBe(true);
       }
-      // hints are recorded as recommendations (follow-up tracked)
-      expect(a.collector.recommendations.filter((r) => r.trigger === 'hint').length).toBeGreaterThanOrEqual(3);
+      // Thing's ladder is FREE advice (final): recorded as context recommendations, never as a (paid) hint
+      expect(a.collector.recommendations.filter((r) => r.trigger === 'context').length).toBeGreaterThanOrEqual(3);
+      expect(a.collector.recommendations.filter((r) => r.trigger === 'hint' && !/^weems_l[123]$/.test(r.action))).toEqual([]);
       // uploads carry the overhaul targets and pass the real server parser without drops
       const targets = new Set<string>();
       for (let b = a.pendingBatch(); b; b = a.pendingBatch()) {

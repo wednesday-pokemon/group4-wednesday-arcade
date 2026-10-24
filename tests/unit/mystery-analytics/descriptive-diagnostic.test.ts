@@ -40,7 +40,7 @@ function scripted(): StampedEvent[] {
     [31.0, { type: 'ability_denied', key: 'Q', reason: 'cooldown' }],
     [32.0, { type: 'hint_requested' }],
     [40.0, { type: 'egg_delivered', tier: 'rare', points: 3, security: 70 }],
-    [40.0, { type: 'accusation', suspectId: 'isaac', correct: false, cluesFound: 1, evidence: ['falsified_transfer'], deductionCorrect: false }],
+    [40.0, { type: 'accusation', suspectId: 'barry', correct: false, cluesFound: 1, evidence: ['falsified_transfer'], deductionCorrect: false }],
     [40.0, { type: 'finish', verdict: 'egg_secured_mystery_unsolved', score: 260 }],
   ]);
 }
@@ -335,7 +335,7 @@ describe('case-aware aggregates', () => {
     expect(c1.characters).toEqual([{ id: 'enid', runs: 2 }]);
     expect(c1.duos[0]).toEqual({ characterId: 'enid', pokemonId: 'gengar', runs: 2 });
     expect(a.combined).toMatchObject({ caseId: 'all', runs: 3, finished: 2 });
-    expect(JSON.stringify(a)).not.toMatch(/thornhill|isaac|barry|Thornhill|Isaac|Barry/);
+    expect(JSON.stringify(a)).not.toMatch(/thornhill|galpin|isaac|barry|Thornhill|Galpin|Isaac|Barry/);
   });
 });
 
@@ -347,7 +347,7 @@ describe('case-rule failure reasons', () => {
   ]);
   const withAcc = (acc: Partial<Extract<StampedEvent, { type: 'accusation' }>>, verdict: 'case_solved' | 'egg_secured_mystery_unsolved' | 'not_accused') => [
     ...t0,
-    { type: 'accusation', suspectId: 'isaac', correct: true, cluesFound: 2, evidence: [], deductionCorrect: false, ...acc, t: 41, seq: 4 } as StampedEvent,
+    { type: 'accusation', suspectId: 'galpin', correct: true, cluesFound: 2, evidence: [], deductionCorrect: false, ...acc, t: 41, seq: 4 } as StampedEvent,
     { type: 'finish', verdict, score: 259, t: 41, seq: 5 } as StampedEvent,
   ];
 
@@ -380,7 +380,7 @@ describe('case-rule failure reasons', () => {
     expect(failureReasons(rep).map((x) => x.code)).toEqual(['dnf_before_accusation', 'missed_clue', 'missed_clue', 'missed_clue', 'catch', 'dnf_second_catch']);
     // solved → nothing to explain
     const all3 = [...t0.slice(0, 2), { type: 'clue_found', clueId: 'equipment_match', cluesFound: 3, t: 20, seq: 3 } as StampedEvent];
-    const solved = [...all3, { type: 'accusation', suspectId: 'isaac', correct: true, cluesFound: 3, evidence: ids('crypt_last_witness'), deductionCorrect: true, t: 41, seq: 4 } as StampedEvent, { type: 'finish', verdict: 'case_solved', score: 300, t: 41, seq: 5 } as StampedEvent];
+    const solved = [...all3, { type: 'accusation', suspectId: 'galpin', correct: true, cluesFound: 3, evidence: ids('crypt_last_witness'), deductionCorrect: true, t: 41, seq: 4 } as StampedEvent, { type: 'finish', verdict: 'case_solved', score: 300, t: 41, seq: 5 } as StampedEvent];
     expect(diagnoseCaseReasons(solved, { caseId: 'crypt_last_witness' })).toEqual([]);
     expect(failureReasons(diagnoseSession(solved, { caseId: 'crypt_last_witness' }))).toEqual([]);
     // still running → nothing yet
@@ -404,7 +404,7 @@ describe('case-rule failure reasons', () => {
     expect(by.wrong_suspect.count).toBe(1);
     expect(by.not_accused.count).toBe(1);
     expect(by['missed_clue:access_ledger']).toMatchObject({ count: 1, caseId: 'poisoned_archive', text: 'Missed “Archive and Greenhouse Access Ledger” (Case 01)' });
-    expect(JSON.stringify(agg.caseFailures)).not.toMatch(/thornhill|isaac|barry/i);
+    expect(JSON.stringify(agg.caseFailures)).not.toMatch(/thornhill|galpin|isaac|barry/i);
   });
 
   it('on bot episodes of each case every unsolved run explains itself with that case\'s clue titles', () => {

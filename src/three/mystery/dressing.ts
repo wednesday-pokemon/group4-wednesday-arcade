@@ -10,6 +10,7 @@ import {
 } from './common.ts';
 import type { PierRect } from './terrain.ts';
 import { buildGateGeometry } from './walls.ts';
+import { buildCabinetCarcass, cabinetYaw } from './cabinets.ts';
 import { buildCaseDressing, type DressingExtras } from './caseDressing.ts';
 import { themeOf, type Theme } from './look.ts';
 import { pointsOfSites, sitesOf } from './siteProps.ts';
@@ -54,9 +55,16 @@ function pointedArch(b: Bld, x: number, z: number, w: number, h: number, thick: 
 
 // ------------------------------------------------------------------------------------------------------ hiding spots
 export function buildHidingSpots(map: MapDef, col: Collector, skipWalls: ReadonlySet<string>): void {
+  const theme = themeOf(map);
   for (const h of map.hidingSpots) {
     const rand = seeded('hide:' + h.id);
     const b = new Bld(rand);
+    if (h.kind === 'cabinet') {
+      // an enterable cabinet: static carcass here, the hinged door is a separate animated mesh (cabinets.ts)
+      buildCabinetCarcass(b, theme);
+      col.add(b.finish(h.x, h.z, cabinetYaw(map, h, skipWalls), 1));
+      continue;
+    }
     const nw = nearestWall(map, h.x, h.z, skipWalls);
     let yaw = rand() * Math.PI * 2;
     let wallClose = false;
@@ -118,6 +126,8 @@ function buildHidingModel(b: Bld, h: HidingSpotDef, wallClose: boolean): void {
       b.em.add(ICO0, '#6fe0ff', [r * 0.45, 1.1, r * 0.1], [0, 0, 0], 0.05, { jitter: 0, gradient: 0 });
       break;
     }
+    case 'cabinet':
+      break; // built by buildCabinetCarcass
     case 'sarcophagus': {
       const L = r * 2.4, W = r * 1.15, H = 0.85;
       b.lit.add(BOX, PAL.stoneDark, [0, 0.12, 0], [0, 0, 0], [W + 0.3, 0.24, L + 0.3], { gradient: 0.2 });
@@ -227,6 +237,7 @@ export function buildRoofs(map: MapDef, ids: string[], skip: ReadonlySet<string>
     if (!ids.includes(room.id) || room.polygon.length < 3) continue;
     const rand = seeded('roof:' + room.id);
     const c = centroid(room.polygon);
+    if (map.world?.playArea && (c.x < map.bounds.minX || c.x > map.bounds.maxX || c.z < map.bounds.minZ || c.z > map.bounds.maxZ)) continue; // a hall left outside the fence
     let h0 = 3.4;
     for (const w of map.walls) {
       if (skip.has(w.id)) continue;
@@ -477,6 +488,10 @@ export function buildDressing(map: MapDef, low: boolean): DressingBuild {
 
   const hideCol = new Collector();
   buildHidingSpots(map, hideCol, skip);
+  // compact maps (final): the old island's buildings that now lie beyond the boundary walls are not built (no ghost halls behind the fence)
+  const compact = !!map.world?.playArea;
+  const bb = map.bounds;
+  const beyond = (x: number, z: number, pad = 4): boolean => compact && (x < bb.minX - pad || x > bb.maxX + pad || z < bb.minZ - pad || z > bb.maxZ + pad);
 
   // ---- landmarks
   let thing = { x: map.playerStart.x + 1.4, y: 0.0, z: map.playerStart.z - 1.6, yaw: map.playerStart.yaw };
@@ -484,6 +499,7 @@ export function buildDressing(map: MapDef, low: boolean): DressingBuild {
   const gateWall = gateId ? map.walls.find((w) => w.id === gateId) ?? null : null;
   const gateMid = gateWall ? { x: (gateWall.a.x + gateWall.b.x) / 2, z: (gateWall.a.z + gateWall.b.z) / 2 } : null;
   for (const lm of map.landmarks) {
+    if (beyond(lm.x, lm.z) && lm.kind !== 'iago_tower') continue;
     const sc = lm.scale > 0 ? lm.scale : 1;
     const b = new Bld(seeded('lm:' + lm.id));
     switch (lm.kind) {
@@ -538,8 +554,9 @@ export function buildDressing(map: MapDef, low: boolean): DressingBuild {
   // ---- room interiors
   const avoid: Vec2[] = [...pointsOfSites(map), ...(map.world?.examines ?? []).map((e) => ({ x: e.x, z: e.z })), ...map.hidingSpots.map((h) => ({ x: h.x, z: h.z }))];
   for (const room of map.rooms) {
+    if (room.polygon.length && room.polygon.every((q) => beyond(q.x, q.z, 2))) continue;
     const b = new Bld(seeded('room:' + room.id));
-    const samples = roomWallSamples(map, room, 0.5, skip);
+    const samples = roomWallSamples(map, room, 0.5, skip).filter((q) => !beyond(q.x, q.z, 0.5)); // (compact maps: nothing is dressed beyond the fence)
     if (room.id === 'research_room') {
       for (const s of spaced(samples, 2.5, avoid, 2.0, low ? 4 : 9)) {
         if (theme === 'archive') bookshelfTextured(b, shelf, s);

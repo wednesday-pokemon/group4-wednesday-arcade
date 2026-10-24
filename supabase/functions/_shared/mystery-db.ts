@@ -1,7 +1,9 @@
-// mystery-v3.1 data access (service role) + client-facing views. Reads are narrow selects; every write is an RPC.
+// mystery-v3.1 + mystery-v4 data access (service role) + client-facing views. Reads are narrow selects; every write is an RPC.
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.45.4';
 import type { StationId } from './game/index.ts';
-import type { CaseId, DuoCard, DuoOffer, NightshadeId, PokemonId, SuspectId } from './mystery/types.ts';
+import type {
+  CaseId, DuoCard, DuoOffer, EnemyId, MysteryRulesVersion, NightshadeId, PokemonId, ScoreBreakdown, SuspectId,
+} from './mystery/types.ts';
 import { HttpError } from './errors.ts';
 import {
   RULE_EVENT_TYPES, progressFromRow, progressSummary, type MysteryEventType, type MysteryProgress, type ParsedEvent,
@@ -14,7 +16,7 @@ export type AbandonReason = 'player_reset' | 'operator_reset' | 'superseded';
 export interface MysterySessionRow {
   id: string;
   station_id: StationId;
-  rules_version: 'mystery-v3.1';
+  rules_version: MysteryRulesVersion;
   seed: string;
   is_test: boolean;
   nickname: string;
@@ -44,7 +46,7 @@ export interface MysteryResultRow {
   nickname: string;
   character_id: NightshadeId;
   pokemon_id: PokemonId;
-  rules_version: 'mystery-v3.1';
+  rules_version: MysteryRulesVersion;
   case_id: CaseId;
   case_version: number;
   outcome: 'finished' | 'dnf';
@@ -63,6 +65,11 @@ export interface MysteryResultRow {
   catches: number;
   sightings: number;
   hints_used: number;
+  /** mystery-v4 columns (20261025000100): null on v3.1 rows. */
+  detections: number | null;
+  hits: number | null;
+  defeated_by: EnemyId | null;
+  score_breakdown: ScoreBreakdown | null;
   claim_matches: boolean | null;
   is_test: boolean;
   finalized_at: string;
@@ -105,8 +112,13 @@ export async function loadResult(admin: SupabaseClient, sessionId: string): Prom
   return (data as MysteryResultRow | null) ?? null;
 }
 
-export async function loadRank(admin: SupabaseClient, sessionId: string): Promise<number | null> {
-  const { data, error } = await admin.from('mystery_leaderboard').select('rank').eq('session_id', sessionId).maybeSingle();
+/** The ranked board of a rules version (leaderboards never mix versions). */
+export function leaderboardView(rulesVersion: MysteryRulesVersion): 'mystery_leaderboard' | 'mystery_leaderboard_v4' {
+  return rulesVersion === 'mystery-v4' ? 'mystery_leaderboard_v4' : 'mystery_leaderboard';
+}
+
+export async function loadRank(admin: SupabaseClient, sessionId: string, rulesVersion: MysteryRulesVersion): Promise<number | null> {
+  const { data, error } = await admin.from(leaderboardView(rulesVersion)).select('rank').eq('session_id', sessionId).maybeSingle();
   if (error) throw dbFault('loadRank', error);
   return (data as { rank: number } | null)?.rank ?? null;
 }
@@ -143,7 +155,7 @@ export async function loadRuleEvents(admin: SupabaseClient, sessionId: string): 
 /** The station's OWN verified result (service role -> owning station only; includes the accusation). */
 export interface MysteryResultView {
   sessionId: string;
-  rulesVersion: 'mystery-v3.1';
+  rulesVersion: MysteryRulesVersion;
   caseId: CaseId;
   caseVersion: number;
   outcome: 'finished' | 'dnf';
@@ -162,6 +174,13 @@ export interface MysteryResultView {
   catches: number;
   sightings: number;
   hintsUsed: number;
+  /** mystery-v4: server-counted enemy_detected / enemy_hit events (null on v3.1 results). */
+  detections: number | null;
+  hits: number | null;
+  /** DNF only (v4): the monster that ended the run. */
+  defeatedBy: EnemyId | null;
+  /** mystery-v4 finishers: every score part (null for DNFs and v3.1 results). */
+  scoreBreakdown: ScoreBreakdown | null;
   duo: { characterId: NightshadeId; pokemonId: PokemonId };
   nickname: string;
   stationId: StationId;
@@ -193,6 +212,10 @@ export function resultView(r: MysteryResultRow): MysteryResultView {
     catches: r.catches,
     sightings: r.sightings,
     hintsUsed: r.hints_used,
+    detections: r.detections ?? null,
+    hits: r.hits ?? null,
+    defeatedBy: r.defeated_by ?? null,
+    scoreBreakdown: r.score_breakdown ?? null,
     duo: { characterId: r.character_id, pokemonId: r.pokemon_id },
     nickname: r.nickname,
     stationId: r.station_id,
@@ -206,7 +229,7 @@ export function resultView(r: MysteryResultRow): MysteryResultView {
 export interface MysterySessionView {
   sessionId: string;
   stationId: StationId;
-  rulesVersion: 'mystery-v3.1';
+  rulesVersion: MysteryRulesVersion;
   status: MysteryStatus;
   abandonedReason: AbandonReason | null;
   seed: string;

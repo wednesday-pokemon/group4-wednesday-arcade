@@ -6,10 +6,13 @@
 // (no case id) are left out as soon as any case-tagged record exists (`boardOptions`); a browser that only holds such
 // legacy records shows them combined, without the case filter.
 // The live (Supabase Realtime) feed for stations A and B arrives with the backend deploy.
+// Final wave (FINAL_CONTRACT §1/§10): the standings + "Top score" KPI rank mystery-v4 runs only (localEntries: v3.1 and
+// legacy records never mix); once any v4 record exists the analytics / KPIs use the v4 records only as well.
 import { useEffect, useMemo, useState } from 'react';
 import { boardOptions, bundledPredictiveService, dashboard } from '../../mystery/analytics/index.ts';
-import { MysteryDashboard, type CaseScope } from '../../ui/mystery/MysteryDashboard.tsx';
+import { MysteryDashboard, scoreKpi, type CaseScope } from '../../ui/mystery/MysteryDashboard.tsx';
 import { kpiRibbon, stationViewFromLocal } from '../../ui/mystery/stationView.ts';
+import { isV4Record, localEntries } from '../../ui/mystery/leaderboard/model.ts';
 import '../../ui/styles/mystery.css';
 import { useTestHooks } from '../testHooks.ts';
 import { browserStorage, LIVE_KEY, loadRecords, readLive, RECORDS_KEY, type LiveStatus, type StoredRecord } from './records.ts';
@@ -39,7 +42,13 @@ export function MysteryDashboardApp() {
     };
   }, []);
 
-  const sessionRecords = useMemo(() => records.map((r) => r.record), [records]);
+  // v4 records once any exist (scores and analytics never mix rules versions); older-only browsers keep their records.
+  const scoped = useMemo(() => {
+    const v4 = records.filter((r) => isV4Record(r.record));
+    return v4.length > 0 ? v4 : records;
+  }, [records]);
+  const entries = useMemo(() => localEntries(records), [records]);
+  const sessionRecords = useMemo(() => scoped.map((r) => r.record), [scoped]);
   const { options, caseAware } = useMemo(() => boardOptions(sessionRecords, scope), [sessionRecords, scope]);
   const agg = useMemo(() => dashboard(sessionRecords, options), [sessionRecords, options]);
   const card = bundledPredictiveService().modelCard();
@@ -49,6 +58,8 @@ export function MysteryDashboardApp() {
       mode: 'mystery_dashboard',
       backend: 'local_demo',
       records: records.length,
+      v4Records: entries.length,
+      standings: scoreKpi(agg.scope === 'all' ? entries : entries.filter((e) => e.caseId === agg.scope)),
       scope: agg.scope,
       caseAware,
       legacyExcluded: agg.descriptive.legacyExcluded,
@@ -67,5 +78,5 @@ export function MysteryDashboardApp() {
     () => undefined,
   );
 
-  return <MysteryDashboard records={records} live={live} now={now} agg={agg} scope={scope} onScope={setScope} caseAware={caseAware} />;
+  return <MysteryDashboard records={scoped} live={live} now={now} agg={agg} scope={scope} onScope={setScope} caseAware={caseAware} entries={entries} />;
 }

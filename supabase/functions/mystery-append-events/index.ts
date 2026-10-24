@@ -1,4 +1,4 @@
-// POST /functions/v1/mystery-append-events   (station account)   rules mystery-v3.1
+// POST /functions/v1/mystery-append-events   (station account)   rules mystery-v4 (v3.1 sessions keep v3.1 rules)
 // body: { sessionId, events: StampedEvent[] (≤ 500, strictly increasing seq), forecasts?: ForecastIn[] (≤ 50),
 //         recommendations?: RecommendationIn[] (≤ 50) }            body ≤ 256 KB
 // Send batches SEQUENTIALLY (one in flight). Resending a batch is safe: events with seq ≤ lastSeq that equal the
@@ -16,7 +16,9 @@ import { HttpError } from '../_shared/errors.ts';
 import { readJson, serve } from '../_shared/http.ts';
 import { loadEventsBySeq, loadMysterySession } from '../_shared/mystery-db.ts';
 import { applyBatch, progressFromRow, progressSummary, splitResend } from '../_shared/mystery-events.ts';
-import { requireData, requireEggRules, resolveCase, rulesContext } from '../_shared/mystery-rules.ts';
+import {
+  PLAYER_MAX_HP, requireData, requireEggRules, resolveCase, rulesContext, sessionRulesVersion,
+} from '../_shared/mystery-rules.ts';
 import { MAX_APPEND_BYTES, parseMysteryAppend } from '../_shared/mystery-validation.ts';
 
 const MAX_ATTEMPTS = 3;
@@ -53,9 +55,10 @@ serve('mystery-append-events', async (req, ctx) => {
       throw new HttpError('SESSION_CLOSED', `Session is ${row.status}`, { status: row.status, abandonedReason: row.abandoned_reason });
     }
 
-    // The SESSION's case decides which clue ids exist (validated against the version it was created with).
+    // The SESSION's case decides which clue ids exist (validated against the version it was created with); the SESSION's
+    // rules version decides the v4 checks (a v3.1 session stays v3.1 forever).
     const { caseDef } = resolveCase(row.case_id, row.case_version, data);
-    const next = applyBatch(progress, fresh, rulesContext(row.seed, caseDef, egg));
+    const next = applyBatch(progress, fresh, rulesContext(row.seed, caseDef, egg, PLAYER_MAX_HP, sessionRulesVersion(row.rules_version)));
     try {
       const out = await callRpc(admin, 'mystery_append_events', {
         p_session_id: row.id,

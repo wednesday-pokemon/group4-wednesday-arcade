@@ -111,11 +111,15 @@ export function parseMysterySelect(raw: unknown): MysterySelectBody {
  *   crackstone_risk  P(Joseph Crackstone can see / scan the player within the forecast horizon) — RULE-BASED estimate
  *                    from his public patrol route + sight / scan rules (modelLabel 'rule_based'); optional flat
  *                    features (e.g. horizon_s, area, mode) — none required.
+ * Final wave (2026-10-24, migration 20261025000100):
+ *   slurp_risk   P(Slurp finds the player within the horizon) — RULE-BASED; features e.g. {enemy:'slurp', zone?, cell?}
+ *   enemy_spawn  P(an INACTIVE enemy appears at one spawn) — the director's exact distribution; features {enemy, spawn, area}
  * Features stay ≤ 40 flat primitives (keys ≤ 40 chars, strings ≤ 40 chars); nothing is required, so a renamed feature
  * can never reject an upload.
  */
 export const FORECAST_TARGETS = [
   'detection_15s', 'extraction', 'eta_s', 'egg_site', 'clue_area', 'hyde_zone', 'hyde_spawn', 'crackstone_risk',
+  'slurp_risk', 'enemy_spawn',
 ] as const;
 export type ForecastTarget = (typeof FORECAST_TARGETS)[number];
 
@@ -281,11 +285,19 @@ export interface MysteryFinalizeBody {
 }
 
 const CLAIM_KEYS = ['outcome', 'dnfReason', 'verdict', 'accused', 'correct', 'cluesFound', 'eggTier', 'eggPoints', 'eggSecurity',
-  'activeTimeS', 'score', 'catches', 'hp', 'caseId', 'caseVersion', 'evidence', 'deductionCorrect'];
+  'activeTimeS', 'score', 'catches', 'hp', 'caseId', 'caseVersion', 'evidence', 'deductionCorrect',
+  // mystery-v4 (RunResult final fields)
+  'rulesVersion', 'hintsUsed', 'detections', 'hits', 'defeatedBy', 'scoreBreakdown'];
 /** Array-valued claim keys and their maximum length. */
 const CLAIM_LISTS: Record<string, number> = { cluesFound: 3, evidence: 5 };
+/** RunResult.scoreBreakdown parts (types.ts ScoreBreakdown): the only keys kept from a claimed breakdown. */
+export const SCORE_BREAKDOWN_KEYS = ['delivery', 'accusation', 'clues', 'noDetection', 'noHints', 'timeBonus', 'hintPenalty',
+  'hitPenalty', 'total'] as const;
 
-/** Keeps only known RunResult fields with primitive values (the claim is audit data, never trusted). */
+/**
+ * Keeps only known RunResult fields with primitive values (the claim is audit data, never trusted). A claimed
+ * scoreBreakdown is reduced to its known numeric parts (finite numbers only; anything else is dropped).
+ */
 export function sanitizeClientResult(raw: unknown): Record<string, unknown> | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== 'object' || Array.isArray(raw)) invalid('clientResult', 'clientResult must be an object');
@@ -295,6 +307,14 @@ export function sanitizeClientResult(raw: unknown): Record<string, unknown> | un
     if (v === undefined) continue;
     if (v === null || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.length <= 40)) out[k] = v;
     else if (k in CLAIM_LISTS && Array.isArray(v) && v.length <= CLAIM_LISTS[k]! && v.every((c) => typeof c === 'string' && c.length <= 40)) out[k] = v;
+    else if (k === 'scoreBreakdown' && typeof v === 'object' && !Array.isArray(v)) {
+      const b: Record<string, number> = {};
+      for (const part of SCORE_BREAKDOWN_KEYS) {
+        const x = (v as Json)[part];
+        if (typeof x === 'number' && Number.isFinite(x)) b[part] = x;
+      }
+      out[k] = b;
+    }
   }
   return out;
 }

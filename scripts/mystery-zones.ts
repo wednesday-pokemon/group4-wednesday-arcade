@@ -117,7 +117,7 @@ const MIN_SPAWN = DEFAULT_TUNING.hyde.minSpawnM;
 interface Replayed { session: string; caseId: string; p: number[]; truth: number; visible: boolean; occupancy: number[] }
 
 /** Replays the live zone tracker over one session's rows; yields one prediction per emerged row with its truth. */
-function* replay(session: string, rows: readonly Row[], params: ZoneFilterParams): Generator<Replayed> {
+function* replay(session: string, rows: readonly Row[], params: ZoneFilterParams, useLive = false): Generator<Replayed> {
   const caseId = rows[0]?.caseId ?? '';
   const w = worldFor(caseId);
   const model = modelFor(caseId, params);
@@ -133,8 +133,12 @@ function* replay(session: string, rows: readonly Row[], params: ZoneFilterParams
       hydePos: visible ? { x: num(r.hydeX), z: num(r.hydeZ) } : null, // the player sees it: public
     });
     if (!p) continue;
+    // final (mystery-gen-5): director worlds record the LIVE filter's odds (restarted at every respawn from the director's
+    // exact spawn distribution) — score exactly those; older rows replay the single-emergence tracker above
+    const live = useLive && r.hydeZoneP ? r.hydeZoneP.split(';').map(Number) : null;
+    const pz = live && live.length === p.length && live.every(Number.isFinite) ? live : p;
     const truth = zoneIndexAt(w.world.zones, num(r.hydeX), num(r.hydeZ)); // EVALUATION truth
-    yield { session, caseId, p, truth, visible, occupancy: model.occupancy };
+    yield { session, caseId, p: pz, truth, visible, occupancy: model.occupancy };
   }
 }
 
@@ -147,7 +151,7 @@ export function evaluateZones(sessions: ReadonlyMap<string, Row[]>, params: Zone
   const byCase = new Map<string, { all: Acc; occ: Acc }>();
   const blind: ZoneFilterParams = { ...params, beta: 1, chaseFarLikelihood: 1, alertFarLikelihood: 1 };
   for (const [session, rows] of sessions) {
-    for (const x of replay(session, rows, params)) {
+    for (const x of replay(session, rows, params, true)) {
       all.add(session, x.p, x.truth);
       occ.add(session, x.occupancy, x.truth);
       if (!x.visible) {
@@ -168,7 +172,7 @@ export function evaluateZones(sessions: ReadonlyMap<string, Row[]>, params: Zone
 }
 
 function* replayBlind(session: string, rows: readonly Row[], params: ZoneFilterParams): Generator<Replayed> {
-  for (const x of replay(session, rows.map((r) => ({ ...r, hydeVisible: '0' })), params)) yield x;
+  for (const x of replay(session, rows.map((r) => ({ ...r, hydeVisible: '0', hydeZoneP: '' })), params)) yield x;
 }
 
 /**

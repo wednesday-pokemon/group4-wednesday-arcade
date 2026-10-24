@@ -1,7 +1,7 @@
 // mystery-v3.1 LIVE board (Laptop 1) against the in-memory fake: anon REST + Realtime station status / results,
 // heartbeat liveness ("Signal lost" after 15 s), standings with every finisher above every DNF, operator-only
 // event-level analytics rebuilt with eventFromRow, nickname moderation via Realtime DELETE.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { StationId } from '../../src/game/index.ts';
 import { dashboard } from '../../src/mystery/analytics/index.ts';
 import { createLiveController } from '../../src/app/mystery/liveRun.ts';
@@ -13,6 +13,8 @@ import {
   ANON_KEY, FakeSupabaseServer, MYSTERY_DNF_CASE, MYSTERY_DNF_SEED, MYSTERY_FINISH_SEED, ManualTimers, OPERATOR, driveRun,
   openMysteryBoard, openMysteryStation, settle, stationCredentials,
 } from './fakeSupabase.ts';
+
+vi.setConfig({ testTimeout: 300_000 }); // final sim: bot runs at 60 Hz (fakeSupabase.ts MYSTERY_TEST_TIMEOUT_MS)
 
 async function kiosk(server: FakeSupabaseServer, stationId: StationId) {
   const page = openMysteryStation(server, stationId);
@@ -128,7 +130,7 @@ describe('mystery live board', () => {
     stop();
     a.controller.dispose();
     b.controller.dispose();
-  }, 120_000);
+  }, 300_000);
 
   it('anon / station REST can never select accused, evidence or client_claim; operators read them via mystery_result_audit', async () => {
     const server = new FakeSupabaseServer();
@@ -161,7 +163,7 @@ describe('mystery live board', () => {
     expect(audit[0]!.evidence).toHaveLength(3);
     expect(typeof audit[0]!.accused).toBe('string');
     k.controller.dispose();
-  }, 60_000);
+  }, 300_000);
 
   it('drops forged heartbeats (wrong shape / unknown station / free text) and never shows their text', async () => {
     const server = new FakeSupabaseServer();

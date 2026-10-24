@@ -25,16 +25,18 @@
 //     rule-based risk at your spot is high and your objective lies elsewhere → a nearby low-risk cell on the way.
 // Follow-up: each piece of advice is tracked → followed (true / false / null = no chance to) within a fixed window →
 // outcome (undetected for 15 s after, or detected). Reported as "after", never "because".
-import { CRACKSTONE_NAMES, enemyTargetable, hydeTargetable } from '../abilities.ts';
+import { CRACKSTONE_NAMES, enemyTargetable, hydeTargetable, SLURP_NAMES } from '../abilities.ts';
+import { cabinetDoor } from '../cabinet.ts';
+import { formatThingLine, THING } from '../data/thing.ts';
 import { forward, wrapAngle, yawTo } from '../geometry.ts';
 import { stanceNoiseRadius, stanceSpeed } from '../player.ts';
 import type { MysteryRun } from '../run.ts';
-import { ABILITY_KEY_LABEL, type AbilityDef, type AbilityEffect, type AbilityStatus, type HidingSpotDef, type HydeMode, type StampedEvent, type Vec2 } from '../types.ts';
+import { ABILITY_KEY_LABEL, type AbilityDef, type AbilityEffect, type AbilityStatus, type EnemyId, type HidingSpotDef, type HydeMode, type StampedEvent, type Vec2 } from '../types.ts';
 import { zoneIndexAt } from './hydeZones.ts';
 import { DETECTION_HORIZON_S, detectionTimes } from './labels.ts';
-import { crackstoneCentroid, crackstoneOf, type CrackstonePublic } from './publicState.ts';
+import { cabinetOf, cabinetsOf, crackstoneCentroid, crackstoneOf, hydeActiveOf, slurpOf, type CrackstonePublic, type SlurpPublic } from './publicState.ts';
 import { kindsOf, navDistance } from './state.ts';
-import type { Advice, AdviceAction, AdviceOption, AdviceRecord, AreaProb, CrackstoneForecast, TelemetrySample, ZoneProb } from './types.ts';
+import type { Advice, AdviceAction, AdviceOption, AdviceRecord, AreaProb, CrackstoneForecast, TelemetrySample, ThreatMap, ZoneProb } from './types.ts';
 import { publicView, topEggSite, type PublicView } from './view.ts';
 
 export const ENGINE_LABEL = 'rule-based decision engine' as const;
@@ -43,7 +45,8 @@ export const MAX_TEXT = 52;
 export const MAX_REASON = 48;
 
 const ACTION_ORDER: readonly AdviceAction[] = [
-  'leave_curse', 'take_cover', 'break_sight', 'evade', 'use_power', 'use_move', 'stop_sprinting', 'hide', 'stay_quiet', 'crouch', 'alt_route', 'deposit',
+  'exit_cabinet', 'close_cabinet', 'leave_curse', 'take_cover', 'break_sight', 'evade', 'use_power', 'use_move', 'hide_cabinet', 'stop_sprinting', 'hide',
+  'stay_quiet', 'crouch', 'alt_route', 'deposit',
   'retrieve_egg', 'avoid_area', 'inspect_clue', 'go_to_tower', 'get_egg', 'search_room', 'review_evidence',
 ];
 
@@ -96,7 +99,7 @@ interface Situation {
 function situation(run: MysteryRun, view: PublicView): Situation {
   const p = run.player;
   const h = run.hyde;
-  const emerged = view.emerged;
+  const emerged = view.emerged && hydeActiveOf(run); // a despawned Hyde (director) is not there
   const t = run.t;
   const d = emerged ? Math.hypot(h.x - p.x, h.z - p.z) : Infinity;
   const chased = emerged && h.mode === 'CHASE';
@@ -173,6 +176,7 @@ export function safeHidingSpot(run: MysteryRun): { spot: HidingSpotDef; distM: n
   const nav = run.playerNav();
   let best: { spot: HidingSpotDef; distM: number } | null = null;
   for (const s of run.map.hidingSpots) {
+    if (s.kind === 'cabinet') continue; // cabinets: hide_cabinet (E, door) — not a crouch-in spot
     const dMe = Math.hypot(s.x - p.x, s.z - p.z);
     if (dMe > 20) continue;
     const dH = Math.hypot(s.x - h.x, s.z - h.z);
@@ -351,11 +355,11 @@ function crackEffectRelevance(cs: CrackSituation | null, s: Situation, e: Abilit
 }
 
 /** The best relevant use of ONE of the current duo's abilities, or null when not ready / not relevant / not feasible. */
-export function abilityOption(s: Situation, key: 'F' | 'Q', def: AbilityDef, status: AbilityStatus, cs: CrackSituation | null = null): AdviceOption | null {
+export function abilityOption(s: Situation, key: 'F' | 'Q', def: AbilityDef, status: AbilityStatus, cs: CrackSituation | null = null, ss: SlurpSituation | null = null): AdviceOption | null {
   if (!status.ready) return null;
   const run = s.run;
   const keyLabel = ABILITY_KEY_LABEL[key];
-  let best: (Relevance & { enemy?: 'crackstone' }) | null = null;
+  let best: (Relevance & { enemy?: 'crackstone' | 'slurp' }) | null = null;
   const effects = def.effects;
   for (let i = 0; i < effects.length; i++) {
     const e = effects[i];
@@ -373,19 +377,27 @@ export function abilityOption(s: Situation, key: 'F' | 'Q', def: AbilityDef, sta
         r = effectRelevance(s, stun, keyLabel);
         const rc = crackEffectRelevance(cs, s, stun, keyLabel);
         if (rc && (!r || rc.score > r.score)) r = rc;
+        const rs = slurpEffectRelevance(ss, s, stun, keyLabel);
+        if (rs && (!r || rs.score > r.score)) r = rs;
       }
       // not in reach with a next effect: the next effect is the one that applies (evaluated next iteration)
     } else {
       r = effectRelevance(s, e, keyLabel);
       const rc = crackEffectRelevance(cs, s, e, keyLabel);
       if (rc && (!r || rc.score > r.score)) r = rc;
+      const rs = slurpEffectRelevance(ss, s, e, keyLabel);
+      if (rs && (!r || rs.score > r.score)) r = rs;
     }
     if (r && (!best || r.score > best.score)) best = r;
   }
   if (!best) return null;
   const heals = def.effects.some((e) => (e.healHp ?? 0) > 0) && run.player.hp < run.player.maxHp;
   const purpose = heals && `${best.purpose} and heal`.length + def.name.length + 13 <= MAX_TEXT ? `${best.purpose} and heal` : best.purpose;
-  return opt(key === 'F' ? 'use_power' : 'use_move', `Use ${def.name} (${keyLabel}) to ${purpose}.`, best.reason, best.score, {
+  // UX_FINAL §8: the Pokémon's block is "your Pokémon's defensive move" (the move name goes into the why line)
+  const defensive = key === 'Q' && /^block /.test(best.purpose);
+  const text = defensive ? rx('defensive', "Use your Pokémon's defensive move.") : `Use ${def.name} (${keyLabel}) to ${purpose}.`;
+  const reason = defensive ? `${def.name} (${keyLabel}): ${best.reason}` : best.reason;
+  return opt(key === 'F' ? 'use_power' : 'use_move', text, reason, best.score, {
     ability: { key, id: def.id, name: def.name, kinds: kindsOf(def) }, ...(best.enemy ? { enemy: best.enemy } : {}),
   });
 }
@@ -556,6 +568,7 @@ function crackHidingSpot(run: MysteryRun, cs: CrackSituation): { spot: HidingSpo
   const nav = run.playerNav();
   let best: { spot: HidingSpotDef; distM: number } | null = null;
   for (const sp of run.map.hidingSpots) {
+    if (sp.kind === 'cabinet') continue;
     const dMe = Math.hypot(sp.x - p.x, sp.z - p.z);
     if (dMe > 14) continue;
     const dC = Math.hypot(sp.x - c.x, sp.z - c.z);
@@ -658,6 +671,209 @@ function crackOptions(run: MysteryRun, cs: CrackSituation, crack: CrackstoneFore
   return out;
 }
 
+// ----------------------------------------------------------------------------------------------------- final: Slurp + cabinets
+// FINAL_CONTRACT §5 / §6 / §8 and UX_FINAL §8 (Thing's FREE advice): hide in a cabinet before an enemy arrives (never
+// while one can see you — that would be a witnessed hide), close the door, stay quiet inside while it is near, step out
+// when it is clear (or at once when you were seen hiding), Slurp-specific escapes, and the duo's defensive move against
+// his telegraphed lunge. Slurp's position only per R4 (publicState.slurpOf).
+
+/** Slurp at this instant, as the player may know him. */
+export interface SlurpSituation {
+  pub: SlurpPublic;
+  pose: { x: number; z: number; yaw: number } | null;
+  /** Distance when his position is public, else Infinity. */
+  d: number;
+  chased: boolean;
+  /** INVESTIGATE / SEARCH shown on the HUD ("Heard something" / "Searching"). */
+  alert: boolean;
+  seesYou: boolean;
+  attacking: boolean;
+}
+
+export function slurpSituation(run: MysteryRun): SlurpSituation | null {
+  const pub = slurpOf(run, true);
+  if (!pub || !pub.active) return null;
+  const p = run.player;
+  const pose = pub.pose;
+  return {
+    pub, pose, d: pose ? Math.hypot(pose.x - p.x, pose.z - p.z) : Infinity,
+    chased: pub.mode === 'CHASE' || pub.mode === 'ATTACK', alert: pub.mode === 'INVESTIGATE' || pub.mode === 'SEARCH',
+    seesYou: pub.canSeePlayer, attacking: pub.attacking || pub.mode === 'ATTACK',
+  };
+}
+
+/** The designer's free prescriptive line (data/thing.ts THING.prescriptive), else the UX_FINAL §8 fallback. */
+function rx(key: string, fallback: string, vars: Record<string, string> = {}): string {
+  const l = (THING as unknown as { prescriptive?: Record<string, { text?: string }> }).prescriptive?.[key]?.text;
+  const s = l ? formatThingLine(l, vars) : fallback;
+  return /\{\w+\}/.test(s) || s.length > MAX_TEXT ? fallback : s;
+}
+
+const WHO_ADV: Readonly<Record<EnemyId, string>> = { hyde: 'The Hyde', crackstone: 'Crackstone', slurp: 'Slurp' };
+const WHO_OBJ: Readonly<Record<EnemyId, string>> = { hyde: 'the Hyde', crackstone: 'Crackstone', slurp: 'Slurp' };
+
+/** Is any enemy able to see the player right now (an entry / door close would be WITNESSED)? */
+function anyoneSees(run: MysteryRun, cs: CrackSituation | null, ss: SlurpSituation | null): boolean {
+  return (hydeActiveOf(run) && run.hyde.canSeePlayer) || (cs?.seesYou ?? false) || (ss?.seesYou ?? false);
+}
+
+/** The enemy that threatens the player most right now (engaged > alerted near), with its public position if known. */
+function mainThreat(s: Situation, cs: CrackSituation | null, ss: SlurpSituation | null): { enemy: EnemyId; at: Vec2 | null; engaged: boolean } | null {
+  if (s.chased) return { enemy: 'hyde', at: s.h, engaged: true };
+  if (ss?.chased) return { enemy: 'slurp', at: ss.pose, engaged: true };
+  if (cs?.chased) return { enemy: 'crackstone', at: cs.pose, engaged: true };
+  if (s.alert && s.d < 20) return { enemy: 'hyde', at: s.h, engaged: false };
+  if (ss?.alert) return { enemy: 'slurp', at: ss.pose, engaged: false };
+  if (s.view.visible && s.d < 14 && (s.mode === 'PATROL' || s.mode === 'COOLDOWN')) return { enemy: 'hyde', at: s.h, engaged: false };
+  if (ss?.pose && ss.d < 14) return { enemy: 'slurp', at: ss.pose, engaged: false };
+  return null;
+}
+
+/** Nearest reachable cabinet (door within 14 m, path ≤ 18 m) not toward the threat and not right beside it. */
+export function safeCabinet(run: MysteryRun, threatAt: Vec2 | null): { spot: HidingSpotDef; door: Vec2; distM: number } | null {
+  const p = run.player;
+  const nav = run.playerNav();
+  let best: { spot: HidingSpotDef; door: Vec2; distM: number } | null = null;
+  for (const c of cabinetsOf(run)) {
+    const door = cabinetDoor(c);
+    const dMe = Math.hypot(door.x - p.x, door.z - p.z);
+    if (dMe > 14 || (best && dMe >= best.distM)) continue;
+    if (threatAt) {
+      const dT = Math.hypot(door.x - threatAt.x, door.z - threatAt.z);
+      if (dT < 6 || dT < dMe + 1 || passDistance(p, door, threatAt) < 4) continue;
+    }
+    const path = nav.findPath(p, door);
+    if (!path) continue;
+    const end = path.length ? path[path.length - 1] : p;
+    if (Math.hypot(end.x - door.x, end.z - door.z) > run.tuning.cabinet.useM + 0.5) continue;
+    const len = pathLen(p, path);
+    if (len > 18) continue;
+    best = { spot: c, door, distM: len };
+  }
+  return best;
+}
+
+interface CabinetViewLike {
+  phase?: 'entering' | 'open' | 'closed' | 'exiting';
+  /** The door is closing right now (E was pressed; the phase turns 'closed' when it is shut). */
+  closing?: boolean;
+  witnessedBy: EnemyId | null; creakInS: number | null; enemyOutside: { enemy: EnemyId; visible: boolean } | null;
+}
+
+/**
+ * The door state Thing must advise on: the sim's cabinetStatus() (phase + closing) when available — a door that is
+ * already closing counts as shut (never "Close the cabinet." twice) — else the player's cabinet phase.
+ */
+export function cabinetDoorPhase(run: MysteryRun): 'entering' | 'open' | 'closing' | 'closed' | 'exiting' | null {
+  const cab = cabinetOf(run);
+  if (!cab) return null;
+  const v = cabinetView(run);
+  const phase = v?.phase ?? cab.phase;
+  if (phase === 'open' && v?.closing) return 'closing';
+  return phase;
+}
+
+function cabinetView(run: MysteryRun): CabinetViewLike | null {
+  const f = (run as unknown as { cabinetStatus?: () => CabinetViewLike | null }).cabinetStatus;
+  return typeof f === 'function' ? f.call(run) : null;
+}
+
+/** Options while the player is INSIDE a cabinet (the only advice that applies there). */
+function cabinetOptions(run: MysteryRun, s: Situation, cs: CrackSituation | null, ss: SlurpSituation | null): AdviceOption[] {
+  const door = cabinetDoorPhase(run);
+  if (!door) return [];
+  const out: AdviceOption[] = [];
+  const view = cabinetView(run);
+  const threat = mainThreat(s, cs, ss);
+  const outside = view?.enemyOutside ?? null;
+  const near = outside?.enemy ?? threat?.enemy ?? null;
+  if (view?.witnessedBy) {
+    out.push(opt('exit_cabinet', `${WHO_ADV[view.witnessedBy]} saw you hide! Get out now.`, 'It is coming to pull you out. E to exit', 96, { enemy: view.witnessedBy }));
+    return out;
+  }
+  if (door === 'open') {
+    if (anyoneSees(run, cs, ss)) {
+      out.push(opt('exit_cabinet', 'It can see you. Step out and run.', 'Closing now would show where you hid', 90));
+    } else {
+      out.push(opt('close_cabinet', rx('closeCabinet', 'Close the cabinet. Press E.'), near ? `${WHO_ADV[near]} is near. A shut door hides you` : 'A shut door hides you from every enemy', near ? 92 : 64,
+        near ? { enemy: near } : {}));
+    }
+    return out;
+  }
+  if (door === 'closed' || door === 'closing') {
+    const knownNear = (s.view.visible && s.d < 12) || (ss?.pose !== null && ss !== null && ss.d < 12) || (cs?.pose !== null && cs !== null && cs.d < 12);
+    if (near || knownNear) {
+      const who = near ?? (s.view.visible && s.d < 12 ? 'hyde' : ss?.pose && ss.d < 12 ? 'slurp' : 'crackstone');
+      out.push(opt('stay_quiet', outside ? rx('stayQuiet', `Stay quiet. Let ${WHO_OBJ[who]} walk past.`) : `Stay quiet. Let ${WHO_OBJ[who]} walk past.`, 'A shut door hides you from sight', 88, { enemy: who }));
+    } else if (door === 'closed') {
+      const creakSoon = view?.creakInS !== null && view?.creakInS !== undefined && view.creakInS <= 5;
+      out.push(opt('exit_cabinet', creakSoon ? rx('creak', 'The door creaks. Move out soon.') : rx('exitCabinet', "It's clear. Step out and keep searching."),
+        creakSoon ? 'The door will creak soon' : 'No enemy is hunting you now', creakSoon ? 70 : 58));
+    }
+  }
+  return out;
+}
+
+/** Hide in a cabinet before the threat arrives (never while any enemy can see you). */
+function hideCabinetOption(run: MysteryRun, s: Situation, cs: CrackSituation | null, ss: SlurpSituation | null, fragile: number): AdviceOption | null {
+  if (cabinetsOf(run).length === 0 || anyoneSees(run, cs, ss)) return null;
+  const threat = mainThreat(s, cs, ss);
+  if (!threat) return null;
+  if (threat.enemy === 'hyde' && s.chased && s.d <= 4) return null; // too close: a cabinet will not save you now
+  const cab = safeCabinet(run, threat.at);
+  if (!cab) return null;
+  const sprinting = run.player.stance === 'sprint';
+  const line = threat.enemy === 'hyde' ? rx('hideHyde', 'Hide. The Hyde is approaching.') : threat.enemy === 'slurp' ? rx('hideSlurp', 'Hide. Slurp is approaching.')
+    : rx('hideCrackstone', 'Hide. Crackstone is approaching.');
+  return opt('hide_cabinet', line,
+    `Cabinet ${m(cab.distM)} ${dirWord(run, cab.door.x, cab.door.z)}${sprinting ? '. Walk in quietly' : '. Shut the door inside'}`,
+    (threat.engaged ? 87 : 83) + fragile, { target: cab.door, targetLabel: 'Cabinet', ...(threat.enemy !== 'hyde' ? { enemy: threat.enemy } : {}) });
+}
+
+/** Slurp escapes while his position is public (chase / attack / in sight). */
+function slurpOptions(run: MysteryRun, ss: SlurpSituation): AdviceOption[] {
+  const out: AdviceOption[] = [];
+  const p = run.player;
+  const enemy = 'slurp' as const;
+  if (ss.chased && ss.pose && !p.hidden) {
+    const away = awayFrom(run, ss.pose);
+    if (away) out.push(opt('evade', `Sprint ${dirWord(run, away.x, away.z)}, away from Slurp.`, 'He is slower than your sprint', 89, { target: away, targetLabel: 'Escape', enemy }));
+    const csLike = { pose: ss.pose, d: ss.d } as Pick<CrackSituation, 'pose' | 'd'>;
+    const bp = breakSightPoint(run, csLike as CrackSituation);
+    if (bp) out.push(opt('break_sight', `Break his line of sight ${dirWord(run, bp.x, bp.z)}.`, `Slurp ${m(ss.d)} away hunts by sight`, 86, { target: bp, targetLabel: 'Out of his sight', enemy }));
+  }
+  if (!ss.chased && p.stance === 'sprint' && (ss.alert || (ss.pose && ss.d < 20))) {
+    out.push(opt('stop_sprinting', 'Stop sprinting. Slurp hears loud steps.', ss.alert ? 'He is checking a noise' : `Slurp ${m(ss.d)} away`, 80, { enemy }));
+  }
+  return out;
+}
+
+/** Slurp relevance of one of the duo's effects (stun / slow / distract he can be hit by now; block vs his lunge). */
+function slurpEffectRelevance(ss: SlurpSituation | null, s: Situation, e: AbilityEffect, keyLabel: string): (Relevance & { enemy: 'slurp' }) | null {
+  if (!ss || !ss.pub.active) return null;
+  const run = s.run;
+  const t = run.t;
+  const threat = ss.chased || ss.attacking || ss.seesYou;
+  switch (e.kind) {
+    case 'stun':
+    case 'slow':
+    case 'distract': {
+      if (!threat || !ss.pose || ss.pub.stunned) return null;
+      if (!enemyTargetable(run, { active: ss.pub.active, x: ss.pose.x, z: ss.pose.z }, SLURP_NAMES, e).ok) return null;
+      const purpose = e.kind === 'stun' ? 'stop Slurp' : e.kind === 'slow' ? 'slow Slurp' : 'distract Slurp';
+      return { score: ss.attacking ? 97 : ss.chased ? 94 : 80, purpose, reason: ss.attacking ? 'It cancels his lunge' : `He is ${m(ss.d)} away and ${keyLabel} is ready`, enemy: 'slurp' };
+    }
+    case 'block_grab':
+      if ((ss.attacking || (ss.chased && ss.d < 5)) && t >= run.fx.blockGrabUntil) return { score: ss.attacking ? 95 : 88, purpose: 'block the attack', reason: ss.attacking ? 'Slurp is lunging at you' : `Slurp ${m(ss.d)} away — a lunge is close`, enemy: 'slurp' };
+      return null;
+    case 'speed_boost':
+      if (ss.chased && t >= run.fx.speedBoostUntil) return { score: 84, purpose: 'outrun Slurp', reason: `He is chasing you, ${m(ss.d)} away`, enemy: 'slurp' };
+      return null;
+    default:
+      return null;
+  }
+}
+
 // ----------------------------------------------------------------------------------------------------- search targets
 
 interface SearchPick { area: AreaProb; p: number; target: Vec2; label: string; clueId: string | null; inside: boolean; siteP: number }
@@ -730,7 +946,26 @@ function pathLen(from: Vec2, path: readonly Vec2[]): number {
  * Zone-risk detour (Hyde NOT visible): when the direct nav route to `goal` crosses a zone other than the player's own
  * and the goal's whose probability is ≥ 0.45, find a route via a low-risk zone (p < 0.15) that avoids it.
  */
-function zoneDetour(run: MysteryRun, goal: Vec2, view: PublicView, zones: readonly ZoneProb[]): AdviceOption | null {
+/** Per-zone danger for routing: p (0..1), its zone name and which enemy it is about (Hyde zones or the threat map's max). */
+export interface ZoneRisk { p: number; name: string; enemy: EnemyId | null }
+
+function hydeRisk(zones: readonly ZoneProb[]): ZoneRisk[] {
+  return zones.map((z) => ({ p: z.p, name: z.name, enemy: 'hyde' as const }));
+}
+
+/** The threat map's max over ACTIVE enemies per zone (null when no enemy is active). */
+function threatRisk(threat: ThreatMap | null | undefined, n: number): ZoneRisk[] | null {
+  if (!threat || threat.zones.length !== n || !Object.values(threat.enemies).some((l) => l?.state === 'active')) return null;
+  return threat.zones.map((z) => ({ p: z.max, name: z.name, enemy: z.top }));
+}
+
+function riskWhy(r: ZoneRisk): string {
+  if (r.enemy === 'crackstone') return oddsCopy(r.p, (x) => `Crackstone watches the ${r.name} (${x})`, `Crackstone is watching the ${r.name}`);
+  const who = r.enemy === 'slurp' ? 'Slurp' : 'Hyde';
+  return oddsCopy(r.p, (x) => `${who} likely in the ${r.name} (${x})`, `${who} was just seen in the ${r.name}`);
+}
+
+function zoneDetour(run: MysteryRun, goal: Vec2, view: PublicView, zones: readonly ZoneRisk[]): AdviceOption | null {
   if (!view.world) return null;
   const nav = run.playerNav();
   const p = { x: run.player.x, z: run.player.z };
@@ -757,7 +992,9 @@ function zoneDetour(run: MysteryRun, goal: Vec2, view: PublicView, zones: readon
     if (!best || len < best.len) best = { via: v, zone: i, len };
   }
   if (!best) return null;
-  return opt('alt_route', `Go around via the ${zones[best.zone].name}.`, oddsCopy(zones[risky].p, (x) => `Hyde likely in the ${zones[risky].name} (${x})`, `Hyde was just seen in the ${zones[risky].name}`), 68, { target: best.via, targetLabel: zones[best.zone].name });
+  const who = zones[risky].enemy;
+  return opt('alt_route', rx('saferPathArea', `Take the safer path via the ${zones[best.zone].name}.`, { area: zones[best.zone].name }), riskWhy(zones[risky]), 68,
+    { target: best.via, targetLabel: zones[best.zone].name, ...(who && who !== 'hyde' ? { enemy: who } : {}) });
 }
 
 // ----------------------------------------------------------------------------------------------------- engine
@@ -769,7 +1006,7 @@ export class PrescriptiveService {
    * Every feasible option, best first. Empty when the run is not in play / accusing. `zones` = the session's Hyde-zone
    * estimate (LiveForecasts.hyde.zones) when available.
    */
-  candidates(run: MysteryRun, zones: ZoneProb[] | null = null, crack: CrackstoneForecast | null = null): AdviceOption[] {
+  candidates(run: MysteryRun, zones: ZoneProb[] | null = null, crack: CrackstoneForecast | null = null, threat: ThreatMap | null = null): AdviceOption[] {
     if (run.status === 'accusing') {
       return [opt('review_evidence', 'Review the evidence on Tab.', 'Weigh what each clue you found says', 50)];
     }
@@ -782,14 +1019,21 @@ export class PrescriptiveService {
     const tol = run.tuning.player.interactRangeM + 0.7;
     const fragile = p.catches >= 1 || p.hp <= 40 ? 4 : 0; // one more grab hurts: safety a little higher
 
-    // ---- Joseph Crackstone (public state only)
+    // ---- Joseph Crackstone + Slurp (public state only)
     const cs = crackSituation(run, crack);
+    const ss = slurpSituation(run);
+    // ---- inside a cabinet: only the door advice applies (no movement, no search)
+    if (cabinetOf(run)) {
+      const inside = cabinetOptions(run, s, cs, ss);
+      return inside.sort((a, b) => b.score - a.score || ACTION_ORDER.indexOf(a.action) - ACTION_ORDER.indexOf(b.action));
+    }
     // ---- the duo's own abilities (by effect kind)
     if (cs && cs.curseExposed) cs.curseEscape = curseExit(run, cs) !== null;
-    const f = abilityOption(s, 'F', run.power.def, run.powerStatus(), cs);
+    const f = abilityOption(s, 'F', run.power.def, run.powerStatus(), cs, ss);
     if (f) out.push(f);
-    const q = abilityOption(s, 'Q', run.move.def, run.moveStatus(), cs);
+    const q = abilityOption(s, 'Q', run.move.def, run.moveStatus(), cs, ss);
     if (q) out.push(q);
+    if (ss) out.push(...slurpOptions(run, ss));
 
     // ---- immediate safety (Hyde whereabouts public: chase / HUD alert / in sight)
     if (s.chased) {
@@ -803,6 +1047,8 @@ export class PrescriptiveService {
       if (s.known && d <= sprintR * 1.6) out.push(opt('stop_sprinting', 'Stop sprinting. Walk or crouch.', `Sprinting is heard ${m(sprintR)} off`, 88 + fragile));
       else if (!s.known && ownRisk >= 0.3) out.push(opt('stop_sprinting', 'Walk slowly. Your noise is rising.', zoneWhy(ownRisk), 76 + fragile));
     }
+    const hc = !p.hidden ? hideCabinetOption(run, s, cs, ss, fragile) : null;
+    if (hc) out.push(hc);
     if (p.hidden) {
       if (s.alert || (s.known && d < 12 && !s.chased)) out.push(opt('stay_quiet', 'Stay hidden and keep still.', `Hyde ${MODE_WORD[s.mode]} ${m(d)} away`, 84));
     } else if (s.emerged) {
@@ -879,8 +1125,10 @@ export class PrescriptiveService {
       if (s.known && d < 25) {
         const alt = this.alternativeRoute(run, goal, s);
         if (alt) out.push(alt);
-      } else if (!s.known && s.emerged && view.zones) {
-        const alt = zoneDetour(run, goal, view, view.zones);
+      } else if (!(ss?.chased) && !(cs?.chased)) {
+        const n = view.world?.zones.length ?? 0;
+        const risk = threatRisk(threat, n) ?? (!s.known && s.emerged && view.zones ? hydeRisk(view.zones) : null);
+        const alt = risk ? zoneDetour(run, goal, view, risk) : null;
         if (alt) out.push(alt);
       }
     }
@@ -891,8 +1139,8 @@ export class PrescriptiveService {
   }
 
   /** One concise, feasible suggestion (+ up to two alternatives), or null when nothing applies (run not in play). */
-  recommend(run: MysteryRun, zones: ZoneProb[] | null = null, crack: CrackstoneForecast | null = null): Advice | null {
-    const all = this.candidates(run, zones, crack);
+  recommend(run: MysteryRun, zones: ZoneProb[] | null = null, crack: CrackstoneForecast | null = null, threat: ThreatMap | null = null): Advice | null {
+    const all = this.candidates(run, zones, crack, threat);
     if (all.length === 0) return null;
     const [best, ...rest] = all;
     const alternatives: AdviceOption[] = [];
@@ -943,7 +1191,7 @@ export class PrescriptiveService {
 export const FOLLOW_WINDOW_S: Record<AdviceAction, number> = {
   evade: 4, hide: 10, crouch: 5, stop_sprinting: 3, alt_route: 10, use_power: 8, use_move: 8, inspect_clue: 30,
   search_room: 45, get_egg: 30, retrieve_egg: 30, go_to_tower: 10, deposit: 10, stay_quiet: 8, review_evidence: 0,
-  take_cover: 4, leave_curse: 3, break_sight: 6, avoid_area: 10,
+  take_cover: 4, leave_curse: 3, break_sight: 6, avoid_area: 10, hide_cabinet: 10, close_cabinet: 4, exit_cabinet: 8,
 };
 
 export interface FollowView {
@@ -1030,6 +1278,15 @@ export function evaluateFollow(rec: AdviceRecord, v: FollowView): boolean | null
     case 'avoid_area':
       done = closerTo(a.target, 3);
       break;
+    case 'hide_cabinet':
+      done = ev.some((e) => e.type === 'cabinet' && e.action === 'enter');
+      break;
+    case 'close_cabinet':
+      done = ev.some((e) => e.type === 'cabinet' && e.action === 'close');
+      break;
+    case 'exit_cabinet':
+      done = ev.some((e) => e.type === 'cabinet' && (e.action === 'exit' || e.action === 'open' || e.action === 'pulled_out'));
+      break;
     case 'review_evidence':
       return null;
   }
@@ -1045,8 +1302,13 @@ export function crackDetectionTimes(events: readonly StampedEvent[]): number[] {
     || (e.type === 'curse' && e.phase === 'hit')).map((e) => e.t);
 }
 
+/** Slurp "detections" for the follow-up of his advice: his hunt starts (enemy_detected) + his hits. */
+export function slurpDetectionTimes(events: readonly StampedEvent[]): number[] {
+  return events.filter((e) => (e.type === 'enemy_detected' || e.type === 'enemy_hit') && e.enemy === 'slurp').map((e) => e.t);
+}
+
 export function evaluateOutcome(rec: AdviceRecord, v: FollowView): AdviceRecord['outcome'] {
-  const det = rec.advice.enemy === 'crackstone' ? crackDetectionTimes(v.events) : detectionTimes(v.events);
+  const det = rec.advice.enemy === 'crackstone' ? crackDetectionTimes(v.events) : rec.advice.enemy === 'slurp' ? slurpDetectionTimes(v.events) : detectionTimes(v.events);
   if (det.some((x) => x > rec.t && x <= rec.t + DETECTION_HORIZON_S && x <= v.nowT)) return 'detected_15s';
   if (v.nowT >= rec.t + DETECTION_HORIZON_S) return 'undetected_15s';
   return null;

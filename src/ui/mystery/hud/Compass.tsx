@@ -5,7 +5,7 @@
 import { useEffect, useRef } from 'react';
 import { CompassClamp, layoutCompass, type CompassMarker } from '../../../app/mystery/hud/compass.ts';
 import type { NavFeed } from '../../../app/mystery/hud/navFeed.ts';
-import { MAP_PALETTE, MAP_PALETTE_HC, claw, diamond, drawSprite, eggShape, hat, textSprite, textWidthFor, tower } from '../map/mapRender.ts';
+import { MAP_PALETTE, MAP_PALETTE_HC, claw, diamond, drawSprite, eggShape, hat, slurpGlyph, textSprite, textWidthFor, tower } from '../map/mapRender.ts';
 
 /** Low graphics: the strip redraws at this rate (CPU). */
 export const LOW_GRAPHICS_FPS = 15;
@@ -163,7 +163,7 @@ function drawMarker(ctx: CanvasRenderingContext2D, m: CompassMarker, y: number, 
     return;
   }
   const color = m.lantern ? pal.lantern : m.kind === 'area' ? pal.violet : m.kind === 'egg' ? pal.ivory : m.kind === 'tower' ? pal.text2
-    : m.kind.startsWith('hyde') ? pal.hyde : m.kind.startsWith('crack') ? pal.crack : pal.text;
+    : m.kind.startsWith('hyde') ? pal.hyde : m.kind.startsWith('crack') ? pal.crack : m.kind.startsWith('slurp') ? pal.slurp : pal.text;
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
   ctx.lineWidth = 1.5;
@@ -205,6 +205,12 @@ function drawMarker(ctx: CanvasRenderingContext2D, m: CompassMarker, y: number, 
       break;
     case 'crack_heard':
       hat(ctx, m.x, y, s * 1.15, false, pal.crack);
+      break;
+    case 'slurp_seen':
+      slurpGlyph(ctx, m.x, y, s * 1.1, true, pal.slurp);
+      break;
+    case 'slurp_heard':
+      slurpGlyph(ctx, m.x, y, s * 1.1, false, pal.slurp);
       break;
     default:
       break;

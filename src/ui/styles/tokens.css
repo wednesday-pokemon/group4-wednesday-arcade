@@ -57,6 +57,14 @@ html { font-size: clamp(15px, min(1.1713vw, 2.0833vh), 22.5px); }
   --c-crack: #a8e063;
   --c-crack-text: #c4ef8a;
   --c-crack-soft: rgba(168, 224, 99, 0.14);
+  /* Final (UX_FINAL §0): Slurp = orchid (7.0:1 / 10.9:1 on --c-bg); Principal Weems = pale ice, only inside her frame. */
+  --c-slurp: #d77be0;
+  --c-slurp-text: #eeb0f3;
+  --c-slurp-soft: rgba(215, 123, 224, 0.14);
+  --c-weems: #cfe0ff;
+  --c-weems-text: #e4edff;
+  --c-weems-glow: rgba(150, 190, 255, 0.45);
+  --font-weems: 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif;
   --c-map-void: #070a14;
   --c-map-ground: #121733;
   --c-map-room: #1b2046;
@@ -139,6 +147,7 @@ html { font-size: clamp(15px, min(1.1713vw, 2.0833vh), 22.5px); }
   --c-success: #8cf0b8; --c-danger: #ff9a9a;
   --c-predict: #8fe3ff; --c-layer-pred: #8fe3ff; --c-hyde-text: #ffb4b4;
   --c-crack: #c8ff80; --c-crack-text: #e0ffb8;
+  --c-slurp: #f0a8f5; --c-slurp-text: #ffd6ff; --c-weems: #fff; --c-weems-text: #fff;
   --shadow-1: none; --shadow-2: none; --glow-accent: none; --glow-lantern: none; --glow-rare: none; --glow-legendary: none;
 }
 .high-contrast .panel, .high-contrast .card { border-width: 2px; }

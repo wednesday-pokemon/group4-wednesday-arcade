@@ -1,4 +1,4 @@
-// LIVE (verified) services for "The Silent Evidence" (mystery-v3.1): station kiosk and Laptop 1 board.
+// LIVE (verified) services for "Nevermore: Deadly Secrets" (mystery-v4; v3.1 rows stay readable): station kiosk, Laptop 1 board, home leaderboard.
 // Anon/publishable key only (client.ts refuses privileged keys); station identity comes from the signed-in account's
 // JWT. Loaded with a dynamic import so supabase-js never reaches the LOCAL DEMO bundle.
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -13,6 +13,7 @@ import { createMysteryBoardFeed, type MysteryBoardFeed } from './mysteryDashboar
 import { createMysteryStationWatch, type MysteryResetCheck, type MysteryStationWatch } from './mysteryStationWatch.ts';
 import type { MysteryAdminResetResponse } from './mysteryWire.ts';
 import { browserOnline, type OnlineSource, type RealtimeHost } from './realtime.ts';
+import { createTop5Feed, type Top5Feed } from './mysteryLeaderboard.ts';
 
 /** Same bounds as admin-reset's `reason` (sanitized note, audit log). */
 const ADMIN_REASON = { min: 3, max: 200 } as const;
@@ -36,6 +37,8 @@ export interface MysteryStationServices {
   api: MysteryStationApi;
   watch: MysteryStationWatch;
   online: OnlineSource;
+  /** Home-page leaderboard (mystery_top5 + full board + defeat log, Realtime refresh) — FINAL_CONTRACT §10. */
+  leaderboard: Top5Feed;
 }
 
 export interface MysteryBoardServices {
@@ -44,6 +47,8 @@ export interface MysteryBoardServices {
   /** admin-reset with scope 'all' (the mystery session AND any v2.5 race of that station), operator only. */
   operator: OperatorConsole;
   feed: MysteryBoardFeed;
+  /** The v4 top 5 / full board / defeat log (the dashboard laptop may show it too). */
+  leaderboard: Top5Feed;
   /** The same auth + operator shaped for the shared OperatorDrawer (its other members refuse). */
   drawerServices: AppServices;
 }
@@ -80,7 +85,8 @@ export function buildMysteryStationServices(deps: MysteryLiveDeps & { stationId:
   const watch = createMysteryStationWatch({
     stationId, rest: deps.client, realtime: deps.realtime ?? deps.client, confirmReset, online, retryDelaysMs: deps.retryDelaysMs,
   });
-  return { mode: 'live', stationId, auth, api, watch, online };
+  const leaderboard = createTop5Feed({ rest: deps.client, realtime: deps.realtime ?? deps.client, online, retryDelaysMs: deps.retryDelaysMs, full: true });
+  return { mode: 'live', stationId, auth, api, watch, online, leaderboard };
 }
 
 export function operatorConsole(auth: Pick<LiveAuth, 'requireOperator'>, call: MysteryCaller): OperatorConsole {
@@ -130,7 +136,8 @@ export function buildMysteryBoardServices(deps: MysteryLiveDeps & { pollMs?: num
     operator,
     subscribeStation: () => () => undefined,
   };
-  return { mode: 'live', auth, operator, feed, drawerServices };
+  const leaderboard = createTop5Feed({ rest: deps.client, realtime: deps.realtime ?? deps.client, online: deps.online, retryDelaysMs: deps.retryDelaysMs, full: true });
+  return { mode: 'live', auth, operator, feed, leaderboard, drawerServices };
 }
 
 export async function createMysteryStationServices(stationId: StationId): Promise<MysteryStationServices> {

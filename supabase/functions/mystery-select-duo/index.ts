@@ -1,4 +1,4 @@
-// POST /functions/v1/mystery-select-duo   (station account)   rules mystery-v3.1
+// POST /functions/v1/mystery-select-duo   (station account)   rules mystery-v4 (v3.1 sessions keep v3.1 rules)
 // body: { sessionId, characterId, pokemonId }
 // 200 -> MysterySessionEnvelope (status 'playing'); repeating the SAME choice replays (x-idempotent-replay: true).
 // 422 DUO_NOT_OFFERED  the pair is not one of the session's three stored cards

@@ -3,8 +3,10 @@
 // missing each panel says "Analytics unavailable for this run". Clue counts are out of THIS case's clues; the
 // diagnostic panel leads with why the case was not solved (incorrect deduction, missed clues by case-file title) and
 // then the stealth causes. Shown after the accusation only; nothing here names a suspect.
+// Final wave (UX_FINAL §6): the descriptive tiles are TIME · CLUES · SEEN · HITS · HINTS · EGG — Seen / Hits / Hints are
+// the run's RULE-event counts (RunResult.detections / hits / hintsUsed); "—" when the run does not carry them.
 import type { DiagnosticItem, ResultsAnalytics, TimelineMark } from '../../mystery/analytics/index.ts';
-import { ABILITY_KEY_LABEL } from '../../mystery/types.ts';
+import { ABILITY_KEY_LABEL, type RunResult } from '../../mystery/types.ts';
 import { ThingSigil } from '../components/ThingSigil.tsx';
 import { Icon, type IconName } from '../Icon.tsx';
 
@@ -17,7 +19,10 @@ export const LAYERS: Layer[] = [
   { key: 'prescriptive', name: 'Prescriptive', q: 'What did Thing advise?', icon: 'signpost', color: '#6fd6a0' },
 ];
 
-export function LayerPanels({ report }: { report: ResultsAnalytics | null }) {
+/** The run's v4 tally (optional: older callers pass only the report). */
+export type ResultTally = Partial<Pick<RunResult, 'detections' | 'hits' | 'hintsUsed'>>;
+
+export function LayerPanels({ report, result = null }: { report: ResultsAnalytics | null; result?: ResultTally | null }) {
   return (
     <section className="mys-analytics" aria-label="The four analytics">
       {LAYERS.map((l) => (
@@ -29,7 +34,7 @@ export function LayerPanels({ report }: { report: ResultsAnalytics | null }) {
           {!report ? (
             <p className="layer-panel__empty text-2">Analytics unavailable for this run</p>
           ) : l.key === 'descriptive' ? (
-            <Descriptive r={report} />
+            <Descriptive r={report} tally={result} />
           ) : l.key === 'diagnostic' ? (
             <Diagnostic r={report} />
           ) : l.key === 'predictive' ? (
@@ -50,15 +55,24 @@ function fmtT(t: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-function Descriptive({ r }: { r: ResultsAnalytics }) {
+/** Egg status word for the tile (delivered / carried / dropped / not found). */
+function eggWord(d: ResultsAnalytics['descriptive']): string {
+  if (d.egg.delivered) return 'Delivered';
+  if (d.egg.pickupT === null) return 'Not found';
+  const lastDrop = d.egg.drops.length ? d.egg.drops[d.egg.drops.length - 1]!.t : -1;
+  return lastDrop >= d.egg.pickupT ? 'Dropped' : 'Carried';
+}
+
+function Descriptive({ r, tally }: { r: ResultsAnalytics; tally: ResultTally | null }) {
   const d = r.descriptive;
+  const count = (v: number | undefined) => (typeof v === 'number' ? String(v) : '—');
   const tiles: [string, string][] = [
-    ['Time', `${d.activeTimeS.toFixed(1)} s`],
+    ['Time', fmtT(d.activeTimeS)],
     ['Clues', `${d.clues.count}/${d.clues.total}`],
-    ['Chases', String(d.hyde.chases)],
-    ['Caught', `${d.catches}/2`],
-    ['Egg security', d.egg.security === null ? '—' : String(Math.round(d.egg.security))],
-    ['Hints', String(d.hints)],
+    ['Seen', count(tally?.detections)],
+    ['Hits', count(tally?.hits)],
+    ['Hints', typeof tally?.hintsUsed === 'number' ? String(tally.hintsUsed) : String(d.hints)],
+    ['Egg', eggWord(d)],
   ];
   const share = d.stanceShare;
   const segs: [keyof typeof share, string][] = [['crouch', 'Crouch'], ['walk', 'Walk'], ['sprint', 'Sprint'], ['idle', 'Still']];
@@ -66,7 +80,7 @@ function Descriptive({ r }: { r: ResultsAnalytics }) {
     <div className="lp-desc">
       <dl className="lp-tiles">
         {tiles.map(([k, v]) => (
-          <div key={k} className="lp-tile"><dt>{k}</dt><dd className="num">{v}</dd></div>
+          <div key={k} className="lp-tile" data-testid={`lp-tile-${k.toLowerCase()}`}><dt>{k}</dt><dd className="num">{v}</dd></div>
         ))}
       </dl>
       <div className="lp-stance" role="img" aria-label={`Stance mix: ${segs.map(([k, n]) => `${n} ${pct(share[k])}`).join(', ')}`}>

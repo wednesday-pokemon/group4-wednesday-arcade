@@ -28,14 +28,27 @@
 //   (the stronger reduction wins). Sight is unchanged. After COOLDOWN it walks back to the nearest patrol waypoint.
 //
 // Movement (nav travel + stuck guard) and the SEARCH spot planning live in enemyNav.ts, shared with Joseph Crackstone.
+//
+// Final (docs/final/FINAL_CONTRACT.md §4, §6):
+// - Director lifecycle: spawn() (= emerge with every per-encounter timer reset) / despawn() (inactive, its stun / slow /
+//   distract timers dropped; nothing on the player changes). Directed-enemy queries engaged / calm / cycleDone /
+//   encounterResolved feed the director's despawn rule. The Hyde keeps priority over the other hunters (it never defers).
+// - `enemy_detected {hyde}` whenever it starts a CHASE (via 'sight', or 'proximity' when the player bumped into it).
+// - Cabinets: a player inside a CLOSED cabinet is invisible to it (enemyNav playerRevealAt), an OPEN one hides like a crouch
+//   spot; a grab never lands on a player inside (open / closed). witnesses() = it could see the player right now (used
+//   when they enter / close a cabinet); goToCabinet() makes it walk (INVESTIGATE_SOUND) to that cabinet's door and pull
+//   the player out on arrival (ctx.pullOut, a catch). A stun / lure / distract makes it forget the cabinet.
 import type { SimContext } from './context.ts';
 import {
-  hidingRevealAt, NavTraveller, pickSearchPoint, planSearchSpots, SEARCH_ARRIVE_M, type SearchSpot,
+  cabinetFound, inCabinetNow, NavTraveller, pickSearchPoint, planSearchSpots, playerRevealAt, SEARCH_ARRIVE_M, type SearchSpot,
 } from './enemyNav.ts';
 import { dist, turnToward, wrapAngle, yawTo } from './geometry.ts';
 import { hear } from './noise.ts';
 import { canSee } from './sight.ts';
 import type { GameEvent, HydeMode, HydeRuntime, MapDef, NoiseSource, Vec2 } from './types.ts';
+
+/** A remembered cabinet (witnessed entry / heard creak): walk to its door, pull the player out if still inside. */
+export interface CabinetMemory { spotId: string; door: Vec2 }
 
 export { hidingRevealAt, hidingSafeM } from './enemyNav.ts';
 
@@ -82,6 +95,16 @@ export class HydeBrain {
   private searchLook: Vec2 | null = null;
   /** Reduced hearing until this time (calm window after a chase). */
   calmUntil = -Infinity;
+  /** Final: no chase may start before this (after a chase hit maxChaseS). */
+  private noChaseUntil = -Infinity;
+  /** Final: the cabinet it is walking to (null = none). */
+  cabinetGoal: CabinetMemory | null = null;
+  /** Patrol waypoints reached since the last spawn (cycle done = a full loop). */
+  private loopSteps = 0;
+  /** It hunted the player (chase or grab) since the last spawn. */
+  private hunted = false;
+  /** How the current chase started (enemy_detected via). */
+  private seenVia: 'sight' | 'proximity' = 'sight';
 
   constructor(h: HydeRuntime) {
     this.h = h;
@@ -105,6 +128,100 @@ export class HydeBrain {
     this.mover.planGoal = null;
     this.active = true;
     return { x: snapped.x, z: snapped.z };
+  }
+
+  /**
+   * Director spawn: a fresh encounter at `s` (mode PATROL, suspicion 0, no memory, no pending grab / lure / search, its
+   * own effect timers cleared), then emerge (snap + patrol from the nearest waypoint).
+   */
+  spawn(ctx: SimContext, s: { x: number; z: number; yaw: number }): Vec2 {
+    this.resetEncounter();
+    return this.emerge(ctx, s);
+  }
+
+  /** Director despawn: inactive (no sight, hearing or movement); its stun / slow / distract timers are dropped. */
+  despawn(_ctx: SimContext): void {
+    this.resetEncounter();
+    this.active = false;
+  }
+
+  private resetEncounter(): void {
+    const h = this.h;
+    Object.assign(h, {
+      mode: 'PATROL' as HydeMode, modeT: 0, speed: 0, suspicion: 0, canSeePlayer: false, lastKnown: null, target: null, path: [],
+      stunnedUntil: -Infinity, slowedUntil: -Infinity, slowMult: 1, distractedUntil: -Infinity, grabbing: false,
+    });
+    this.lastSeenT = -Infinity;
+    this.windupUntil = -Infinity;
+    this.grabHoldUntil = -Infinity;
+    this.cooldownUntil = -Infinity;
+    this.lureUntil = -Infinity;
+    this.searchCenter = null;
+    this.searchUntil = -Infinity;
+    this.searchPauseUntil = -Infinity;
+    this.searchSpots = [];
+    this.searchLook = null;
+    this.preLureKnown = null;
+    this.glimpsed = false;
+    this.calmUntil = -Infinity;
+    this.noChaseUntil = -Infinity;
+    this.cabinetGoal = null;
+    this.loopSteps = 0;
+    this.hunted = false;
+    this.mover.planGoal = null;
+  }
+
+  // ------------------------------------------------------------------------------------------------- director queries
+
+  /** CHASE (incl. the grab wind-up). */
+  engaged(): boolean {
+    return this.active && this.h.mode === 'CHASE';
+  }
+
+  /** Patrolling or cooling down (not hunting / investigating the player), no grab being held. */
+  calm(t: number): boolean {
+    return this.active && (this.h.mode === 'PATROL' || this.h.mode === 'COOLDOWN') && t >= this.grabHoldUntil && !this.cabinetGoal;
+  }
+
+  /** One full patrol loop since the spawn. */
+  cycleDone(ctx: SimContext): boolean {
+    return this.loopSteps >= Math.max(1, ctx.map.patrol.length);
+  }
+
+  /** It hunted the player since the spawn and has calmed down again. */
+  encounterResolved(t: number): boolean {
+    return this.hunted && this.calm(t);
+  }
+
+  /**
+   * Could it see the player right now? Used when the player enters (revealM null: they are still outside) or closes a
+   * cabinet (revealM = the cabinet's: they sit behind an open door).
+   */
+  witnesses(ctx: SimContext, revealM: number | null = null): boolean {
+    if (!this.perceives(ctx) || this.isDistracted(ctx.t)) return false;
+    const p = ctx.player;
+    const h = this.h;
+    if (revealM === null && h.mode === 'CHASE' && h.canSeePlayer) return true;
+    const res = canSee(ctx.world, ctx.tuning.sight, h, { x: p.x, z: p.z, crouched: false, hiddenRevealM: revealM }, {
+      fog: ctx.inFog(h.x, h.z) || ctx.inFog(p.x, p.z), distracted: false,
+    });
+    return res.seen;
+  }
+
+  /** Walk to a remembered cabinet's door (INVESTIGATE_SOUND); pull the player out on arrival if still inside. */
+  goToCabinet(ctx: SimContext, mem: CabinetMemory): void {
+    if (!this.active) return;
+    const h = this.h;
+    this.windupUntil = -Infinity;
+    h.grabbing = false;
+    h.lastKnown = { ...mem.door };
+    if (h.mode === 'INVESTIGATE_SOUND') {
+      h.path = [];
+      this.mover.planGoal = null;
+      this.investigateSince = ctx.t;
+    } else this.setMode(ctx, 'INVESTIGATE_SOUND', h.canSeePlayer ? 'saw_player' : 'heard_noise');
+    this.cabinetGoal = { spotId: mem.spotId, door: { ...mem.door } };
+    h.target = { ...mem.door };
   }
 
   /**
@@ -177,9 +294,12 @@ export class HydeBrain {
     if (to === 'CHASE') {
       this.stats.chases++;
       this.calmUntil = -Infinity;
+      this.hunted = true;
     } else if (from === 'CHASE') this.calmUntil = ctx.t + ctx.tuning.hyde.calmAfterChaseS;
     if (to === 'INVESTIGATE_SOUND') this.investigateSince = ctx.t;
+    this.cabinetGoal = null;
     ctx.emit({ type: 'hyde_mode', from, to, reason });
+    if (to === 'CHASE') ctx.emit({ type: 'enemy_detected', enemy: 'hyde', via: this.seenVia });
   }
 
   private startSearch(ctx: SimContext, center: Vec2, reason: ModeReason, startAt = ctx.t): void {
@@ -210,6 +330,7 @@ export class HydeBrain {
     h.grabbing = false;
     this.windupUntil = -Infinity;
     h.speed = 0;
+    this.cabinetGoal = null;
     if (h.canSeePlayer) ctx.emit({ type: 'hyde_lost' });
     h.canSeePlayer = false;
     if (this.isLured(ctx.t)) return; // a decoy is pending (e.g. Shadow Ball = lure + stun): freeze, then go to it
@@ -230,6 +351,7 @@ export class HydeBrain {
     this.h.distractedUntil = Math.max(this.h.distractedUntil, ctx.t + durationS);
     this.h.grabbing = false;
     this.windupUntil = -Infinity;
+    this.cabinetGoal = null;
   }
 
   /** Pull the Hyde to a decoy for `durationS`; it ignores the player meanwhile. Returns false if it refuses. */
@@ -240,6 +362,7 @@ export class HydeBrain {
     this.lureUntil = ctx.t + durationS;
     h.grabbing = false;
     this.windupUntil = -Infinity;
+    this.cabinetGoal = null;
     if (h.canSeePlayer) ctx.emit({ type: 'hyde_lost' });
     h.canSeePlayer = false;
     if (h.mode === 'INVESTIGATE_SOUND') {
@@ -253,26 +376,29 @@ export class HydeBrain {
 
   // ------------------------------------------------------------------------------------------------- hearing
 
-  hearNoise(ctx: SimContext, source: NoiseSource, x: number, z: number, loudness: number): void {
-    if (!this.perceives(ctx) || this.isDistracted(ctx.t)) return;
+  /** Returns whether it heard the noise. */
+  hearNoise(ctx: SimContext, source: NoiseSource, x: number, z: number, loudness: number): boolean {
+    if (!this.perceives(ctx) || this.isDistracted(ctx.t)) return false;
     const h = this.h;
     const T = ctx.tuning;
     const res = hear(ctx.world, T.noise, loudness, x, z, h.x, h.z, this.hearingMult(ctx));
-    if (!res.heard) return;
+    if (!res.heard) return false;
     this.stats.heard++;
     ctx.emit({ type: 'hyde_heard', source, loudness: round3(loudness), distanceM: round2(res.distanceM), occluded: res.occluded });
     h.suspicion = Math.min(1, h.suspicion + T.suspicion.heardGainPerLoudness * loudness);
+    if (this.cabinetGoal) return true; // already walking to the player's cabinet
     h.lastKnown = { x, z };
-    if (h.mode === 'CHASE') return; // the chase keeps going; the noise refreshes the last known point
+    if (h.mode === 'CHASE') return true; // the chase keeps going; the noise refreshes the last known point
     if (h.mode === 'INVESTIGATE_SOUND') {
       h.target = { x, z };
       this.investigateSince = ctx.t;
-      return;
+      return true;
     }
     if (h.suspicion >= T.suspicion.investigateAt || loudness >= T.suspicion.investigateLoudnessAlways) {
       this.setMode(ctx, 'INVESTIGATE_SOUND', 'heard_noise');
       h.target = { x, z };
     }
+    return true;
   }
 
   // ------------------------------------------------------------------------------------------------- step
@@ -307,13 +433,17 @@ export class HydeBrain {
     // ---- sight
     let seen = false;
     if (this.perceives(ctx)) {
-      const spot = p.hidden ? hidingRevealAt(ctx, p.x, p.z) : null;
+      const spot = playerRevealAt(ctx);
       const res = canSee(ctx.world, T.sight, h, { x: p.x, z: p.z, crouched: p.crouched, hiddenRevealM: spot }, {
         fog: ctx.inFog(h.x, h.z) || ctx.inFog(p.x, p.z), distracted: this.isDistracted(t),
       });
       seen = res.seen;
+      this.seenVia = 'sight';
       // bumping into the Hyde gives the player away (unless hidden in a spot or the Hyde is distracted)
-      if (!seen && !p.hidden && !this.isDistracted(t) && dPlayer <= T.hyde.radius + T.player.radius + 0.15) seen = true;
+      if (!seen && !p.hidden && !this.isDistracted(t) && dPlayer <= T.hyde.radius + T.player.radius + 0.15) {
+        seen = true;
+        this.seenVia = 'proximity';
+      }
       if (seen) {
         if (!h.canSeePlayer) {
           this.stats.sightings++;
@@ -323,7 +453,7 @@ export class HydeBrain {
         h.suspicion = Math.min(1, h.suspicion + T.suspicion.sightGainPerS * closeness * dt);
         h.lastKnown = { x: p.x, z: p.z };
         this.lastSeenT = t;
-        if (h.mode !== 'CHASE' && (h.suspicion >= T.suspicion.chaseAt || dPlayer <= T.sight.instantM)) {
+        if (h.mode !== 'CHASE' && t >= this.noChaseUntil && (h.suspicion >= T.suspicion.chaseAt || dPlayer <= T.sight.instantM)) {
           h.suspicion = 1;
           this.setMode(ctx, 'CHASE', 'saw_player');
         } else if (h.mode !== 'CHASE') this.glimpsed = true;
@@ -346,6 +476,22 @@ export class HydeBrain {
       }
     }
 
+    // ---- a player found in a cabinet (seen through the open door, or the cabinet it remembers): yanked out = a grab
+    const found = this.perceives(ctx) ? cabinetFound(ctx, h, this.cabinetGoal, seen) : null;
+    if (found) {
+      this.cabinetGoal = null;
+      this.windupUntil = -Infinity;
+      this.stats.grabs++;
+      h.grabbing = true;
+      h.speed = 0;
+      this.grabHoldUntil = t + T.hyde.grabHoldS;
+      h.lastKnown = null;
+      this.hunted = true;
+      this.startCooldown(ctx, T.hyde.cooldownAfterGrabS, 'grabbed');
+      ctx.pullOut?.('hyde', found);
+      return;
+    }
+
     // ---- grab windup (the Hyde keeps lunging after the player while winding up)
     const invulnerable = t < p.invulnerableUntil;
     if (this.windupUntil > -Infinity) {
@@ -353,12 +499,13 @@ export class HydeBrain {
         this.windupUntil = -Infinity;
         h.grabbing = false;
         const d = Math.hypot(p.x - h.x, p.z - h.z);
-        if (d <= T.grab.connectRangeM && !invulnerable && !this.isDistracted(t) && !this.isLured(t)) {
+        if (d <= T.grab.connectRangeM && !invulnerable && !this.isDistracted(t) && !this.isLured(t) && !inCabinetNow(p)) {
           this.stats.grabs++;
           h.grabbing = true;
           h.speed = 0;
           this.grabHoldUntil = t + T.hyde.grabHoldS;
           h.lastKnown = null;
+          this.hunted = true;
           this.startCooldown(ctx, T.hyde.cooldownAfterGrabS, 'grabbed');
           onCatch();
           return;
@@ -388,6 +535,13 @@ export class HydeBrain {
         }
         if (t - this.investigateSince >= T.hyde.investigateMaxS && !this.isLured(t)) {
           this.startSearch(ctx, goal, 'gave_up'); // could not get there in time (unreachable / blocked)
+          return;
+        }
+        const cab = this.cabinetGoal;
+        if (cab && Math.hypot(cab.door.x - h.x, cab.door.z - h.z) <= ctx.tuning.cabinet.pullOutM) {
+          // at the remembered cabinet, but the player is no longer inside: look around here
+          this.cabinetGoal = null;
+          this.startSearch(ctx, goal, 'reached_target');
           return;
         }
         if (this.travel(ctx, goal, speed, dt, 1.0)) {
@@ -429,6 +583,14 @@ export class HydeBrain {
         return;
       }
       case 'CHASE': {
+        if (h.modeT >= T.hyde.maxChaseS && this.windupUntil === -Infinity) {
+          // fairness: an endless chase ends — it searches where it last saw the player, and cannot restart a chase for a
+          // few seconds (sightings meanwhile are glimpses)
+          this.startSearch(ctx, h.lastKnown ?? { x: h.x, z: h.z }, 'gave_up');
+          h.suspicion = 0;
+          this.noChaseUntil = t + 5;
+          return;
+        }
         const lostFor = t - this.lastSeenT;
         if (!seen && this.windupUntil === -Infinity && (lostFor >= T.hyde.chaseLossS || this.isDistracted(t) || invulnerable)) {
           this.startSearch(ctx, h.lastKnown ?? { x: h.x, z: h.z }, 'lost_sight');
@@ -466,6 +628,7 @@ export class HydeBrain {
     if (this.travel(ctx, wp, speed, dt, ctx.tuning.hyde.waypointReachedM)) {
       this.patrolIndex = (this.patrolIndex + 1) % pts.length;
       this.mover.planGoal = null;
+      this.loopSteps++;
     }
   }
 

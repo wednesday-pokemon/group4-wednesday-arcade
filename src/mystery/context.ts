@@ -6,7 +6,7 @@ import type { InvestigationTracker } from './investigation.ts';
 import type { NavGrid } from './nav.ts';
 import type { Rng } from './rng.ts';
 import type {
-  AbilityEffectKind, ClueId, EggRuntime, GameEvent, HydeRuntime, MapDef, NoiseSource, PlayMods, PlayerState, RoomDef, Vec2,
+  AbilityEffectKind, ClueId, EggRuntime, EnemyId, GameEvent, HydeRuntime, MapDef, NoiseSource, PlayMods, PlayerState, RoomDef, Vec2,
 } from './types.ts';
 
 /** Timed ability effects currently applied (times are run seconds `t`). */
@@ -39,6 +39,10 @@ export interface EffectState {
   enemyRevealRangeM: number;
   cursedUntil: number; // a landed curse slows the player (movement × curseSlowMult) until then
   curseSlowMult: number;
+  // ---- Slurp (FINAL_CONTRACT §5)
+  slurpVisualUntil: number; // a stun/slow with visual 'petrify' | 'pin' is showing on Slurp
+  slurpVisual: 'petrify' | 'pin' | null;
+  slurpPremonitionUntil: number; // premonition shows Slurp's path (he was in range at activation)
   last: { key: 'F' | 'Q'; abilityId: string; kinds: AbilityEffectKind[]; t: number } | null;
 }
 
@@ -50,7 +54,8 @@ export function createEffectState(): EffectState {
     premonitionUntil: -Infinity, premonitionAheadS: 0, lurePoint: null, lureUntil: -Infinity,
     hydeVisualUntil: -Infinity, hydeVisual: null, switchPoweredUntil: -Infinity,
     crackstoneVisualUntil: -Infinity, crackstoneVisual: null, crackstonePremonitionUntil: -Infinity,
-    enemyRevealUntil: -Infinity, enemyRevealRangeM: 0, cursedUntil: -Infinity, curseSlowMult: 1, last: null,
+    enemyRevealUntil: -Infinity, enemyRevealRangeM: 0, cursedUntil: -Infinity, curseSlowMult: 1,
+    slurpVisualUntil: -Infinity, slurpVisual: null, slurpPremonitionUntil: -Infinity, last: null,
   };
 }
 
@@ -78,4 +83,16 @@ export interface SimContext {
   openWallPermanently(id: string): void;
   roomAt(x: number, z: number): RoomDef | null;
   inFog(x: number, z: number): boolean;
+  /**
+   * Final (FINAL_CONTRACT §4): is an enemy OTHER than `self` engaged (CHASE / ATTACK) right now? Crackstone and Slurp
+   * defer to it (≤ 1 engaged hunter at a time; the Hyde has priority). Optional so module tests can omit it (= false).
+   */
+  enemyEngaged?(self: EnemyId): boolean;
+  /**
+   * Final (FINAL_CONTRACT §6): an enemy that remembered the player's cabinet reached it — pull the player out (a hit by
+   * `by`). Returns false when the run ended (DNF). Optional for module tests.
+   */
+  pullOut?(by: EnemyId, spotId: string): boolean;
+  /** Final: the exit point of the cabinet the player is in (where enemies stand to pull them out), else null. */
+  cabinetExit?(): Vec2 | null;
 }

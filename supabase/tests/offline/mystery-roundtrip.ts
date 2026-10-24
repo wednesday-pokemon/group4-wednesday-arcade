@@ -18,17 +18,24 @@
 //  * Joseph Crackstone (2026-10-24): the four Crackstone telemetry types and curse cast / miss ride in the random
 //    streams; landed curses (rule events) cost HP, never a catch; some DNFs are curse deaths (dnf 'hp_depleted');
 //    crackstone_risk forecasts ride along (FORECAST_TARGETS); the finalize replay re-reads RULE_EVENT_TYPES (incl. curse)
+//  * mystery-v4 (2026-10-24): 3 of 4 sessions are created as mystery-v4 (p_rules_version), 1 of 4 as mystery-v3.1 (the
+//    previous bundle's default); v4 streams carry the director / Slurp / cabinet telemetry, Weems hints with a level,
+//    enemy_detected and an enemy_hit after every catch / curse hit (+ Slurp attacks, incl. Slurp deaths with dnf.by); each
+//    session is validated and scored under ITS OWN rules version; stored counts / defeated_by / breakdown ==
+//    computeResult(); the v4 SQL score CHECK accepts every recomputed breakdown; standings parity per version;
+//    mystery_leaderboard_v4 and mystery_top5 == the v4 finishers in compareResults order; v3.1 views never show a v4 row
 //  * v2.5 tables are untouched by all of it
 import { createStream } from '../../functions/_shared/game/index.ts';
 import {
   RULE_EVENT_TYPES, applyBatch, initialProgress, progressFromRow, ruleFingerprint, splitResend, type ParsedEvent,
 } from '../../functions/_shared/mystery-events.ts';
 import {
-  caseVersions, computeOffer, computeResult, requireData, requireEggRules, resolveCase, rulesContext, type SessionCase,
+  MYSTERY_RULES_VERSION, PLAYER_MAX_HP, caseVersions, computeOffer, computeResult, requireData, requireEggRules, resolveCase,
+  rulesContext, sessionRulesVersion, type SessionCase,
 } from '../../functions/_shared/mystery-rules.ts';
 import { FORECAST_TARGETS, parseMysteryAppend } from '../../functions/_shared/mystery-validation.ts';
-import { CASE_IDS, type CaseId } from '../../functions/_shared/mystery/types.ts';
-import { compareResults, scoreFor } from '../../functions/_shared/mystery/scoring.ts';
+import { CASE_IDS, type CaseId, type MysteryRulesVersion } from '../../functions/_shared/mystery/types.ts';
+import { compareResults, round1, scoreFor, scoreV4 } from '../../functions/_shared/mystery/scoring.ts';
 import { HttpError } from '../../functions/_shared/errors.ts';
 import { jsonEqual } from '../../functions/_shared/validation.ts';
 
@@ -46,7 +53,8 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
   requireData();
   const egg = requireEggRules();
   const versions = caseVersions();
-  const createCasts = ['::uuid', '', '', '', '', '::jsonb', '', '::jsonb', '::jsonb', ''];
+  // + p_rules_version (20261025000100): the new mystery-create-session passes MYSTERY_RULES_VERSION
+  const createCasts = ['::uuid', '', '', '', '', '::jsonb', '', '::jsonb', '::jsonb', '', ''];
   const actor = { userId: 'aaaaaaaa-0000-4000-8000-0000000000a1', role: 'station', stationId: null };
   const v25Before = (await db.query(`select (select count(*) from public.sessions) s, (select count(*) from public.leaderboard_entries) l,
     (select jsonb_agg(to_jsonb(x) order by station_id) from public.station_status x) st`)).rows[0];
@@ -72,7 +80,8 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
       }
       const { fresh } = splitResend(events, r.last_seq, stored);
       if (fresh.length === 0 && body.forecasts.length === 0) return null;
-      const next = applyBatch(progressFromRow(r.progress), fresh, rulesContext(r.seed, resolveCase(r.case_id, r.case_version).caseDef, egg));
+      const next = applyBatch(progressFromRow(r.progress), fresh,
+        rulesContext(r.seed, resolveCase(r.case_id, r.case_version).caseDef, egg, PLAYER_MAX_HP, sessionRulesVersion(r.rules_version)));
       const out = await rpc('mystery_append_events', [sessionId, station, r.last_seq, fresh, next, body.forecasts, null],
         ['::uuid', '', '::int', '::jsonb', '::jsonb', '::jsonb', '::jsonb']);
       return out.ok ? null : out.error;
@@ -87,6 +96,8 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
   let curseDnf = 0;
   let rejected = 0;
   let abandoned = 0;
+  const perVersion: Record<MysteryRulesVersion, number> = { 'mystery-v3.1': 0, 'mystery-v4': 0 };
+  let slurpDnf = 0;
   for (let n = 0; n < sessions; n++) {
     const station = n % 2 === 0 ? 'station_a' : 'station_b';
     const seed = hex();
@@ -94,16 +105,20 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
     const actionId = `mrt_${n.toString().padStart(6, '0')}`;
     const offer = computeOffer(seed);
     const body = { actionId, nickname: `Player${n % 1000}` };
-    const created = await rpc('mystery_create_session', [id, station, actionId, seed, body.nickname, offer, false, { body, actor }, versions, null],
+    // mostly the deployed rules (mystery-v4); every 4th session is a legacy v3.1 one (the previous bundle's create path)
+    const rv: MysteryRulesVersion = n % 4 === 3 ? 'mystery-v3.1' : MYSTERY_RULES_VERSION;
+    const v4 = rv === 'mystery-v4';
+    const created = await rpc('mystery_create_session', [id, station, actionId, seed, body.nickname, offer, false, { body, actor }, versions, null, rv],
       createCasts);
-    check(created.ok && !created.replay && (CASE_IDS as readonly string[]).includes(created.caseId), `#${n} create ok with a drawn case`);
+    check(created.ok && !created.replay && (CASE_IDS as readonly string[]).includes(created.caseId) && created.rulesVersion === rv,
+      `#${n} create ok with a drawn case under ${rv}`);
     const kase: SessionCase = resolveCase(created.caseId, created.caseVersion);
     await db.query(`update public.mystery_sessions set created_at = created_at - interval '10 minutes' where id = $1`, [id]); // dodge the rate limit
     const otherSeed = hex(); // a retry generates a fresh seed/offer server-side; the replay must ignore both
-    const again = await rpc('mystery_create_session', [uuid(), station, actionId, otherSeed, body.nickname, computeOffer(otherSeed), false, { body, actor }, versions, null],
+    const again = await rpc('mystery_create_session', [uuid(), station, actionId, otherSeed, body.nickname, computeOffer(otherSeed), false, { body, actor }, versions, null, MYSTERY_RULES_VERSION],
       createCasts);
-    check(again.replay === true && again.sessionId === id && again.caseId === created.caseId,
-      `#${n} refresh with same actionId replays the same session and case`);
+    check(again.replay === true && again.sessionId === id && again.caseId === created.caseId && again.rulesVersion === rv,
+      `#${n} refresh with same actionId replays the same session, case and rules version`);
     const storedCards = (await db.query('select card from public.mystery_offered_duos where session_id = $1 order by slot', [id])).rows.map((r) => r.card);
     check(jsonEqual(storedCards, JSON.parse(JSON.stringify(offer.cards))), `#${n} stored offer == draftOffer(seed)`);
 
@@ -112,8 +127,9 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
     const sel = await rpc('mystery_select_duo', [id, station, card.characterId, card.pokemonId, { body: {}, actor }], ['::uuid', '', '', '', '::jsonb']);
     check(sel.ok, `#${n} select an offered duo`);
 
-    // ---- build a valid stream
-    const ctx = rulesContext(seed, kase.caseDef, egg);
+
+    // ---- build a valid stream (shape of the session's rules version: v4 adds the final-wave events)
+    const ctx = rulesContext(seed, kase.caseDef, egg, PLAYER_MAX_HP, rv);
     const culprit = kase.solution.culprit;
     const tier = ctx.expectedTier!;
     let seq = 0;
@@ -124,6 +140,7 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
       seq += rng() < 0.2 ? 2 : 1; // gaps: the client may drop cosmetic events
       evs.push({ type, t, seq, ...payload });
     };
+    const enemies = ['hyde', 'crackstone', 'slurp'] as const;
     const cosmetic = () => pick([
       () => push('noise', { source: 'footstep', x: rng() * 90, z: rng() * 120, loudness: 0.35, radiusM: 7 }),
       () => push('stance', { stance: pick(['walk', 'crouch', 'sprint', 'idle']) }),
@@ -146,6 +163,15 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
       () => push('crackstone_lost'),
       () => push('crackstone_scan', { phase: pick(['warning', 'pulse']), radiusM: 14, hit: rng() < 0.3 }),
       () => push('curse', { phase: pick(['cast', 'miss']), hpLost: 0, blocked: false }),
+      // final wave (v4 sessions): director / Slurp / cabinet telemetry, Weems hints with a level, detections (rule events)
+      ...(v4 ? [
+        () => push('enemy_spawned', { enemy: pick(enemies), spawnId: pick(['sp_vault', 'sp_crypt_gate', 'sp_east']), x: rng() * 60 - 30, z: rng() * 60 - 60 }),
+        () => push('enemy_despawned', { enemy: pick(enemies), reason: pick(['far', 'cycle_done', 'encounter_resolved']) }),
+        () => push('slurp_mode', { from: 'WANDER', to: pick(['INVESTIGATE', 'CHASE', 'SEARCH']), reason: pick(['saw_player', 'heard_noise', 'sensed_player']) }),
+        () => push('cabinet', { spotId: pick(['cab_archive_1', 'cab_crypt_2']), action: pick(['enter', 'close', 'open', 'exit']), loud: rng() < 0.3 }),
+        () => push('hint_requested', { level: pick([1, 2, 3]) }),
+        () => push('enemy_detected', { enemy: pick(enemies), via: pick(['sight', 'sound', 'proximity', 'scan', 'witnessed_hide']) }),
+      ] : []),
     ])();
     const feature = { egg_site: 'site', clue_area: 'area', hyde_zone: 'zone', hyde_spawn: 'spawn' } as Record<string, string>;
     let forecastNo = 0;
@@ -157,28 +183,46 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
       return { forecastNo: forecastNo++, t: at, target, value: target === 'eta_s' ? Math.round(rng() * 400) : Math.round(rng() * 1e4) / 1e4,
         modelLabel: target === 'detection_15s' ? 'ml' : 'rule_based', features };
     });
+    // v4: every Hyde grab / landed curse is followed by its enemy_hit (same step); Slurp attacks are enemy_hit only
+    let lastHit: (typeof enemies)[number] | null = null;
+    const hit = (enemy: (typeof enemies)[number], hp: number, blocked = false) => {
+      if (!v4) return;
+      push('enemy_hit', { enemy, hpLost: hp, blocked }, 0);
+      lastHit = enemy;
+    };
+    const dnfBy = () => (v4 && lastHit !== null && rng() < 0.7 ? { by: lastHit } : {});
     const clues = [...ctx.clueIds].sort(() => rng() - 0.5).slice(0, Math.floor(rng() * 4));
     let catches = 0;
     for (let i = 0; i < 6; i++) cosmetic();
     clues.forEach((c, i) => { cosmetic(); push('clue_found', { clueId: c, cluesFound: i + 1 }); });
-    if (rng() < 0.5) { catches = 1; push('catch', { catchNumber: 1, hpLost: 35, eggSecurityLost: 0, blocked: false }); }
+    if (rng() < 0.5) { catches = 1; push('catch', { catchNumber: 1, hpLost: 35, eggSecurityLost: 0, blocked: false }); hit('hyde', 35); }
     let hpLost = catches * 35;
-    if (rng() < 0.4) { push('curse', { phase: 'hit', hpLost: 25, blocked: false }); hpLost += 25; } // a landed curse (not a catch)
-    if (rng() < 0.2) push('curse', { phase: 'hit', hpLost: 0, blocked: true }); // blocked by block_grab
+    if (rng() < 0.4) { push('curse', { phase: 'hit', hpLost: 25, blocked: false }); hpLost += 25; hit('crackstone', 25); } // a landed curse (not a catch)
+    if (rng() < 0.2) { push('curse', { phase: 'hit', hpLost: 0, blocked: true }); hit('crackstone', 0, true); } // blocked by block_grab
+    if (v4 && rng() < 0.3) { hit('slurp', 0, true); } // a blocked Slurp lunge still counts as a hit
+    if (v4 && hpLost < 60 && rng() < 0.3) { hpLost += 30; hit('slurp', 30); }
     const willDnf = rng() < 0.2;
-    const curseDeath = willDnf && rng() < 0.5;
-    if (curseDeath) {
-      while (hpLost < 100) { push('curse', { phase: 'hit', hpLost: 25, blocked: false }); hpLost += 25; }
-      push('dnf', { reason: 'hp_depleted' }, 0);
-    } else if (willDnf) {
-      if (catches === 0) push('catch', { catchNumber: 1, hpLost: 35, eggSecurityLost: 0, blocked: false });
+    const death = !willDnf ? null : pick(v4 ? ['curse', 'catch', 'slurp'] as const : ['curse', 'catch'] as const);
+    const curseDeath = death === 'curse' || death === 'slurp';
+    if (death === 'curse') {
+      while (hpLost < 100) { push('curse', { phase: 'hit', hpLost: 25, blocked: false }); hpLost += 25; hit('crackstone', 25); }
+      push('dnf', { reason: 'hp_depleted', ...dnfBy() }, 0);
+    } else if (death === 'slurp') {
+      while (hpLost < 100) { push('noise', { source: 'impact', x: 0, z: 0, loudness: 0.5, radiusM: 5 }); hpLost += 25; hit('slurp', 25); }
+      slurpDnf++;
+      push('dnf', { reason: 'hp_depleted', ...(rng() < 0.7 ? { by: 'slurp' } : {}) }, 0);
+    } else if (death === 'catch') {
+      if (catches === 0) { push('catch', { catchNumber: 1, hpLost: 35, eggSecurityLost: 0, blocked: false }); hit('hyde', 35); }
       push('catch', { catchNumber: 2, hpLost: 35, eggSecurityLost: 0, blocked: false });
-      push('dnf', { reason: 'second_catch' });
+      hit('hyde', 35);
+      push('dnf', { reason: 'second_catch', ...dnfBy() });
     } else {
       push('egg_pickup');
       if (rng() < 0.3) { push('egg_drop', { reason: 'grab', security: 70 }); push('egg_pickup'); }
-      t += rng() < 0.1 ? 700 : 0; // a few very slow runs -> negative scores
+      t += rng() < 0.1 ? 700 : 0; // a few very slow runs -> negative v3.1 scores / no v4 time bonus
       push('egg_delivered', { tier, points: egg.points[tier], security: rng() < 0.3 ? 70 : 100 }, rng() * 30);
+      const deliveredT = evs[evs.length - 1].t as number;
+      if (v4 && rng() < 0.2) cosmetic(); // a detection / hint in the deposit step still counts
       const suspect = rng() < 0.1 ? null : pick(ctx.suspectIds);
       // cite all found clues (sometimes one fewer, sometimes plus a case-file note): an honest client cites only citable ids
       let evidence: string[] = suspect === null ? [] : [...clues];
@@ -188,7 +232,12 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
       const verdict = suspect === null ? 'not_accused'
         : suspect === culprit && clues.length === 3 && deductionCorrect ? 'case_solved' : 'egg_secured_mystery_unsolved';
       push('accusation', { suspectId: suspect, correct: suspect === culprit, cluesFound: clues.length, evidence, deductionCorrect }, 0);
-      push('finish', { verdict, score: scoreFor(egg.points[tier], (evs[evs.length - 2].t as number)) }, 0);
+      const count = (type: string) => evs.filter((e) => e.type === type).length;
+      const claimed = v4
+        ? scoreV4({ delivered: true, correct: suspect === culprit, cluesFound: clues.length, detections: count('enemy_detected'),
+          hintsUsed: count('hint_requested'), hits: count('enemy_hit'), activeTimeS: round1(deliveredT) }).total
+        : scoreFor(egg.points[tier], deliveredT);
+      push('finish', { verdict, score: claimed }, 0);
     }
 
     // ---- optionally corrupt (validator must reject before the DB)
@@ -235,8 +284,10 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
       .rows.map((e) => ({ seq: e.seq, t: Number(e.t), type: e.type, payload: e.payload }) as ParsedEvent);
     const replayed = applyBatch(initialProgress(), ruleEvents, ctx);
     check(ruleFingerprint(replayed) === ruleFingerprint(progressFromRow(r.progress)), `#${n} re-validated rule events == stored progress`);
-    const result = computeResult(replayed, kase, ctx.expectedTier);
-    check(result.claimMatches, `#${n} the honest client's claims match the server result`);
+    const result = computeResult(replayed, kase, ctx.expectedTier, undefined, sessionRulesVersion(r.rules_version));
+    check(result.claimMatches, `#${n} the honest client's claims match the server result (${rv})`);
+    check(result.rulesVersion === rv && (v4 ? result.detections !== null && result.hits !== null : result.detections === null),
+      `#${n} result computed under the session's own rules version`);
     const fin = await rpc('mystery_finalize_session', [id, station, r.last_seq, result, { body: { sessionId: id }, actor }],
       ['::uuid', '', '::int', '::jsonb', '::jsonb']);
     check(fin.ok && fin.replay === false, `#${n} finalize accepted by SQL constraints (${fin.error ?? ''} ${fin.message ?? ''})`);
@@ -248,6 +299,14 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
       && res.correct === result.correct && jsonEqual(res.clues_found, result.cluesFound) && res.egg_tier === result.eggTier
       && res.egg_points === result.eggPoints && Number(res.active_time_s) === result.activeTimeS
       && (res.score === null ? result.score === null : Number(res.score) === result.score), `#${n} stored result == computeResult()`);
+    check(res.rules_version === rv && res.hints_used === result.hintsUsed && res.detections === result.detections && res.hits === result.hits
+      && res.defeated_by === result.defeatedBy && jsonEqual(res.score_breakdown, result.scoreBreakdown),
+      `#${n} stored v4 columns (counts, defeated_by, breakdown) == computeResult()`);
+    if (v4 && result.outcome === 'finished') {
+      const b = result.scoreBreakdown!;
+      check(b.total === result.score && result.score! >= 0, `#${n} v4 score = breakdown total, never negative`);
+    }
+    perVersion[rv]++;
     const fin2 = await rpc('mystery_finalize_session', [id, station, 0, { outcome: 'finished', score: 600 }, { body: {}, actor }],
       ['::uuid', '', '::int', '::jsonb', '::jsonb']);
     check(fin2.replay === true && jsonEqual(fin2.result, res), `#${n} second finalize returns the same row`);
@@ -265,17 +324,34 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
     check(Math.max(...cs) - Math.min(...cs) <= 1, `${st}: case distribution ${cs.join('/')} is even (shuffled bag)`);
   }
 
-  // ---- standings parity with the shared comparator
-  const rows = (await db.query('select r.session_id, r.outcome, r.score, r.active_time_s, r.finalized_at from public.mystery_results r where not r.is_test')).rows;
-  const expected = rows.map((x) => ({ id: x.session_id as string, outcome: x.outcome, score: x.score === null ? null : Number(x.score),
-    activeTimeS: Number(x.active_time_s), at: new Date(x.finalized_at).getTime() }))
+  // ---- standings parity with the shared comparator, PER rules version (boards never mix versions)
+  const rows = (await db.query('select r.session_id, r.outcome, r.score, r.active_time_s, r.finalized_at, r.rules_version from public.mystery_results r where not r.is_test')).rows;
+  const ordered = (version: MysteryRulesVersion) => rows.filter((x) => x.rules_version === version)
+    .map((x) => ({ id: x.session_id as string, outcome: x.outcome, score: x.score === null ? null : Number(x.score),
+      activeTimeS: Number(x.active_time_s), at: new Date(x.finalized_at).getTime() }))
     .sort((a, b) => compareResults(a, b) || a.at - b.at || (a.id < b.id ? -1 : 1)).map((x) => x.id);
-  const dbOrder = (await db.query('select session_id from public.mystery_standings')).rows.map((x) => x.session_id);
-  check(jsonEqual(expected, dbOrder), 'mystery_standings order == shared compareResults() order');
-  const firstDnf = dbOrder.findIndex((sid) => rows.find((x) => x.session_id === sid)!.outcome === 'dnf');
-  const negatives = rows.filter((x) => x.outcome === 'finished' && Number(x.score) < 0).length;
-  check(firstDnf === -1 || dbOrder.slice(firstDnf).every((sid) => rows.find((x) => x.session_id === sid)!.outcome === 'dnf'),
-    'every finisher (incl. negative scores) is above every DNF');
+  let negatives = 0;
+  for (const [version, view] of [['mystery-v3.1', 'mystery_standings'], ['mystery-v4', 'mystery_standings_v4']] as const) {
+    const expected = ordered(version);
+    const dbOrder = (await db.query(`select session_id from public.${view}`)).rows.map((x) => x.session_id);
+    check(expected.length > 0 && jsonEqual(expected, dbOrder), `${view} order == shared compareResults() order of the ${version} rows only`);
+    const firstDnf = dbOrder.findIndex((sid) => rows.find((x) => x.session_id === sid)!.outcome === 'dnf');
+    check(firstDnf === -1 || dbOrder.slice(firstDnf).every((sid) => rows.find((x) => x.session_id === sid)!.outcome === 'dnf'),
+      `${view}: every finisher (incl. negative / zero scores) is above every DNF`);
+  }
+  negatives = rows.filter((x) => x.outcome === 'finished' && Number(x.score) < 0).length;
+  check(rows.filter((x) => x.rules_version === 'mystery-v4' && x.outcome === 'finished').every((x) => Number(x.score) >= 0), 'no v4 score is negative');
+  // the v4 leaderboard and the home-page top 5 are exactly the v4 finishers in that order
+  const v4Finishers = ordered('mystery-v4').filter((sid) => rows.find((x) => x.session_id === sid)!.outcome === 'finished');
+  const board = (await db.query('select session_id from public.mystery_leaderboard_v4')).rows.map((x) => x.session_id);
+  check(jsonEqual(board, v4Finishers), 'mystery_leaderboard_v4 == v4 finishers in compareResults order');
+  const top5 = (await db.query('select session_id, rank from public.mystery_top5')).rows;
+  check(jsonEqual(top5.map((x) => x.session_id), v4Finishers.slice(0, 5)) && top5.every((x, i) => x.rank <= i + 1),
+    'mystery_top5 == the first five v4 finishers');
+  const v31Board = (await db.query(`select count(*)::int c from public.mystery_leaderboard where rules_version <> 'mystery-v3.1'`)).rows[0].c;
+  check(v31Board === 0, 'the v3.1 leaderboard never shows a v4 row');
+  const defeated = (await db.query(`select count(*)::int c, count(defeated_by)::int named from public.mystery_defeated_v4`)).rows[0];
+  check(defeated.c > 0 && defeated.named > 0, 'the v4 defeat log lists DNFs with the defeating monster');
   const v25After = (await db.query(`select (select count(*) from public.sessions) s, (select count(*) from public.leaderboard_entries) l,
     (select jsonb_agg(to_jsonb(x) order by station_id) from public.station_status x) st`)).rows[0];
   check(jsonEqual(v25Before, v25After), 'v2.5 sessions / leaderboard / station_status untouched by mystery traffic');
@@ -287,9 +363,14 @@ export async function runMysteryRoundtrip(db: Db, sessions: number, check: Check
   const perTarget = (await db.query(`select target, count(*)::int c from public.mystery_forecasts group by target order by target`)).rows;
   check(FORECAST_TARGETS.every((t) => perTarget.some((x) => x.target === t)), 'forecasts of every target were stored');
   check(telemetry > 0, 'overhaul telemetry events were stored');
-  return `mystery sessions=${sessions} finished=${finished} (negative=${negatives}) dnf=${dnf} (curse deaths=${curseDnf}) rejected=${rejected} left-on-cards=${abandoned} `
+  const finalWave = (await db.query(`select type, count(*)::int c from public.mystery_events where type in
+    ('enemy_spawned','enemy_despawned','enemy_detected','enemy_hit','slurp_mode','cabinet') group by type order by type`)).rows;
+  check(finalWave.length === 6, `every final-wave event type was stored (${finalWave.map((x) => x.type).join(',')})`);
+  return `mystery sessions=${sessions} (v4=${perVersion['mystery-v4']} v3.1=${perVersion['mystery-v3.1']} finalized) finished=${finished} `
+    + `(negative v3.1=${negatives}) dnf=${dnf} (hp deaths=${curseDnf}, slurp=${slurpDnf}) rejected=${rejected} left-on-cards=${abandoned} `
     + `abandoned(superseded)=${superseded} case-scenarios=${scenarioCount} results-per-case: ${perCase} `
-    + `telemetry-events=${telemetry} forecasts: ${perTarget.map((x) => `${x.target}=${x.c}`).join(' ')}`;
+    + `telemetry-events=${telemetry} final-wave: ${finalWave.map((x) => `${x.type}=${x.c}`).join(' ')} `
+    + `forecasts: ${perTarget.map((x) => `${x.target}=${x.c}`).join(' ')}`;
 }
 
 type Rpc = (fn: string, args: unknown[], casts: string[]) => Promise<Record<string, any>>;
@@ -315,14 +396,14 @@ async function runCaseScenarios(
     const seed = hex();
     const actionId = `mcs_${n.toString().padStart(6, '0')}`;
     const body = { actionId, nickname: `Case${n}` };
-    const created = await rpc('mystery_create_session', [id, station, actionId, seed, body.nickname, computeOffer(seed), false, { body, actor }, versions, null], createCasts);
+    const created = await rpc('mystery_create_session', [id, station, actionId, seed, body.nickname, computeOffer(seed), false, { body, actor }, versions, null, MYSTERY_RULES_VERSION], createCasts);
     await db.query(`update public.mystery_sessions set created_at = created_at - interval '10 minutes' where id = $1`, [id]);
     check(created.ok === true, `case scenario #${n}: create ok`);
     const caseId = created.caseId as CaseId;
     const scenario = todo.get(caseId)!.shift();
     if (!scenario) continue; // this case is done; the next create draws another one
     const kase = resolveCase(caseId, created.caseVersion);
-    const ctx = rulesContext(seed, kase.caseDef, egg);
+    const ctx = rulesContext(seed, kase.caseDef, egg, PLAYER_MAX_HP, MYSTERY_RULES_VERSION);
     const card = (await db.query('select card from public.mystery_offered_duos where session_id = $1 order by slot limit 1', [id])).rows[0].card;
     check((await rpc('mystery_select_duo', [id, station, card.characterId, card.pokemonId, { body: {}, actor }], ['::uuid', '', '', '', '::jsonb'])).ok,
       `${caseId}/${scenario}: select`);
@@ -338,12 +419,13 @@ async function runCaseScenarios(
     evs.push({ type: 'egg_pickup', t: 60, seq: seq++ });
     evs.push({ type: 'egg_delivered', t, seq: seq++, tier, points: egg.points[tier], security: 100 });
     evs.push({ type: 'accusation', t, seq: seq++, suspectId: suspect, correct: true, cluesFound: 3, evidence: cited, deductionCorrect: true });
-    evs.push({ type: 'finish', t, seq: seq++, verdict: 'case_solved', score: scoreFor(egg.points[tier], t) });
+    evs.push({ type: 'finish', t, seq: seq++, verdict: 'case_solved',
+      score: scoreV4({ delivered: true, correct: true, cluesFound: 3, detections: 0, hintsUsed: 0, hits: 0, activeTimeS: round1(t) }).total });
     check(await append(id, station, evs) === null, `${caseId}/${scenario}: events accepted`);
     const r = await row(id);
     const ruleEvents = (await db.query(`select seq, t, type, payload from public.mystery_events where session_id = $1 and type in ${RULE_TYPES} order by seq`, [id]))
       .rows.map((e) => ({ seq: e.seq, t: Number(e.t), type: e.type, payload: e.payload }) as ParsedEvent);
-    const result = computeResult(applyBatch(initialProgress(), ruleEvents, ctx), kase, tier);
+    const result = computeResult(applyBatch(initialProgress(), ruleEvents, ctx), kase, tier, undefined, sessionRulesVersion(r.rules_version));
     const fin = await rpc('mystery_finalize_session', [id, station, r.last_seq, result, { body: { sessionId: id }, actor }], ['::uuid', '', '::int', '::jsonb', '::jsonb']);
     check(fin.ok && fin.replay === false, `${caseId}/${scenario}: finalize accepted (${fin.error ?? ''} ${fin.message ?? ''})`);
     const res = fin.result ?? {};

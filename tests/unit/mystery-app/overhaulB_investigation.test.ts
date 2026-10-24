@@ -1,6 +1,7 @@
 // Frontend B — Tab "Investigation" overlay + accusation (docs/overhaul/UX_OVERHAUL.md §4, §7; rulings R2, R3).
 // Pure view-model + static markup: secrecy (locked slots name candidate AREAS, never the drawn site), TL;DR copy guard,
 // the odds display rules (5 % largest remainder, facts as words, bands, exact source labels) and the R3 gate.
+import { caseWorld } from '../../../src/mystery/data/caseWorlds.ts';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -210,8 +211,10 @@ describe('the odds (display rules, UX §7)', () => {
     expect(html).toContain(`Case ${c.number} · ${esc(c.title)}`);
     expect((html.match(/data-testid="clue-/g) ?? []).length).toBe(3);
     // the case has Joseph Crackstone: toggle 4 + legend + "Will Crackstone see you?" (UX_ENEMIES §3 / §5)
-    for (const n of [1, 2, 3, 4]) expect(html).toContain(`data-testid="layer-${n}"`);
-    expect((html.match(/aria-pressed="true"/g) ?? []).length).toBe(4);
+    // UX_FINAL §1d: toggle 5 (Slurp) joins when the case world has Slurp
+    const toggles = c.id && caseWorld(c.id)?.slurp ? [1, 2, 3, 4, 5] : [1, 2, 3, 4];
+    for (const n of toggles) expect(html).toContain(`data-testid="layer-${n}"`);
+    expect((html.match(/aria-pressed="true"/g) ?? []).length).toBe(toggles.length);
     for (const id of ['hyde', 'egg', 'clues', 'tower', 'crack']) expect(html).toContain(`data-testid="odds-${id}"`);
     expect(html).toContain('Will Crackstone see you?');
     expect(html).toContain('data-testid="inv-legend"');

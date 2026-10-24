@@ -276,7 +276,8 @@ npx supabase db push --dry-run            # must list ONLY these migrations, in 
 #   20261021000800_mystery_realtime.sql
 #   20261022000100_mystery_cases.sql      <- three cases (case bag, evidence, column privileges)
 #   20261023000100_mystery_overhaul.sql   <- overhaul telemetry + forecast targets (§12.7)  [applied 2026-10-24]
-#   20261024000100_mystery_crackstone.sql <- Joseph Crackstone telemetry + curse rule event + crackstone_risk (§12.8)
+#   20261024000100_mystery_crackstone.sql <- Joseph Crackstone telemetry + curse rule event + crackstone_risk (§12.8)  [applied]
+#   20261025000100_mystery_v4.sql         <- final wave: rules mystery-v4, Galpin, director/Slurp/cabinet events, v4 views (§12.9)
 npx supabase db push
 # ALL mystery functions in ONE command (they share _shared/ and the deployed case versions; see §12.7 "Deploy order"):
 npx supabase functions deploy --use-api \
@@ -491,8 +492,8 @@ select target, count(*) from public.mystery_forecasts group by 1 order by 1;
 
 ### 12.8 Joseph Crackstone: second enemy (migration `20261024000100_mystery_crackstone.sql`, 2026-10-24)
 
-Contract: `docs/overhaul/ENEMY_CONTRACT.md` ("Server", rule R7). Rules version stays `mystery-v3.1`. **NOT DEPLOYED YET.**
-Applied to the repo from `docs/overhaul/drafts/backend/` (record + apply steps in its README).
+Contract: `docs/overhaul/ENEMY_CONTRACT.md` ("Server", rule R7). Rules version stays `mystery-v3.1`. **Deployed** to
+project `abkohhdjlufhsbqrchpn` (migration applied, mystery functions v2). Superseded for new sessions by §12.9.
 
 **What changes on the server**
 
@@ -536,6 +537,137 @@ select pg_get_constraintdef(oid) from pg_constraint where conname in ('mystery_e
 -- lists include crackstone_mode … curse and crackstone_risk
 select indexdef from pg_indexes where indexname = 'mystery_events_rule_idx';   -- ends with …, 'hint_requested', 'curse'
 ```
+
+### 12.9 Final wave: rules `mystery-v4` (migration `20261025000100_mystery_v4.sql`, 2026-10-24) — FINAL
+
+Contract: `docs/final/FINAL_CONTRACT.md` §1 (scoring v4), §2 (Galpin), §4 (director events), §10 (leaderboards).
+**NOT DEPLOYED YET — the owner runs the steps below.** Every new session is created as `mystery-v4`; v3.1 rows stay
+readable and verifiable, and no board ever mixes the two versions.
+
+**Migrations on the hosted project after this step** (in order; the first eleven are already applied):
+
+| # | Migration | Status |
+|---|---|---|
+| 1–4 | `20261021000100_core_schema` … `20261021000400_realtime` (v2.5) | applied |
+| 5–8 | `20261021000500_mystery_schema` … `20261021000800_mystery_realtime` | applied |
+| 9 | `20261022000100_mystery_cases` (three cases, case bag, column privileges) | applied |
+| 10 | `20261023000100_mystery_overhaul` (telemetry, forecast targets) | applied |
+| 11 | `20261024000100_mystery_crackstone` (Crackstone, `curse`) | applied |
+| 12 | **`20261025000100_mystery_v4`** (this section) | **to apply** |
+
+**What changes on the server**
+
+| Layer | Change |
+|---|---|
+| SQL CHECKs (strict supersets) | `rules_version in ('mystery-v3.1','mystery-v4')` on sessions + results; `mystery_results_accused_check` + `'galpin'` (`'isaac'` kept for v3.1 rows); `mystery_events_type_check` + `enemy_spawned`, `enemy_despawned`, `enemy_detected`, `enemy_hit`, `slurp_mode`, `cabinet`; `mystery_results_finished_check`: the v3.1 formula (`score = egg_points × 100 − active_time_s`) now binds v3.1 rows only. |
+| SQL index | `mystery_events_rule_idx` rebuilt with `enemy_detected`, `enemy_hit`. |
+| Forecast targets | `mystery_forecasts_target_check` + `slurp_risk` (rule-based P(Slurp finds the player); features `{enemy:'slurp', zone?, cell?}`) and `enemy_spawn` (director's exact spawn probability of an inactive enemy; features `{enemy, spawn, area}`); both probabilities (existing probability CHECK). `_shared/mystery-validation.ts` `FORECAST_TARGETS` gains both. |
+| `mystery_results` (additive, nullable, catalog-only) | `detections int`, `hits int`, `defeated_by text` (`hyde`/`crackstone`/`slurp`, DNF only), `score_breakdown jsonb`. New CHECKs: v4 rows need `detections`/`hits`; a breakdown exactly for v4 finishers; `mystery_results_v4_score_check` re-derives every part from the row's own columns (accusation ⇔ `correct`, clues ⇔ `clue_count`, noDetection ⇔ `detections`, noHints / hintPenalty ⇔ `hints_used`, hitPenalty ⇔ `hits`, timeBonus ⇔ `floor(active_time_s)`, total = max(0, sum), `score = total`). |
+| RPCs | `mystery_create_session` gains `p_rules_version text default 'mystery-v3.1'` (the 10-argument signature is dropped; callers that omit it — i.e. the previous function bundle — keep creating v3.1 sessions); replay envelope + response carry `rulesVersion`. `mystery_finalize_session` stores the four new columns and refuses a result whose `rulesVersion` differs from the session's (`INVALID_TRANSITION`). |
+| Views (new, `security_invoker`) | `mystery_leaderboard_v4`, `mystery_defeated_v4`, `mystery_standings_v4`, `mystery_top5`. The v3.1 views `mystery_leaderboard` / `mystery_defeated` / `mystery_standings` are untouched and stay v3.1-only. |
+| Grants | `SELECT` on the four views to `anon`, `authenticated`; column `SELECT` on `detections`, `hits`, `defeated_by`, `score_breakdown` of `mystery_results`. `accused`, `evidence`, `client_claim`, seeds, events, progress stay private. |
+| Realtime | unchanged (`mystery_results` is already published). |
+| `_shared/mystery-events.ts` | the six new types (schemas below); progress gains `detections`, `hits{hyde,crackstone,slurp}`, `hitHpLost`, `lastHitBy` (all in `ruleFingerprint`; older stored progress restores with zeros); `hint_requested` is now strict with optional `level`; `dnf` accepts optional `by`. |
+| `_shared/mystery-rules.ts` | `rulesContext(…, rulesVersion)`; `computeResult(…, rulesVersion)` picks the formula from the SESSION's `rules_version`; `RULES_VERSIONS`, `sessionRulesVersion()`. |
+| `_shared/mystery-validation.ts` | claim keys + `rulesVersion`, `hintsUsed`, `detections`, `hits`, `defeatedBy`, `scoreBreakdown` (numeric parts only). |
+| `_shared/mystery-db.ts` | result view + `detections`, `hits`, `defeatedBy`, `scoreBreakdown`; `loadRank` reads the board of the session's version. |
+| Functions | `mystery-create-session` passes `p_rules_version: MYSTERY_RULES_VERSION`; append / finalize validate + score under `row.rules_version`. |
+
+**Accepted event payloads** (rule events are strict = exact keys; telemetry tolerates ≤ 6 extra short primitives; ids
+`^[a-z][a-z0-9_]{0,39}$`; enemy ∈ `hyde|crackstone|slurp`):
+
+| `type` | kind | payload |
+|---|---|---|
+| `enemy_spawned` | telemetry | `{ enemy, spawnId: id, x, z: −1000..1000 }` |
+| `enemy_despawned` | telemetry | `{ enemy, reason: far\|cycle_done\|encounter_resolved }` |
+| `slurp_mode` | telemetry | `{ from, to: WANDER\|INVESTIGATE\|CHASE\|ATTACK\|SEARCH\|LEAVE, reason: saw_player\|sensed_player\|heard_noise\|lost_sight\|search_timeout\|reached_target\|attack_done\|stunned\|lured\|leash\|gave_up\|deferred }` |
+| `cabinet` | telemetry | `{ spotId: id, action: enter\|close\|open\|exit\|pulled_out, loud: boolean }` |
+| `enemy_detected` | **rule** | `{ enemy, via: sight\|sound\|proximity\|scan\|witnessed_hide }` → `detections + 1` |
+| `enemy_hit` | **rule** | `{ enemy, hpLost: 0..100, blocked: boolean }` → `hits + 1` (blocked hits count); `blocked ⇒ hpLost 0`; refused after the deposit; a Slurp hit adds `hpLost` to the HP accounting |
+| `hint_requested` | **rule** | `{ level?: 1\|2\|3 }` → `hints + 1` (only explicit Ask-Weems presses; Thing's advice is never this event) |
+| `dnf` | **rule** | `{ reason: second_catch\|hp_depleted, by?: enemy \| null }` — a non-null `by` must equal the enemy of the last `enemy_hit` |
+
+v4-only terminal check (at `finish` / `dnf`): `hits.hyde ≥ catches` and `hits.crackstone ≥ landed curses` — the sim emits
+`catch` → `enemy_hit {hyde}` and `curse {hit}` → `enemy_hit {crackstone}`, both **before** a `dnf`. Extra hits (Slurp,
+cabinet pull-outs) are fine. A v4 `hp_depleted` accepts either HP accounting (catch + curse + Slurp hits, or Σ
+`enemy_hit.hpLost`) reaching max HP.
+
+**`computeResult` for a `mystery-v4` session** (finishers = `egg_delivered` + accusation + `finish`):
+`scoreBreakdown = scoreV4({ delivered: true, correct: accused === server answer key's culprit, cluesFound: |validated
+clues of the session's case|, detections: #enemy_detected, hintsUsed: #hint_requested, hits: #enemy_hit, activeTimeS:
+round1(t of egg_delivered) })`, `score = scoreBreakdown.total` (≥ 0). DNF: `score` / `scoreBreakdown` null, counts kept,
+`defeatedBy = dnf.by ?? last enemy_hit's enemy`. Client claims (`finish.score`, RunResult `score`, `hintsUsed`,
+`detections`, `hits`, `defeatedBy`, `scoreBreakdown`, `rulesVersion`) only feed `claim_matches`. v3.1 sessions keep
+`score = round1(points × 100 − activeTimeS)` and store null v4 columns. Case content versions are 3 (`CASE_OUTDATED` for
+any session created under another version).
+
+**Home-page leaderboard (frontend B / fullstack)** — read with the anon key (dashboard) or a station JWT:
+
+```ts
+// top 5 verified v4 finishers (never test sessions, never DNFs), best first; ties share `rank`, exactly 5 rows max
+const { data } = await supabase.from('mystery_top5')
+  .select('rank, session_id, nickname, score, character_id, pokemon_id, case_id, active_time_s, finalized_at, rules_version');
+// live: listen for new verified results, then refetch the view (views are not Realtime sources)
+supabase.channel('home-top5')
+  .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mystery_results' }, () => refetch())
+  .subscribe();
+```
+
+| View | Columns |
+|---|---|
+| `mystery_top5` | `rank, session_id, nickname, score, character_id, pokemon_id, case_id, active_time_s, finalized_at, rules_version` |
+| `mystery_leaderboard_v4` | `rank, case_rank, session_id, nickname, station_id, case_id, case_version, character_id, pokemon_id, score, active_time_s, verdict, correct, deduction_correct, clue_count, hints_used, detections, hits, catches, score_breakdown, finalized_at, rules_version` |
+| `mystery_defeated_v4` | `session_id, nickname, station_id, case_id, case_version, character_id, pokemon_id, dnf_reason, defeated_by, active_time_s, clue_count, hints_used, detections, hits, catches, finalized_at, rules_version` (newest first) |
+| `mystery_standings_v4` | `standing_group (0 finisher / 1 DNF), rank, case_rank, session_id, nickname, station_id, case_id, case_version, character_id, pokemon_id, outcome, dnf_reason, defeated_by, score, active_time_s, verdict, correct, deduction_correct, clue_count, hints_used, detections, hits, catches, finalized_at, rules_version` |
+
+The Realtime INSERT payload of `mystery_results` carries only the client-readable columns (no `accused` / `evidence` /
+`client_claim`) and, through RLS, never a test row. `mystery-finalize` returns `rank` from `mystery_leaderboard_v4` for v4
+sessions. Function responses gain `result.detections`, `result.hits`, `result.defeatedBy`, `result.scoreBreakdown` and
+`session.progress.{hintsUsed, detections, hits}`.
+
+**Owner deploy plan** (between visitors; nobody plays across the switch):
+
+1. Pre-flight on the repo (after the game data / sim / scoring of the final wave have landed):
+   ```bash
+   npm run sync:shared
+   npm run typecheck:functions && npm run test:supabase-unit && npm run test:db:offline && npm run test:db:roundtrip
+   ```
+   All four must pass (`mystery-sim-contract.test.ts` proves the real sim's v4 streams verify and score identically).
+2. Close every session: let the current runs end, then operator → Reset station → `admin-reset` (scope `all`) for
+   `station_a` and `station_b` (§12.5); both rows of `mystery_station_status` must read `idle`. **No session may be open across steps 3–5**: an old
+   session is v3.1 at case version 2 and would answer `409 CASE_OUTDATED` under the new functions.
+3. Database: `npx supabase db push --dry-run` must list ONLY `20261025000100_mystery_v4.sql`; then `npx supabase db push`.
+   Harmless to the running v2 functions (they omit `p_rules_version` → v3.1 sessions; their results fit every CHECK).
+4. ALL mystery functions in ONE command (every one bundles `_shared/`):
+   ```bash
+   npx supabase functions deploy --use-api \
+     mystery-create-session mystery-get-session mystery-select-duo mystery-append-events mystery-finalize admin-reset
+   ```
+5. Frontend: `npm run build`, publish, then **hard-reload all three laptops** (Ctrl+Shift+R; kiosks + dashboard).
+6. Verify (SQL Editor), then play one short run per station:
+   ```sql
+   select pg_get_constraintdef(oid) from pg_constraint where conname in
+     ('mystery_sessions_rules_version_check', 'mystery_results_accused_check', 'mystery_events_type_check');
+   select indexdef from pg_indexes where indexname = 'mystery_events_rule_idx';      -- … 'curse', 'enemy_detected', 'enemy_hit'
+   select rules_version, case_version, status from public.mystery_sessions order by created_at desc limit 2;  -- mystery-v4, 3
+   select * from public.mystery_top5;                                                 -- the run just played (if it finished)
+   select session_id, score, hints_used, detections, hits, defeated_by, score_breakdown
+     from public.mystery_results order by finalized_at desc limit 2;
+   ```
+   Function logs: `mystery_finalized` lines carry `rulesVersion`, `hints`, `detections`, `hits`, `defeatedBy`;
+   `claimMatches:false` (warn) means the browser's breakdown differs from the server's (the server's number stands).
+
+**Wrong orders and what they cause.** v4 frontend + old functions: `enemy_*` / `slurp_mode` / `cabinet` and
+`hint_requested {level}` are `422 EVENT_REJECTED: type/payload` → every run "unverified". New functions before the
+migration: the create RPC call fails (`p_rules_version` unknown → 500) — so always `db push` first.
+
+**Rollback.** The migration is additive and needs no rollback (the old functions run against it unchanged). To return to
+the previous gameplay: reset both stations, redeploy the previous function bundle AND the previous frontend together
+(e.g. `git worktree add ../pd-prev c287cd6 && cd ../pd-prev && npm ci && npm run sync:shared &&
+npx supabase functions deploy --use-api mystery-create-session mystery-get-session mystery-select-duo mystery-append-events mystery-finalize admin-reset`),
+then hard-reload the laptops. v4 rows stay stored and visible in the v4 views; new sessions are v3.1 again (the RPC
+default) and land on the v3.1 boards. A v4 session still open during a rollback cannot be finalized by the old bundle
+(case version 3 vs 2 → `409 CASE_OUTDATED`) — that is why the reset comes first.
 
 ### 12.4 Client notes (live mystery client, 2026-10-21)
 - Routes: `/` = LOCAL DEMO (never touches the leaderboard); `/?mode=terminal&station=station_a|station_b` = live mystery

@@ -5,7 +5,7 @@ import type { CaseDef, ClueId, DnfReason, HydeMode, Objective, Verdict } from '.
 
 /** The exact tutorial sentence required by plan §7 / master prompt §5. */
 export const STAY_SILENT_LINE = THING_STAY_SILENT;
-export const HOME_TAGLINE = 'Stay Silent. Read the Clues. Escape the Hyde.';
+export const HOME_TAGLINE = 'Stay Silent. Read the Clues. Escape the monsters.';
 
 export interface SpokenLine { id: string; text: string; pose: ThingPose }
 

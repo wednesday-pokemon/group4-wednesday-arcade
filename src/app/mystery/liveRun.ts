@@ -1,4 +1,4 @@
-// LIVE station controller for "The Silent Evidence" (mystery-v3.1). Owns the verified session lifecycle of one kiosk:
+// LIVE station controller for "The Silent Evidence" (mystery-v4; v3.1 sessions stay readable). Owns the verified session lifecycle of one kiosk:
 //   restore (refresh / reconnect) → create (actionId persisted first) → select → per-run uploader → finalize,
 // plus the operator-reset watch, the ~2 s heartbeat for Laptop 1 and a tiny UI store (sync chip, verification state).
 // React-free (MysteryApp reads it through LiveStationHandle / LiveRunContext); integration-tested against the fake
@@ -23,7 +23,7 @@ import type { MysteryRunLike } from './runTypes.ts';
 type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null;
 
 export interface LiveControllerDeps {
-  services: Pick<MysteryStationServices, 'stationId' | 'api' | 'watch' | 'online'>;
+  services: Pick<MysteryStationServices, 'stationId' | 'api' | 'watch' | 'online'> & Partial<Pick<MysteryStationServices, 'leaderboard'>>;
   storage: Store;
   stationName: string;
   newActionId?: () => string;
@@ -59,6 +59,7 @@ function toData(env: MysterySessionEnvelope): LiveSessionData {
     nickname: s.nickname,
     status: s.status,
     lastSeq: s.lastSeq,
+    rulesVersion: s.rulesVersion,
   };
 }
 
@@ -128,6 +129,20 @@ export function heartbeatFrom(stationId: StationId, s: LiveStatus, sync: LiveUiS
     crackstoneChases: inRun ? a.crackstoneChases : null,
     crackstoneEscapes: inRun ? a.crackstoneEscapes : null,
     crackstoneRisk: inRun && a.crackstoneRisk !== null ? Math.round(a.crackstoneRisk * 100) / 100 : null,
+    // final: director presence, Slurp's public mode / chase / counts / rule-based risk, the rule-event tally, cabinet door
+    hydeActive: inRun ? a.enemies.hyde.active : null,
+    crackstoneActive: inRun && a.enemies.crackstone.present ? a.enemies.crackstone.active : null,
+    slurpPresent: a ? a.enemies.slurp.present : null,
+    slurpActive: inRun && a.enemies.slurp.present ? a.enemies.slurp.active : null,
+    slurpMode: inRun ? (a.enemies.slurp.mode as MysteryHeartbeat['slurpMode']) : null,
+    slurpChase: inRun && a.enemies.slurp.present ? a.slurpChase : null,
+    slurpChases: inRun && a.enemies.slurp.present ? a.slurpChases : null,
+    slurpEscapes: inRun && a.enemies.slurp.present ? a.slurpEscapes : null,
+    slurpRisk: inRun && a.slurpRisk !== null ? Math.round(a.slurpRisk * 100) / 100 : null,
+    hintsUsed: inRun ? a.hintsUsed : null,
+    detections: inRun ? a.detections : null,
+    hits: inRun ? a.hits : null,
+    cabinet: inRun ? a.cabinet : null,
   };
 }
 
@@ -309,6 +324,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
     stationId,
     stationName: deps.stationName,
     hooks,
+    ...(deps.services.leaderboard ? { leaderboard: { subscribe: (l: (s: unknown) => void) => deps.services.leaderboard!.subscribe(l) } } : {}),
 
     async restore(): Promise<LiveRestore> {
       const rec = readLiveSession(deps.storage, stationId);

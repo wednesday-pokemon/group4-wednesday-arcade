@@ -143,3 +143,79 @@ export function applyLayout(map: MapDef, pick: 'first' | 'second'): void {
   const e = world.eggSites[Math.min(idx, world.eggSites.length - 1)];
   map.eggSpawn = { x: e.x, z: e.z };
 }
+
+// ------------------------------------------------------------------------------------------------ compact play area (final)
+// Staging of the FINAL compact maps before / independently of the designer's playArea data: a ~60 x 66 m rectangle around Iago Tower with boundary
+// walls styled per case, four cabinets, a Slurp haunt, and the old island's things beyond the fence removed. Only applied when the real world has
+// no playArea (or with ?mock=1).
+const PLAY_RECT: Record<CaseId, { minX: number; maxX: number; minZ: number; maxZ: number }> = {
+  poisoned_archive: { minX: -6, maxX: 54, minZ: -62, maxZ: 6 },
+  crypt_last_witness: { minX: -46, maxX: 16, minZ: -62, maxZ: 10 },
+  midnight_signal: { minX: -4, maxX: 58, minZ: -62, maxZ: 4 },
+};
+
+export function applyMockPlayArea(map: MapDef, caseId: CaseId): void {
+  const r = PLAY_RECT[caseId];
+  const world = map.world!;
+  const inside = (x: number, z: number, pad = 0): boolean => x >= r.minX - pad && x <= r.maxX + pad && z >= r.minZ - pad && z <= r.maxZ + pad;
+  const theme = world.theme;
+  map.bounds = { ...r };
+  const cx = (r.minX + r.maxX) / 2;
+  const st = ({ poisoned_archive: [6, -2], crypt_last_witness: [-12, 4], midnight_signal: [24, -2] } as Record<CaseId, [number, number]>)[caseId];
+  map.playerStart = { x: st[0], z: st[1], yaw: 0 };
+  // boundary walls
+  const kind: WallDef['kind'] = theme === 'archive' ? 'hedge' : theme === 'crypt' ? 'ruin' : 'fence';
+  const word = theme === 'archive' ? 'hedge' : theme === 'crypt' ? 'rubble' : 'fence';
+  const t = theme === 'archive' ? 1.4 : theme === 'crypt' ? 1.6 : 0.35;
+  const h = theme === 'signal' ? 2.4 : 2.6;
+  const bw: WallDef[] = [
+    w(`pa_bound_${word}_n`, r.minX, r.minZ, r.maxX, r.minZ, t, h, kind), w(`pa_bound_${word}_s`, r.minX, r.maxZ, r.maxX, r.maxZ, t, h, kind),
+    w(`pa_bound_${word}_w`, r.minX, r.minZ, r.minX, r.maxZ, t, h, kind), w(`pa_bound_${word}_e`, r.maxX, r.minZ, r.maxX, r.maxZ, t, h, kind),
+  ];
+  map.walls = map.walls.filter((q) => inside(q.a.x, q.a.z, 1) && inside(q.b.x, q.b.z, 1)).concat(bw);
+  map.cover = map.cover.filter((c) => inside(c.x, c.z));
+  map.hidingSpots = map.hidingSpots.filter((q) => inside(q.x, q.z) && q.kind !== 'cabinet');
+  map.landmarks = map.landmarks.filter((l) => inside(l.x, l.z, 4) || l.kind === 'iago_tower');
+  // four cabinets, doors facing the middle of the area
+  const spots: [string, number, number][] = [
+    ['cab_a', r.minX + 5, r.maxZ - 16], ['cab_b', r.maxX - 5, r.maxZ - 22], ['cab_c', r.minX + 6, r.minZ + 22], ['cab_d', r.maxX - 6, r.minZ + 16],
+  ];
+  for (const [id, x, z] of spots) {
+    const toward = Math.atan2(-(cx - x), -(((r.minZ + r.maxZ) / 2) - z));
+    map.hidingSpots.push({ id, x, z, radius: 0.7, revealM: 2, kind: 'cabinet', doorYaw: toward });
+  }
+  // sites: two per clue, one egg trio, all inside
+  const pos = [[cx - 14, r.maxZ - 26], [cx + 14, r.maxZ - 30], [cx - 12, r.minZ + 28], [cx + 12, r.minZ + 24], [cx - 4, (r.minZ + r.maxZ) / 2], [cx + 6, (r.minZ + r.maxZ) / 2 + 6]];
+  const props: SiteDef['prop'][] = theme === 'archive' ? ['desk', 'cabinet', 'shelf', 'planter', 'desk', 'cabinet'] : theme === 'crypt' ? ['workbench', 'crate', 'locker', 'sarcophagus', 'crate', 'workbench'] : ['desk', 'locker', 'console', 'crate', 'console', 'desk'];
+  const roomOf = (x: number, z: number): SiteDef['roomId'] => (map.rooms.find((q) => q.id !== 'path' && q.polygon.length && pointIn(q.polygon, x, z))?.id ?? 'path');
+  world.clueSites.forEach((g, gi) => {
+    g.sites = [0, 1].map((k) => {
+      const [x, z] = pos[gi * 2 + k];
+      return site(`s_${g.clueId}_${k}`, world.areas[0].id, roomOf(x, z), x, z, 0.5, `Site ${gi * 2 + k}`, props[gi * 2 + k]);
+    });
+  });
+  world.eggSites = [0, 1, 2].map((k) => {
+    const [x, z] = pos[(k + 2) % 6];
+    return egg(`e_${k}`, world.areas[0].id, roomOf(x + 1.5, z + 1.5), x + 1.5, z + 1.5, k === 0 ? 0.5 : k === 1 ? 0.3 : 0.2, `Nest ${k}`, 'nest');
+  });
+  world.examines = world.examines.filter((q) => inside(q.x, q.z));
+  world.hazards = world.hazards.filter((q) => (q.kind === 'noisy_floor' ? q.polygon.every((p) => inside(p.x, p.z)) : inside(q.x, q.z)));
+  world.extraWalls = world.extraWalls.filter((q) => inside(q.a.x, q.a.z) && inside(q.b.x, q.b.z)).concat(bw);
+  world.extraCover = world.extraCover.filter((c) => inside(c.x, c.z));
+  if (world.passage && !map.walls.some((q) => q.id === world.passage!.wallId)) world.passage = null;
+  world.playArea = { bounds: { ...r }, playerStart: map.playerStart, hydePatrol: [], safeReleasePoints: [], practicePoint: { x: st[0], z: st[1] - 4 } };
+  world.slurp = { areaName: 'The grounds', wander: [{ x: cx - 10, z: (r.minZ + r.maxZ) / 2 }, { x: cx + 10, z: (r.minZ + r.maxZ) / 2 + 8 }], leashM: 30 };
+  map.clues = world.clueSites.map((g) => ({ clueId: g.clueId as ClueId, roomId: g.sites[0].roomId, x: g.sites[0].x, z: g.sites[0].z, searchS: g.searchS }));
+  map.eggSpawn = { x: world.eggSites[0].x, z: world.eggSites[0].z };
+  map.tower = { x: 8, z: -51.5, radius: 3 };
+  map.patrol = [v(cx - 15, r.maxZ - 12), v(cx + 15, r.maxZ - 12), v(cx + 15, r.minZ + 14), v(cx - 15, r.minZ + 14)];
+}
+
+function pointIn(poly: Vec2[], x: number, z: number): boolean {
+  let ins = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i], b = poly[j];
+    if (a.z > z !== b.z > z && x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) ins = !ins;
+  }
+  return ins;
+}

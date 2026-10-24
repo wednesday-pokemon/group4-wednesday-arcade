@@ -28,7 +28,7 @@
 //
 //   <MapCanvas frame={() => ({ view, layers, opts }) } fps={30} />   (./MapCanvas.tsx) — React wrapper.
 // ===============================================================================================================
-import type { Vec2 } from '../../../mystery/types.ts';
+import type { EnemyId, Vec2 } from '../../../mystery/types.ts';
 import type { MapGeometry, MapLabel, MapLayers } from './mapData.ts';
 
 export interface MapView {
@@ -40,8 +40,12 @@ export interface MapView {
 }
 
 export interface DrawOptions {
-  /** `crack` (Tab toggle 4: Crackstone stipple + cursed area) defaults to on. */
-  layers: { zones: boolean; egg: boolean; clues: boolean; crack?: boolean };
+  /**
+   * `crack` (Tab toggle 4: Crackstone stipple + cursed area) and `slurp` (toggle 5: Slurp's cells) default to on.
+   * Minimap danger view (UX_FINAL §1d): `crackRisk` alone switches his stipple (the cursed area is always drawn) and
+   * `pins` restricts the "may appear" pins to those monsters (default: each pin follows its monster's layer).
+   */
+  layers: { zones: boolean; egg: boolean; clues: boolean; crack?: boolean; slurp?: boolean; crackRisk?: boolean; pins?: readonly EnemyId[] };
   showPredictions: boolean;
   labelBudget: number;
   highContrast: boolean;
@@ -113,23 +117,27 @@ export interface MapPalette {
   predict: string; stealth: string; bg: string; frame: string;
   /** Joseph Crackstone (UX_ENEMIES §0): witch-light green. */
   crack: string; crackText: string;
+  /** Slurp (UX_FINAL §0): orchid; cabinets #9cc3d0; Principal Weems' pale ice. */
+  slurp: string; slurpText: string; cabinet: string; weems: string;
   fills: boolean;
 }
 
 export const MAP_PALETTE: MapPalette = {
   void: '#070a14', ground: '#121733', room: '#1b2046', roomEdge: '#2e3366', wall: '#6b6aa8', cliff: '#2e3366', hedge: '#4d6a73',
   hyde: '#e5484d', hydeText: '#ff8a8a', lantern: '#f5b04c', violet: '#b3a8ff', ivory: '#efe6cc', text: '#f3ecdc', text2: '#d4cbb5',
-  muted: '#a49fbf', predict: '#5cc0e6', stealth: '#9cc3d0', bg: '#0b1020', frame: '#6b6aa8', crack: '#a8e063', crackText: '#c4ef8a', fills: true,
+  muted: '#a49fbf', predict: '#5cc0e6', stealth: '#9cc3d0', bg: '#0b1020', frame: '#6b6aa8', crack: '#a8e063', crackText: '#c4ef8a',
+  slurp: '#d77be0', slurpText: '#eeb0f3', cabinet: '#9cc3d0', weems: '#cfe0ff', fills: true,
 };
 
 /** High contrast (§11): fills off, walls 2 px white, zones hatch-only + white edges, cyan → #8fe3ff. */
 export const MAP_PALETTE_HC: MapPalette = {
   ...MAP_PALETTE, void: '#000', ground: '#000', room: '#000', roomEdge: '#fff', wall: '#fff', cliff: '#fff', hedge: '#fff',
-  violet: '#d9d2ff', lantern: '#ffc766', predict: '#8fe3ff', muted: '#e6e6e6', text: '#fff', text2: '#fff', frame: '#fff', crack: '#c8ff80', crackText: '#e0ffb8', fills: false,
+  violet: '#d9d2ff', lantern: '#ffc766', predict: '#8fe3ff', muted: '#e6e6e6', text: '#fff', text2: '#fff', frame: '#fff', crack: '#c8ff80', crackText: '#e0ffb8',
+  slurp: '#f0a8f5', slurpText: '#ffd6ff', weems: '#fff', fills: false,
 };
 
 const LABEL_COLOR = (pal: MapPalette): Record<MapLabel['color'], string> => ({
-  lantern: pal.lantern, violet: pal.violet, ivory: pal.ivory, hyde: pal.hydeText, muted: pal.muted, text: pal.text, crack: pal.crackText,
+  lantern: pal.lantern, violet: pal.violet, ivory: pal.ivory, hyde: pal.hydeText, muted: pal.muted, text: pal.text, crack: pal.crackText, slurp: pal.slurpText,
 });
 
 // ------------------------------------------------------------------------------------------------- text widths
@@ -593,6 +601,138 @@ export function hat(ctx: CanvasRenderingContext2D, x: number, y: number, s: numb
   ctx.restore();
 }
 
+/** Slurp's glyph (UX_FINAL §0 `slurp` icon): drooping head + two eyes + a slack mouth + drips; filled or outline. */
+export function slurpGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, filled: boolean, color: string): void {
+  ctx.save();
+  ctx.translate(x - s / 2, y - s / 2);
+  const u = s / 24;
+  ctx.scale(u, u);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  const head = () => {
+    ctx.beginPath();
+    ctx.moveTo(6, 10);
+    ctx.arc(12, 10, 6, Math.PI, 0);
+    ctx.lineTo(18, 14);
+    ctx.quadraticCurveTo(18, 17, 15, 17);
+    ctx.lineTo(9, 17);
+    ctx.quadraticCurveTo(6, 17, 6, 14);
+    ctx.closePath();
+  };
+  head();
+  ctx.strokeStyle = '#0b1020';
+  ctx.lineWidth = 3.5 / Math.max(0.5, u);
+  ctx.stroke();
+  head();
+  if (filled) {
+    ctx.fillStyle = color;
+    ctx.fill();
+  } else {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  ctx.strokeStyle = filled ? '#0b1020' : color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(9.5, 10);
+  ctx.lineTo(9.6, 10);
+  ctx.moveTo(14.5, 10);
+  ctx.lineTo(14.6, 10);
+  ctx.moveTo(9.5, 14);
+  ctx.quadraticCurveTo(12, 12.6, 14.5, 14);
+  ctx.stroke();
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(10, 17);
+  ctx.lineTo(10, 20);
+  ctx.moveTo(14, 17);
+  ctx.lineTo(14, 19);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Cabinet glyph (UX_FINAL §0 `cabinet` icon): tall box, base line, three slats. */
+export function cabinetGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, color: string): void {
+  ctx.save();
+  ctx.translate(x - s / 2, y - s / 2);
+  const u = s / 24;
+  ctx.scale(u, u);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.fillStyle = 'rgba(11,16,32,0.85)';
+  ctx.fillRect(5, 3, 14, 18);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(5, 21);
+  ctx.lineTo(5, 3);
+  ctx.lineTo(19, 3);
+  ctx.lineTo(19, 21);
+  ctx.moveTo(3, 21);
+  ctx.lineTo(21, 21);
+  ctx.moveTo(9, 7);
+  ctx.lineTo(15, 7);
+  ctx.moveTo(9, 10);
+  ctx.lineTo(15, 10);
+  ctx.moveTo(9, 13);
+  ctx.lineTo(15, 13);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** A small ghost (Principal Weems' map mark). */
+export function ghostGlyph(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, color: string): void {
+  ctx.save();
+  ctx.translate(x - s / 2, y - s / 2);
+  const u = s / 24;
+  ctx.scale(u, u);
+  ctx.beginPath();
+  ctx.moveTo(4, 22);
+  ctx.lineTo(4, 10);
+  ctx.arc(12, 10, 8, Math.PI, 0);
+  ctx.lineTo(20, 22);
+  ctx.lineTo(17, 19);
+  ctx.lineTo(14.5, 21.5);
+  ctx.lineTo(12, 19);
+  ctx.lineTo(9.5, 21.5);
+  ctx.lineTo(7, 19);
+  ctx.closePath();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#0b1020';
+  ctx.fillRect(8.5, 9, 2, 2);
+  ctx.fillRect(13.5, 9, 2, 2);
+  ctx.restore();
+}
+
+/** 0° (horizontal) line hatch — Slurp's texture — screen-aligned, spacing in CSS px. Cached per ctx. */
+const LHATCH = new WeakMap<object, Map<string, CanvasPattern | null>>();
+export function lineHatch(ctx: CanvasRenderingContext2D, spacing: number, color: string, dpr: number): CanvasPattern | null {
+  let m = LHATCH.get(ctx);
+  if (!m) {
+    m = new Map();
+    LHATCH.set(ctx, m);
+  }
+  const key = `${spacing}|${color}|${dpr}`;
+  if (m.has(key)) return m.get(key)!;
+  const s = Math.max(2, Math.round(spacing * dpr));
+  const cv = makeCanvas(s, s);
+  const c2 = cv?.getContext('2d') as Ctx2D | null | undefined;
+  let pat: CanvasPattern | null = null;
+  if (cv && c2) {
+    c2.fillStyle = color;
+    c2.fillRect(0, 0, s, Math.max(1, Math.round(dpr)));
+    pat = ctx.createPattern(cv as CanvasImageSource, 'repeat');
+    if (pat && dpr !== 1 && typeof DOMMatrix !== 'undefined') pat.setTransform(new DOMMatrix([1 / dpr, 0, 0, 1 / dpr, 0, 0]));
+  }
+  m.set(key, pat);
+  return pat;
+}
+
 /** Inset a convex polygon by `d` (same units), keeping its orientation; falls back to the input when degenerate. */
 export function insetPolygon(poly: readonly Vec2[], d: number): Vec2[] {
   const n = poly.length;
@@ -771,7 +911,10 @@ export function drawMap(ctx: CanvasRenderingContext2D, v: MapView, L: MapLayers,
   // 3b: Crackstone risk (rule-based) — dot stipple in crack green, r 1.5 px, spacing 8 / 5 / 3 px by p band, dot α
   //     .5 + .4p, tint α ≤ .10; dots over the Hyde's hatch read as "both" in greyscale. One path + fill per band.
   const crackOn = o.layers.crack !== false;
-  if (L.crack && o.showPredictions && crackOn && L.crack.risk.length) {
+  const crackRiskOn = o.layers.crackRisk ?? crackOn;
+  const slurpOn = o.layers.slurp !== false;
+  const pinOn = (e: EnemyId) => (o.layers.pins ? o.layers.pins.includes(e) : e === 'hyde' ? o.layers.zones : e === 'crackstone' ? crackOn : slurpOn);
+  if (L.crack && o.showPredictions && crackRiskOn && L.crack.risk.length) {
     const rad = Math.min(W, H) / 2;
     for (const band of [0, 1, 2] as const) {
       const cells = L.crack.risk.filter((c) => c.band === band);
@@ -800,6 +943,57 @@ export function drawMap(ctx: CanvasRenderingContext2D, v: MapView, L: MapLayers,
           ctx.fill();
         }
         const pat = stipple(ctx, band === 0 ? 8 : band === 1 ? 5 : 3, pal.crack);
+        if (pat) {
+          ctx.globalAlpha = 0.5 + 0.4 * pm;
+          ctx.fillStyle = pat;
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  }
+
+  // 3c: Slurp risk (rule-based, UX_FINAL §1d) — orchid 0° LINE hatch 10 / 6 / 3 px by band, line α .5 + .4p, tint α ≤ .10
+  //     (shape differs from the Hyde's 45° hatch and Crackstone's dots in greyscale). Cells, or his zones as a fallback.
+  if (L.slurp && o.showPredictions && slurpOn && (L.slurp.risk.length || L.slurp.zones.length)) {
+    const rad = Math.min(W, H) / 2;
+    for (const band of [0, 1, 2] as const) {
+      ctx.save();
+      screenSpace(ctx, dpr);
+      ctx.beginPath();
+      let pSum = 0;
+      let drawn = 0;
+      for (const c of L.slurp.risk) {
+        if (c.band !== band) continue;
+        const mid = sp(c);
+        const reach = c.sizeM * v.pxPerM;
+        if (v.shape === 'circle' ? Math.hypot(mid.x - W / 2, mid.y - H / 2) > rad + reach : !inView(v, mid, -reach)) continue;
+        const h = c.sizeM / 2;
+        const corners = [sp({ x: c.x - h, z: c.z - h }), sp({ x: c.x + h, z: c.z - h }), sp({ x: c.x + h, z: c.z + h }), sp({ x: c.x - h, z: c.z + h })];
+        corners.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
+        ctx.closePath();
+        pSum += c.p;
+        drawn++;
+      }
+      for (const z of L.slurp.zones) {
+        if (z.band !== band) continue;
+        z.polygon.forEach((pt, i) => {
+          const q = sp(pt);
+          if (i) ctx.lineTo(q.x, q.y);
+          else ctx.moveTo(q.x, q.y);
+        });
+        ctx.closePath();
+        pSum += z.p;
+        drawn++;
+      }
+      if (drawn) {
+        const pm = pSum / drawn;
+        if (pal.fills) {
+          ctx.globalAlpha = Math.min(0.1, 0.04 + 0.08 * pm);
+          ctx.fillStyle = pal.slurp;
+          ctx.fill();
+        }
+        const pat = lineHatch(ctx, band === 0 ? 10 : band === 1 ? 6 : 3, pal.slurp, dpr);
         if (pat) {
           ctx.globalAlpha = 0.5 + 0.4 * pm;
           ctx.fillStyle = pat;
@@ -1023,7 +1217,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, v: MapView, L: MapLayers,
     ctx.restore();
   }
 
-  // 10: hiding spots — 12 px eye-closed glyph, stealth blue α.8
+  // 10: hiding spots — 12 px eye-closed glyph, stealth blue α.8; cabinets: the `cabinet` glyph 12 px #9cc3d0 (always)
   screenSpace(ctx, dpr);
   ctx.save();
   ctx.globalAlpha = 0.8;
@@ -1031,7 +1225,36 @@ export function drawMap(ctx: CanvasRenderingContext2D, v: MapView, L: MapLayers,
     const q = sp(h);
     if (inView(v, q, -12)) eyeClosed(ctx, q.x, q.y, 12 * G, pal.stealth);
   }
+  ctx.globalAlpha = 0.95;
+  for (const c of L.cabinets) {
+    const q = sp(c);
+    if (inView(v, q, -12)) cabinetGlyph(ctx, q.x, q.y, 12 * G, pal.cabinet);
+  }
   ctx.restore();
+  // 10b: "may appear" pins (UX_FINAL §1d) — outline enemy glyph; the % is a label
+  if (o.showPredictions) {
+    for (const pin of L.pins) {
+      if (!pinOn(pin.enemy)) continue;
+      const q = sp(pin);
+      if (!inView(v, q, -10)) continue;
+      ctx.save();
+      ctx.globalAlpha = 0.6 + 0.4 * Math.min(1, pin.p * 2);
+      ctx.fillStyle = pal.bg;
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, 8 * G, 0, Math.PI * 2);
+      ctx.fill();
+      const col = pin.enemy === 'hyde' ? pal.hyde : pin.enemy === 'crackstone' ? pal.crack : pal.slurp;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 2]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (pin.enemy === 'hyde') claw(ctx, q.x, q.y, 10 * G, false, col);
+      else if (pin.enemy === 'crackstone') hat(ctx, q.x, q.y, 11 * G, false, col);
+      else slurpGlyph(ctx, q.x, q.y, 11 * G, false, col);
+      ctx.restore();
+    }
+  }
   if (L.lever) {
     const q = sp(L.lever);
     lever(ctx, q.x, q.y, 13 * G, pal.lantern);
@@ -1172,6 +1395,25 @@ export function drawMap(ctx: CanvasRenderingContext2D, v: MapView, L: MapLayers,
     ctx.restore();
   }
 
+  // 13c: Slurp — filled orchid glyph ONLY per R4 (visible / chase / attack / revealed)
+  if (L.slurp?.marker) {
+    const q = sp(L.slurp.marker);
+    ctx.save();
+    screenSpace(ctx, dpr);
+    slurpGlyph(ctx, q.x, q.y, 15 * G, true, pal.slurp);
+    ctx.restore();
+  }
+  // 13d: Principal Weems' L2 mark — a 10 px ghost glyph in pale ice beside the lantern diamond
+  if (L.weemsMark) {
+    const q = sp(L.weemsMark);
+    if (inView(v, q, 6)) {
+      ctx.save();
+      screenSpace(ctx, dpr);
+      ghostGlyph(ctx, q.x + 11 * G, q.y - 9 * G, 10 * G, pal.weems);
+      ctx.restore();
+    }
+  }
+
   // 14: player — ivory arrow + 60° view cone (α.12, 40 px) + noise ring (hearing radius × px/m)
   {
     const pl = L.player;
@@ -1282,12 +1524,18 @@ export function drawMap(ctx: CanvasRenderingContext2D, v: MapView, L: MapLayers,
       placed.push({ x: q.x - r, y: q.y - r, w: 2 * r, h: 2 * r });
     };
     keepFree(L.player, 9 * G);
+    if (L.slurp?.marker) keepFree(L.slurp.marker, 9 * G);
     if (L.hyde && L.hyde.kind !== 'last') keepFree(L.hyde, 9 * G);
     if (L.crack?.marker && L.crack.marker.kind !== 'last') keepFree(L.crack.marker, 9 * G);
     const font = labelFont(fontPx);
     const sorted = [...L.labels]
-      .filter((lb) => (lb.id?.startsWith('crack:') ? crackOn && (lb.id !== 'crack:here' || o.showPredictions) : lb.priority !== 3 || (o.showPredictions && o.layers.zones))
-        && (!lb.id?.startsWith('egg:') || o.layers.egg) && (!lb.id?.startsWith('area:') || o.layers.clues))
+      .filter((lb) => {
+        const id = lb.id ?? '';
+        if (id.startsWith('pin:')) return o.showPredictions && pinOn(id.split(':')[1] as EnemyId);
+        if (id.startsWith('slurp:')) return o.showPredictions && slurpOn;
+        if (id.startsWith('crack:')) return crackOn && (id !== 'crack:here' || (o.showPredictions && crackRiskOn));
+        return (lb.priority !== 3 || (o.showPredictions && o.layers.zones)) && (!id.startsWith('egg:') || o.layers.egg) && (!id.startsWith('area:') || o.layers.clues);
+      })
       .sort((a, b) => a.priority - b.priority);
     let used = 0;
     for (const lb of sorted) {
@@ -1323,6 +1571,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, v: MapView, L: MapLayers,
       if (!box) continue;
       const color = isHi(lb.id ?? '') ? pal.lantern : colors[lb.color];
       if (lb.glyph === 'hat') hat(ctx, q.x - w / 2 + glyphW / 2, y, fontPx * 0.9, true, pal.crack);
+      else if (lb.glyph === 'slurp') slurpGlyph(ctx, q.x - w / 2 + glyphW / 2, y, fontPx * 0.9, true, pal.slurp);
       label(ctx, text, q.x + glyphW / 2, y, color, fontPx, pal, dpr);
       placed.push(box);
       used++;
@@ -1338,10 +1587,14 @@ export function drawMap(ctx: CanvasRenderingContext2D, v: MapView, L: MapLayers,
     const r = Math.min(W, H) / 2;
     ctx.lineWidth = 2;
     const crackChase = !L.chase && !!L.crack?.chase;
-    ctx.strokeStyle = L.chase ? pal.hyde : crackChase ? pal.crack : pal.frame;
+    const slurpChase = !L.chase && !crackChase && !!L.slurp?.chase;
+    ctx.strokeStyle = L.chase ? pal.hyde : crackChase ? pal.crack : slurpChase ? pal.slurp : pal.frame;
+    // Slurp CHASE → a 2 px DASHED orchid rim (UX_FINAL §1a)
+    if (slurpChase) ctx.setLineDash([6, 4]);
     ctx.beginPath();
     ctx.arc(W / 2, H / 2, r - 1, 0, Math.PI * 2);
     ctx.stroke();
+    ctx.setLineDash([]);
     if (crackChase) {
       // 15: Crackstone CHASE / ATTACK → a 2 px DOUBLE crack ring (shape differs from the Hyde's single red rim)
       ctx.beginPath();

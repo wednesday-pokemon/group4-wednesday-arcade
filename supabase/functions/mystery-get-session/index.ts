@@ -1,4 +1,4 @@
-// POST /functions/v1/mystery-get-session   (station account)   rules mystery-v3.1
+// POST /functions/v1/mystery-get-session   (station account)   rules mystery-v4 (v3.1 sessions keep v3.1 rules)
 // body: { sessionId? }
 // 200 -> MysterySessionEnvelope { session, offer, result } of that session (own station only; other stations' ids 404),
 //        or of the station's OPEN (offered/playing) session when sessionId is omitted;

@@ -5,7 +5,8 @@
 // Pure functions over an injected Storage so they are unit-testable. Never stores seeds or who was accused.
 import { thinForUpload } from '../../mystery/analytics/telemetry.ts';
 import type { SessionRecord } from '../../mystery/analytics/types.ts';
-import type { CaseId, CrackstoneMode, Duo, HydeMode } from '../../mystery/types.ts';
+import type { CaseId, CrackstoneMode, Duo, HydeMode, MysteryRulesVersion } from '../../mystery/types.ts';
+import { MYSTERY_RULES_VERSION } from '../../mystery/types.ts';
 
 export const RECORDS_KEY = 'raven.mystery.records';
 export const LIVE_KEY = 'raven.mystery.live';
@@ -18,6 +19,8 @@ export interface StoredRecord {
   nickname: string;
   stationId: string;
   endedAt: string;
+  /** Scoring rules the run was played under (mystery-v4 boards never mix versions). Absent on older records. */
+  rulesVersion?: MysteryRulesVersion;
 }
 
 export function loadRecords(storage: Store): StoredRecord[] {
@@ -39,7 +42,9 @@ export function compactRecord(r: SessionRecord): SessionRecord {
 
 /** Adds (or replaces, by sessionId) a record, keeping the newest MAX_RECORDS. Shrinks further if the quota is hit. */
 export function appendRecord(storage: Store, rec: StoredRecord, max = MAX_RECORDS): StoredRecord[] {
-  const next = [...loadRecords(storage).filter((r) => r.record.sessionId !== rec.record.sessionId), { ...rec, record: compactRecord(rec.record) }].slice(-max);
+  // keep the rules version on the stored record (explicit, else the result's, else the current rules)
+  const rulesVersion = rec.rulesVersion ?? (rec.record.result as { rulesVersion?: MysteryRulesVersion } | null | undefined)?.rulesVersion ?? MYSTERY_RULES_VERSION;
+  const next = [...loadRecords(storage).filter((r) => r.record.sessionId !== rec.record.sessionId), { ...rec, rulesVersion, record: compactRecord(rec.record) }].slice(-max);
   let keep = next;
   for (;;) {
     try {

@@ -1,7 +1,7 @@
 // "The Silent Evidence" renderer: a night-time gothic island walked in third person. Reads only the public state of a
 // RenderableMysteryRun (MysteryRun satisfies it) and never changes gameplay. Everything is drawn from the MapDef.
 import * as THREE from 'three';
-import type { ClueId, CrackstoneMode, Duo, HydeMode, MapDef, StampedEvent, Vec2 } from '../../mystery/types.ts';
+import type { ClueId, CrackstoneMode, CrackstoneRuntime, Duo, EnemyId, HydeMode, HydeRuntime, MapDef, SlurpMode, SlurpRuntime, StampedEvent, Vec2 } from '../../mystery/types.ts';
 import { ParticlePool } from '../particles.ts';
 import { createSkyMaterial, createWaterMaterial, srgbVec } from '../shaders.ts';
 import { clamp, damp, lerp, makeGlowTexture, mulberry32, smoothstep } from '../util.ts';
@@ -11,6 +11,9 @@ import { Avatar, Companion, type Stance } from './characters.ts';
 import { PAL, angleLerp, distPointSeg, eggHex, fwdOf, makeBlobTexture, makeGlyphTexture, wrapAngle, yawOf } from './common.ts';
 import { HydeBiped } from './hydeBeast.ts';
 import { CRACK_GREEN, CRACK_GREEN_HI, CrackstoneRig } from './crackstone.ts';
+import { SLURP_GLOW, SLURP_MIST, SlurpRig } from './slurp.ts';
+import { CAB, CabinetSet, clampLook } from './cabinets.ts';
+import { DeathCutscene, type DeathOptions, type DeathStage } from './deathCutscene.ts';
 import { Telegraph } from './telegraph.ts';
 import { EggRig } from './items.ts';
 import { createOverlay } from './overlay.ts';
@@ -24,6 +27,7 @@ import { SearchlightSet, type SearchlightDef } from './hazards.ts';
 import { Lightning, RainField, patchSkyShader } from './weather.ts';
 
 export type { MysterySceneOptions } from './types.ts';
+export type { DeathCue, DeathOptions } from './deathCutscene.ts';
 
 const FOG_COLOR = 0x10152e;
 const BASE_FOV = 62;
@@ -121,6 +125,8 @@ export class MysteryScene {
   private baseVFov = BASE_FOV;
   private cameraReady = false;
   private get camReady(): boolean { return this.cameraReady; }
+  /** compact maps are thinner in fog (the whole play area and its landmarks read at a glance) */
+  private get fogK(): number { return this.map.world?.playArea && !this.showcase ? 0.9 : 1; }
   private hydeFade = 0;
   private assistK = 0;
   private assistSide = 1;
@@ -162,6 +168,57 @@ export class MysteryScene {
   private scanStamp = -99;
   private readonly alertQc: THREE.Sprite;
   private readonly alertXc: THREE.Sprite;
+  // ---- Slurp (final): lazily built when the run has one
+  private slurp: SlurpRig | null = null;
+  private slurpShown = false;
+  private slurpK = 0;
+  private slurpWas: boolean | null = null;
+  private slurpAnchor = { x: 0, z: 0, yaw: 0 };
+  private slurpOnScreen = false;
+  private slurpSpeedSm = 0;
+  private slurpModePrev: SlurpMode = 'WANDER';
+  private slurpAlertT = 0;
+  private slurpFade = 0;
+  private slurpDrip = 0;
+  private slurpEdge = { x: 0, y: 0 };
+  private readonly slurpNdc = new THREE.Vector3();
+  private slurpMix = 0;
+  private readonly alertQs: THREE.Sprite;
+  private readonly alertXs: THREE.Sprite;
+  // ---- encounter director: per-enemy presence driven by enemy_spawned / enemy_despawned (and run.enemyActive when the sim has it)
+  private forced: Record<EnemyId, 'none' | 'present' | 'absent'> = { hyde: 'none', crackstone: 'none', slurp: 'none' };
+  private hydeAnchor = { x: 0, z: 0, yaw: 0 };
+  private crackK = 1;
+  private crackWas: boolean | null = null;
+  private crackAnchor = { x: 0, z: 0, yaw: 0 };
+  private emergeStamp = -9;
+  private enemySt: ReturnType<NonNullable<RenderableMysteryRun['enemyStatus']>> | undefined;
+  private mists: { x: number; z: number; color: string; t: number; dur: number; dir: 1 | -1; size: number }[] = [];
+  // ---- cabinets + hiding view
+  private cabinets: CabinetSet | null = null;
+  private peekK = 0;
+  private peekId: string | null = null;
+  private cabBlend = 0;
+  private cabIn = false;
+  /** this frame's interactable (read once per frame in updateCabinets) */
+  private itNow: ReturnType<RenderableMysteryRun['interactable']> = null;
+  private cabPullT = 0;
+  private readonly peekPos = new THREE.Vector3();
+  private readonly peekQuat = new THREE.Quaternion();
+  private readonly peekEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+  private nearNow = 0.3;
+  // ---- death cutscene
+  private death: DeathCutscene | null = null;
+  private deathResolve: (() => void) | null = null;
+  private deathPromise: Promise<void> | null = null;
+  private deathStageRun: (RenderableMysteryRun & Record<string, unknown>) | null = null;
+  private deathBase: RenderableMysteryRun | null = null;
+  private deathCamFrom: { pos: THREE.Vector3; quat: THREE.Quaternion; fov: number } | null = null;
+  private readonly sHyde: HydeRuntime = { mode: 'PATROL', modeT: 0, x: 0, z: 0, yaw: 0, speed: 0, suspicion: 0, canSeePlayer: false, lastKnown: null, target: null, path: [], stunnedUntil: 0, slowedUntil: 0, slowMult: 1, distractedUntil: 0, grabbing: false };
+  private readonly sCrack: CrackstoneRuntime = { mode: 'PATROL', modeT: 0, x: 0, z: 0, yaw: 0, speed: 0, suspicion: 0, canSeePlayer: false, lastKnown: null, target: null, path: [], stunnedUntil: 0, slowedUntil: 0, slowMult: 1, distractedUntil: 0, scan: null, curse: null };
+  private readonly sSlurp: SlurpRuntime = { active: true, mode: 'CHASE', modeT: 0, x: 0, z: 0, yaw: 0, speed: 0, suspicion: 0, canSeePlayer: false, lastKnown: null, target: null, path: [], stunnedUntil: 0, slowedUntil: 0, slowMult: 1, distractedUntil: 0, attacking: false };
+  private deathStage: DeathStage | null = null;
+  private deathHeadCam = new THREE.Vector3();
   // player visuals
   private prevX = 0;
   private prevZ = 0;
@@ -306,6 +363,12 @@ export class MysteryScene {
       this.curseTg = new Telegraph('curse', CRACK_GREEN, CRACK_GREEN_HI);
       this.scene.add(this.scanTg.ground, this.scanTg.wall, this.curseTg.ground, this.curseTg.wall);
     }
+    {
+      const qs = makeGlyphTexture('?', SLURP_GLOW), xs = makeGlyphTexture('!', '#f3dcf7');
+      this.alertQs = new THREE.Sprite(new THREE.SpriteMaterial({ map: qs ?? undefined, transparent: true, depthWrite: false, depthTest: false, fog: false }));
+      this.alertXs = new THREE.Sprite(new THREE.SpriteMaterial({ map: xs ?? undefined, transparent: true, depthWrite: false, depthTest: false, fog: false }));
+      for (const sp of [this.alertQs, this.alertXs]) { sp.visible = false; sp.renderOrder = 20; sp.scale.setScalar(0.9); this.scene.add(sp); }
+    }
     this.scene.add(this.overlay.mesh);
 
     if (typeof window !== 'undefined' && /[?&]scenedebug/.test(window.location.search)) (window as unknown as { __mysteryScene?: MysteryScene }).__mysteryScene = this;
@@ -326,7 +389,7 @@ export class MysteryScene {
   private applyLook(): void {
     const L = this.look = this.showcase ? BASE_LOOK : lookOf(this.map);
     this.fog.color.setHex(L.fogColor);
-    this.fogNow = L.fogDensity;
+    this.fogNow = L.fogDensity * this.fogK;
     this.renderer.setClearColor(L.fogColor, 1);
     (this.scene.background as THREE.Color).setHex(L.fogColor);
     this.hemi.color.setHex(L.hemiSky);
@@ -372,6 +435,11 @@ export class MysteryScene {
     this.scene.add(this.companion.root);
     this.view = new InvestigationView(this.map, this.world.dress, this.world.switchHull);
     this.scene.add(this.view.root);
+    {
+      const skip = new Set<string>([...(this.map.powerSwitch ? [this.map.powerSwitch.gateWallId] : []), ...(this.map.world?.passage ? [this.map.world.passage.wallId] : [])]);
+      this.cabinets = new CabinetSet(this.map, this.look.theme, this.look.grade.dress, this.options.lowGraphics, skip);
+      this.scene.add(this.cabinets.root);
+    }
     const lights = (this.map.world?.hazards ?? []).filter((h): h is SearchlightDef => h.kind === 'searchlight');
     this.searchlights = lights.length ? new SearchlightSet(this.map, lights) : null;
     if (this.searchlights) this.scene.add(this.searchlights.root);
@@ -391,6 +459,7 @@ export class MysteryScene {
 
   private destroyMapObjects(): void {
     this.scene.remove(this.world.root, this.avatar.root, this.companion.root, this.hazard.mesh, this.view.root);
+    if (this.cabinets) { this.scene.remove(this.cabinets.root); this.cabinets.dispose(); this.cabinets = null; }
     if (this.searchlights) { this.scene.remove(this.searchlights.root); this.searchlights.dispose(); this.searchlights = null; }
     this.view.dispose();
     this.world.dispose();
@@ -514,8 +583,8 @@ export class MysteryScene {
   /** Screen position of the Hyde: `onScreen`, NDC and distance (for HUD warnings). */
   getHydeScreen(): { onScreen: boolean; ndcX: number; ndcY: number; behind: boolean; distance: number } {
     const run = this.lastRun;
-    const d = run && this.hydeShown ? Math.hypot(run.hyde.x - run.player.x, run.hyde.z - run.player.z) : 999;
-    return { onScreen: this.hydeShown && this.hydeOnScreen, ndcX: this.ndc.x, ndcY: this.ndc.y, behind: this.ndc.z > 1, distance: d };
+    const d = run && this.hydeLive ? Math.hypot(run.hyde.x - run.player.x, run.hyde.z - run.player.z) : 999;
+    return { onScreen: this.hydeLive && this.hydeOnScreen, ndcX: this.ndc.x, ndcY: this.ndc.y, behind: this.ndc.z > 1, distance: d };
   }
 
   /** Screen position of Joseph Crackstone (same shape as getHydeScreen); distance 999 / offscreen when there is none. */
@@ -547,6 +616,12 @@ export class MysteryScene {
         scan: this.scanFx.phase, scanProg: +this.scanFx.prog.toFixed(2), curse: this.curseFx.on ? this.curseFx.mode : -1, curseProg: +this.curseFx.prog.toFixed(2),
         stone: +(this.crack?.stoneAmount ?? 0).toFixed(2), flare: +(this.crack?.flare ?? 0).toFixed(2),
       } : null,
+      slurp: this.slurp ? {
+        mode: run.slurp?.mode, active: !!run.slurp?.active, shown: this.slurpShown, k: +this.slurpK.toFixed(2), onScreen: this.slurpOnScreen,
+        x: +(run.slurp?.x ?? 0).toFixed(2), z: +(run.slurp?.z ?? 0).toFixed(2), tris: this.slurp.triangles,
+      } : null,
+      cabinets: this.cabinets ? { count: this.cabinets.count, peekK: +this.peekK.toFixed(2), blend: +this.cabBlend.toFixed(2), id: this.peekId, doors: this.cabinets.cabinets.map((c) => ({ id: c.def.id, open: +c.open.toFixed(2) })) } : null,
+      death: this.death ? { enemy: this.death.enemy, t: +this.death.time.toFixed(2), done: this.death.done, reduced: this.death.reduced } : null,
       egg: { state: run.egg.state, tier: run.egg.tier },
       companion: { pokemon: this.companion.pokemonId, visual: this.companion.visual, modelSource: this.companion.modelSource, modelError: this.companion.modelError },
       drawCalls: info.render.calls,
@@ -589,7 +664,9 @@ export class MysteryScene {
     if (this.built) this.destroyMapObjects();
     if (this.rainField) { this.scene.remove(this.rainField.mesh); this.rainField.dispose(); }
     this.beacons.dispose();
-    this.removeCrackstone(); this.scanTg.dispose(); this.curseTg.dispose();
+    this.removeCrackstone(); this.removeSlurp(); this.scanTg.dispose(); this.curseTg.dispose();
+    for (const sp of [this.alertQs, this.alertXs]) { sp.material.map?.dispose(); sp.material.dispose(); }
+    this.resolveDeath();
     for (const sp of [this.alertQc, this.alertXc]) { sp.material.map?.dispose(); sp.material.dispose(); }
     this.hyde.dispose(); this.egg.dispose(); this.thing.dispose(); this.thingHint.dispose();
     this.particles.dispose(); this.rings.dispose(); this.glows.dispose(); this.bolts.dispose(); this.beams.dispose();
@@ -617,20 +694,25 @@ export class MysteryScene {
       this.buildMapObjects();
     } else if (!this.built && run.map.id !== this.map.id) this.map = run.map;
     this.ensureBuilt();
-    const eff = run.effects ? run.effects() : NO_EFFECTS;
-    this.hydeVis = run.hydeVisual ? run.hydeVisual() : eff.hydePetrified ? 'petrify' : null;
-    this.crackVis = run.crackstoneVisual ? run.crackstoneVisual() : eff.crackstonePetrified ? 'petrify' : null;
-    for (const e of events) this.onEvent(e, run);
-    this.updatePlayer(run, dt);
-    this.updateWorld(run, eff, dt);
-    this.updateHyde(run, eff, dt);
-    this.updateCrackstone(run, eff, dt);
-    this.updateThing(run, dt);
-    this.updateItems(run, eff, dt);
+    // a death cutscene stages its own copy of the run (the dying monster posed by the script); everything below draws that copy
+    const rr = this.stepDeath(run, dt) ?? run;
+    this.enemySt = run.enemyStatus ? run.enemyStatus() : undefined;
+    const eff = rr.effects ? rr.effects() : NO_EFFECTS;
+    this.hydeVis = rr.hydeVisual ? rr.hydeVisual() : eff.hydePetrified ? 'petrify' : null;
+    this.crackVis = rr.crackstoneVisual ? rr.crackstoneVisual() : eff.crackstonePetrified ? 'petrify' : null;
+    if (!this.deathStage) for (const e of events) this.onEvent(e, rr);
+    this.updateCabinets(rr, dt);
+    this.updatePlayer(rr, dt);
+    this.updateWorld(rr, eff, dt);
+    this.updateHyde(rr, eff, dt);
+    this.updateCrackstone(rr, eff, dt);
+    this.updateSlurp(rr, dt);
+    this.updateThing(rr, dt);
+    this.updateItems(rr, eff, dt);
     if (this.companion.visual !== this.warmCompanionVisual) this.warmUp(); // the artwork / 3D model arrived: compile its program variants now
-    this.updateCamera(run, dt);
-    this.updateVfx(run, eff, dt);
-    this.updateOverlay(run, eff, dt);
+    this.updateCamera(rr, dt);
+    this.updateVfx(rr, eff, dt);
+    this.updateOverlay(rr, eff, dt);
     this.particles.setPixelScale(this.canvas.height / (2 * Math.tan((this.camera.fov * Math.PI) / 360)));
     this.particles.update(dt);
   }
@@ -660,9 +742,45 @@ export class MysteryScene {
         break;
       }
       case 'hyde_emerged':
-        this.emerge = { t: 0, x: e.x, z: e.z };
-        this.onEmerge(e.x, e.z, run);
+        // (the sim sends enemy_spawned and hyde_emerged together for the Hyde's spawns: one effect)
+        if (run.t - this.emergeStamp > 0.6) { this.emerge = { t: 0, x: e.x, z: e.z }; this.onEmerge(e.x, e.z, run); }
         break;
+      case 'enemy_spawned':
+        this.forced[e.enemy] = 'present';
+        if (e.enemy === 'hyde') {
+          if (run.t - this.emergeStamp > 0.6) { this.emerge = { t: 0, x: e.x, z: e.z }; this.onEmerge(e.x, e.z, run); }
+        } else this.mistAt(e.enemy, e.x, e.z, 1);
+        break;
+      case 'enemy_despawned': {
+        this.forced[e.enemy] = 'absent';
+        break;
+      }
+      case 'slurp_mode':
+        if (e.to === 'CHASE' && !calm) this.shake = Math.max(this.shake, 0.3);
+        if (e.to === 'CHASE') { this.companion.flash(0.6); this.setFlash(0.85, 0.5, 0.9, 0.1); }
+        this.slurpAlertT = 1.4;
+        break;
+      case 'enemy_hit':
+        if (e.enemy === 'slurp') {
+          this.companion.flash(1);
+          this.setFlash(0.85, 0.7, 0.9, e.blocked ? 0.35 : 0.5);
+          if (!calm) this.shake = Math.max(this.shake, e.blocked ? 0.35 : 0.9);
+          this.burst(p.x, 1.0, p.z, low ? 14 : 36, e.blocked ? '#9fc8ff' : '#e8d0f0', 4, 1.0);
+          if (e.blocked) this.pulses.push({ t: 0, life: 0.7, x: p.x, z: p.z, r: 3.2, color: C('#9fc8ff') });
+        }
+        break;
+      case 'cabinet': {
+        this.cabinets?.onEvent(e.spotId, e.action, e.loud);
+        const cb = this.cabinets?.byId(e.spotId);
+        if (e.action === 'pulled_out') {
+          // the door is yanked open and the screen jolts: dust off the hinges, a short shake
+          if (!calm) this.shake = Math.max(this.shake, 0.7);
+          this.cabPullT = 0.5;
+          this.setFlash(0.9, 0.85, 0.7, 0.25);
+          if (cb) this.burst(cb.x - Math.sin(cb.yaw) * 0.6, 1.0, cb.z - Math.cos(cb.yaw) * 0.6, low ? 6 : 16, '#b8a890', 2.2, 0.9);
+        } else if (e.loud && cb) this.pulses.push({ t: 0, life: 0.7, x: cb.x, z: cb.z, r: 3.4, color: C('#ffc880') });
+        break;
+      }
       case 'hazard_triggered': {
         if (this.searchlights?.has(e.hazardId)) {
           this.searchlights.trigger(e.hazardId); // the beam flares and the screen blinks cold
@@ -872,6 +990,7 @@ export class MysteryScene {
     const low = this.options.lowGraphics;
     const calm = this.options.reducedMotion;
     this.riseK = 0;
+    this.emergeStamp = run.t;
     const n = low ? 14 : 36;
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, d = Math.random() * 1.6;
@@ -940,26 +1059,36 @@ export class MysteryScene {
     const stance: Stance = p.crouched ? 'crouch' : p.stance === 'sprint' ? 'sprint' : p.stance === 'idle' ? 'idle' : 'walk';
     this.lastStance = stance;
     const eff = run.effects();
-    this.avatar.root.position.set(p.x, 0, p.z);
+    // stepping into / out of a cabinet: the avatar walks between the door front and the cabinet centre (the sim's own position is not used)
+    const cab = this.cabinets && this.cabBlend > 0.001 ? this.cabinets.byId(this.peekId) : undefined;
+    let ax = p.x, az = p.z, moving = Math.max(p.speed, vs * 0.6);
+    if (cab) {
+      const fr = CAB.D / 2 + 0.55, f = fwdOf(cab.yaw);
+      const b = this.cabBlend;
+      ax = lerp(cab.x + f.x * fr, cab.x, b); az = lerp(cab.z + f.z * fr, cab.z, b);
+      this.bodyYaw = angleLerp(this.bodyYaw, cab.yaw + (this.cabIn ? Math.PI : 0), 1 - Math.exp(-14 * dt));
+      moving = b > 0.02 && b < 0.98 ? 1.5 : 0;
+    }
+    this.avatar.root.position.set(ax, 0, az);
     this.avatar.root.rotation.y = this.bodyYaw;
     this.avatar.update({
-      dt, clock: this.clock, speed: Math.max(p.speed, vs * 0.6), stance, carrying: run.egg.state === 'carried',
-      boost: eff.speedBoost, dir: 1, hidden: p.hidden,
-      lookYaw: clamp(wrapAngle(p.yaw - this.bodyYaw), -0.9, 0.9),
+      dt, clock: this.clock, speed: moving, stance: cab ? 'walk' : stance, carrying: run.egg.state === 'carried',
+      boost: eff.speedBoost, dir: 1, hidden: p.hidden && !cab,
+      lookYaw: cab ? 0 : clamp(wrapAngle(p.yaw - this.bodyYaw), -0.9, 0.9),
     });
     // invulnerability blink (reduced motion: steady tint instead of flashing)
     const inv = run.t < p.invulnerableUntil;
-    this.avatar.root.visible = !this.showcase && !(inv && !this.options.reducedMotion && Math.floor(this.clock * 10) % 2 === 0);
-    this.companion.root.visible = !this.showcase;
+    this.avatar.root.visible = !this.showcase && !this.deathStage && this.cabBlend < 0.85 && !(inv && !this.options.reducedMotion && Math.floor(this.clock * 10) % 2 === 0);
+    this.companion.root.visible = !this.showcase && !this.deathStage && this.cabBlend < 0.3;
     // companion
-    this.companion.update(dt, this.clock, p.x, p.z, this.bodyYaw, p.speed, (this.hydeShown && run.hyde.mode === 'CHASE') || this.crackChasing(run) ? 1 : 0, this.options.reducedMotion, this.camReady ? this.camYaw : this.bodyYaw, this.camReady ? this.camPos : null);
+    this.companion.update(dt, this.clock, ax, az, this.bodyYaw, p.speed, (this.hydeLive && run.hyde.mode === 'CHASE') || this.crackChasing(run) || this.slurpChasing(run) ? 1 : 0, this.options.reducedMotion, this.camReady ? this.camYaw : this.bodyYaw, this.camReady ? this.camPos : null);
     // lantern follows the player
-    this.lantern.position.set(p.x, 2.2, p.z);
+    this.lantern.position.set(ax, 2.2, az);
     const rh = eff.revealHazards;
     const ln = this.look.lantern;
     // the flicker is the case's own: a calm archive lamp, a guttering crypt candle, a buzzing storm lantern (none under reduced motion)
     const fl = this.options.reducedMotion ? 1 : 1 - ln.flicker * 0.3 * (0.5 + 0.5 * Math.sin(this.clock * 13 + Math.sin(this.clock * 4.7) * 2.4)) * (0.6 + 0.4 * Math.sin(this.clock * 31));
-    this.lantern.intensity = this.options.lowGraphics ? 0 : (rh ? 28 : ln.intensity) * fl * (p.hidden ? 0.55 : 1);
+    this.lantern.intensity = this.options.lowGraphics ? 0 : (rh ? 28 : ln.intensity) * fl * (p.hidden ? 0.55 : 1) * (1 - 0.75 * this.peekK);
     this.lantern.color.set(rh ? 0x9ab8ff : ln.color);
     this.lantern.distance = rh ? 20 : ln.distance;
   }
@@ -979,9 +1108,9 @@ export class MysteryScene {
     this.depositGlow = damp(this.depositGlow, (carrying ? 0.7 : 0.15) + near * 0.3 + (run.egg.state === 'delivered' ? 0.5 : 0), 4, dt);
     this.world.update({ dt, clock: this.clock, hiddenK: this.hideK, playerRoom: p.roomId, playerX: p.x, playerZ: p.z, gateOpen, passageOpen, switchPowered: eff.switchPowered, depositGlow: clamp(this.depositGlow, 0, 1.2), reduced: this.options.reducedMotion });
     // fog thickens inside fog rooms
-    let target = L.fogDensity;
+    let target = L.fogDensity * this.fogK;
     const room = this.map.rooms.find((r) => r.id === p.roomId);
-    if (room?.fog) target = L.roomFogDensity;
+    if (room?.fog) target = L.roomFogDensity * this.fogK;
     this.fogNow = damp(this.fogNow, target, 1.6, dt);
     this.fog.density = this.fogNow;
     this.fx.uFogDensity.value = this.fogNow;
@@ -992,8 +1121,8 @@ export class MysteryScene {
     // lightning (storm case; never with reduced motion): brightens lights, fog and the cloud deck for a moment
     const lv = this.lightning.level(this.clock);
     this.lightLevel = lv;
-    this.hemi.intensity = L.hemiIntensity * (1 + 1.0 * lv);
-    this.moon.intensity = L.moonIntensity * (1 + 0.8 * lv);
+    this.hemi.intensity = L.hemiIntensity * (1 + 1.0 * lv) * (1 - 0.25 * this.peekK);
+    this.moon.intensity = L.moonIntensity * (1 + 0.8 * lv) * (1 - 0.25 * this.peekK);
     (this.sky.material as THREE.ShaderMaterial).uniforms.uFlashS.value = lv * 0.8;
     if (L.lightning) {
       this.fog.color.setHex(L.fogColor).lerp(this.tmpCol.setHex(0x8aa4d0), lv * 0.3);
@@ -1016,6 +1145,45 @@ export class MysteryScene {
 
   // ------------------------------------------------------------------------------------------------------ Hyde
   /** The Hyde is absent until the sim says he has emerged (feature-detected: older sims always show him). */
+  /** Is this enemy currently spawned? The sim's director (run.enemyActive) when it has one, else the spawn / despawn events, else legacy rules. */
+  private enemyOn(id: EnemyId, run: RenderableMysteryRun): boolean {
+    if (this.deathStage) return this.deathStage.enemy === id;
+    const st = this.enemySt?.[id];
+    if (st) return st.active;
+    if (typeof run.enemyActive === 'function') return !!run.enemyActive(id);
+    if (id === 'slurp') return !!run.slurp && run.slurp.active;
+    const f = this.forced[id];
+    if (f === 'present') return true;
+    if (f === 'absent') return false;
+    if (id === 'hyde') return this.isEmerged(run);
+    return !!run.crackstone;
+  }
+
+  private readonly sinkHyde: HydeRuntime = { mode: 'PATROL', modeT: 0, x: 0, z: 0, yaw: 0, speed: 0, suspicion: 0, canSeePlayer: false, lastKnown: null, target: null, path: [], stunnedUntil: 0, slowedUntil: 0, slowMult: 1, distractedUntil: 0, grabbing: false };
+  /** The Hyde as drawn: the sim's runtime while spawned, a frozen copy at his last place while he sinks into the fog. */
+  private hydeRender(run: RenderableMysteryRun): HydeRuntime {
+    if (this.hydeWasEmerged !== false) return run.hyde;
+    const a = this.hydeAnchor;
+    return Object.assign(this.sinkHyde, { x: a.x, z: a.z, yaw: a.yaw, mode: 'PATROL' as HydeMode, speed: 0, grabbing: false, suspicion: 0, lastKnown: null, target: null });
+  }
+
+  private get hydeLive(): boolean { return this.hydeShown && this.hydeWasEmerged === true; }
+
+  /** A patch of ground mist that gathers (dir +1: an enemy rises) or thins (dir -1: it sinks) around (x, z). */
+  private mistAt(enemy: EnemyId, x: number, z: number, dir: 1 | -1): void {
+    const low = this.options.lowGraphics;
+    const color = enemy === 'hyde' ? '#8a7ab8' : enemy === 'crackstone' ? '#9ad070' : SLURP_MIST;
+    const dur = enemy === 'crackstone' ? 1.6 : enemy === 'slurp' ? 2.0 : 1.7;
+    this.mists.push({ x, z, color, t: 0, dur, dir, size: enemy === 'hyde' ? 5.5 : 4.4 });
+    if (this.mists.length > 6) this.mists.shift();
+    const n = low ? 6 : 14;
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, d = Math.random() * 1.3;
+      this.particles.emit({ x: x + Math.cos(a) * d, y: 0.15 + Math.random() * 0.3, z: z + Math.sin(a) * d, vx: Math.cos(a) * 0.5, vy: dir > 0 ? 0.5 + Math.random() * 0.8 : -0.2 + Math.random() * 0.4, vz: Math.sin(a) * 0.5, life: 1.8, size: 1.6, grow: 2.4, color, alpha: 0.5, drag: 0.6 });
+    }
+    this.pulses.push({ t: 0, life: 1.1, x, z, r: 3, color: C(color) });
+  }
+
   private isEmerged(run: RenderableMysteryRun): boolean {
     if (typeof run.hydeEmerged === 'boolean') return run.hydeEmerged;
     if (typeof run.investigation === 'function') return run.investigation().hydeEmerged;
@@ -1023,13 +1191,14 @@ export class MysteryScene {
   }
 
   private updateHyde(run: RenderableMysteryRun, eff: ReturnType<RenderableMysteryRun['effects']>, dt: number): void {
-    const h = run.hyde;
     const calm = this.options.reducedMotion;
-    const emerged = this.isEmerged(run);
+    const emerged = this.enemyOn('hyde', run);
     if (this.hydeWasEmerged === null) { this.hydeWasEmerged = emerged; this.riseK = emerged ? 1 : 0; }
-    else if (emerged && !this.hydeWasEmerged) { if (!this.emerge) this.onEmerge(h.x, h.z, run); this.hydeWasEmerged = true; }
-    else if (!emerged && this.hydeWasEmerged) { this.hydeWasEmerged = false; this.riseK = 0; }
-    this.hydeShown = emerged && !this.showcase;
+    else if (emerged && !this.hydeWasEmerged) { if (!this.emerge) this.onEmerge(run.hyde.x, run.hyde.z, run); this.hydeWasEmerged = true; }
+    else if (!emerged && this.hydeWasEmerged) { this.hydeWasEmerged = false; this.mistAt('hyde', this.hydeAnchor.x, this.hydeAnchor.z, -1); }
+    if (emerged) { this.hydeAnchor.x = run.hyde.x; this.hydeAnchor.z = run.hyde.z; this.hydeAnchor.yaw = run.hyde.yaw; }
+    const h = this.hydeRender(run);
+    this.hydeShown = (emerged || this.riseK > 0.02) && !this.showcase;
     if (emerged) {
       if (this.emerge) this.emerge.t += dt;
       this.riseK = Math.min(1, this.riseK + dt / 1.7);
@@ -1041,7 +1210,7 @@ export class MysteryScene {
           this.particles.emit({ x: ex.x + Math.cos(a) * d, y: 0.1, z: ex.z + Math.sin(a) * d, vx: Math.cos(a) * 0.4, vy: 0.6 + Math.random() * 0.7, vz: Math.sin(a) * 0.4, life: 1.5, size: 0.9, grow: 2.4, color: '#6a5a9a', alpha: 0.4, drag: 0.7 });
         }
       } else this.emerge = null;
-    }
+    } else { this.riseK = Math.max(0, this.riseK - dt / 1.5); this.emerge = null; }
     const k = this.riseK;
     const ease = 1 - Math.pow(1 - k, 3);
     this.hyde.root.position.set(h.x, -(1 - ease) * 3.6, h.z);
@@ -1063,9 +1232,9 @@ export class MysteryScene {
     if (h.mode !== this.hydeModePrev) { this.alertT = 1.6; this.hydeModePrev = h.mode; }
     this.alertT = Math.max(0, this.alertT - dt);
     const hw = this.hyde.headWorld;
-    const live = this.hydeShown && k >= 1;
-    const showX = live && (h.mode === 'CHASE' || h.grabbing);
-    const showQ = live && !showX && (h.mode === 'INVESTIGATE_SOUND' || h.mode === 'SEARCH' || (h.mode === 'PATROL' && h.suspicion > 0.4));
+    const live = this.hydeLive && k >= 1;
+    const showX = live && !this.deathStage && (h.mode === 'CHASE' || h.grabbing);
+    const showQ = live && !this.deathStage && !showX && (h.mode === 'INVESTIGATE_SOUND' || h.mode === 'SEARCH' || (h.mode === 'PATROL' && h.suspicion > 0.4));
     const bob = calm ? 0 : Math.sin(this.clock * 6) * 0.06;
     const pulse = 0.85 + 0.15 * Math.sin(this.clock * 8);
     this.alertX.visible = showX;
@@ -1077,7 +1246,17 @@ export class MysteryScene {
   // ------------------------------------------------------------------------------------------------------ Crackstone
   private crackChasing(run: RenderableMysteryRun): boolean {
     const c = run.crackstone;
-    return !!c && this.crackShown && (c.mode === 'CHASE' || c.mode === 'ATTACK');
+    return !!c && this.crackShown && this.crackWas === true && !this.deathStage && (c.mode === 'CHASE' || c.mode === 'ATTACK');
+  }
+
+  private readonly sinkCrack: CrackstoneRuntime = { mode: 'PATROL', modeT: 0, x: 0, z: 0, yaw: 0, speed: 0, suspicion: 0, canSeePlayer: false, lastKnown: null, target: null, path: [], stunnedUntil: 0, slowedUntil: 0, slowMult: 1, distractedUntil: 0, scan: null, curse: null };
+  /** Crackstone as drawn: the sim's runtime while spawned, a frozen copy at his last place while he dissolves. */
+  private crackRender(run: RenderableMysteryRun, on: boolean): CrackstoneRuntime | null {
+    const c = run.crackstone;
+    if (!c) return null;
+    if (on || this.crackWas !== false) return c;
+    const a = this.crackAnchor;
+    return Object.assign(this.sinkCrack, { x: a.x, z: a.z, yaw: a.yaw, mode: 'PATROL' as CrackstoneMode, speed: 0, scan: null, curse: null, lastKnown: null, target: null });
   }
 
   private ensureCrackstone(run: RenderableMysteryRun): void {
@@ -1144,13 +1323,22 @@ export class MysteryScene {
 
   private updateCrackstone(run: RenderableMysteryRun, eff: ReturnType<RenderableMysteryRun['effects']>, dt: number): void {
     this.ensureCrackstone(run);
-    const c = run.crackstone;
+    const c0 = run.crackstone;
     const rig = this.crack;
-    if (!c || !rig) { this.crackShown = false; this.alertQc.visible = this.alertXc.visible = false; return; }
+    if (!c0 || !rig) { this.crackShown = false; this.alertQc.visible = this.alertXc.visible = false; return; }
     const calm = this.options.reducedMotion;
-    this.crackShown = run.status !== 'tutorial' && !this.showcase;
+    const on = this.enemyOn('crackstone', run);
+    if (this.crackWas === null) { this.crackWas = on; this.crackK = on ? 1 : 0; }
+    else if (on && !this.crackWas) this.crackWas = true;
+    else if (!on && this.crackWas) { this.crackWas = false; if (!this.deathStage) this.mistAt('crackstone', this.crackAnchor.x, this.crackAnchor.z, -1); }
+    if (on) { this.crackAnchor.x = c0.x; this.crackAnchor.z = c0.z; this.crackAnchor.yaw = c0.yaw; }
+    this.crackK = this.deathStage ? (on ? 1 : 0) : on ? Math.min(1, this.crackK + dt / 1.5) : Math.max(0, this.crackK - dt / 1.4);
+    const c = this.crackRender(run, on);
+    if (!c) return;
+    this.crackShown = (on || this.crackK > 0.02) && run.status !== 'tutorial' && !this.showcase;
     this.crackSpeedSm = damp(this.crackSpeedSm, c.speed, 8, dt);
-    rig.root.position.set(c.x, 0, c.z);
+    const crackEase = 1 - Math.pow(1 - this.crackK, 3);
+    rig.root.position.set(c.x, -(1 - crackEase) * 2.9, c.z);
     const crackSeen = this.crackShown && this.inView(c.x, 1.3, c.z, 3.4);
     rig.root.visible = crackSeen;
     this.crackAcc += dt;
@@ -1177,15 +1365,15 @@ export class MysteryScene {
     if (target) lookYaw = wrapAngle(yawOf(target.x - c.x, target.z - c.z) - c.yaw);
     if (crackPose) rig.update({
       dt: this.crackAcc, clock: this.clock, mode: c.mode, speed: this.crackSpeedSm, stunned: eff.crackstoneStunned, petrified: eff.crackstonePetrified && this.crackVis !== 'pin',
-      pinned: this.crackVis === 'pin', slowed: eff.crackstoneSlowed, distracted: eff.crackstoneDistracted, suspicion: c.suspicion, lookYaw, bodyYaw: c.yaw, fade: this.crackFade,
+      pinned: this.crackVis === 'pin', slowed: eff.crackstoneSlowed, distracted: eff.crackstoneDistracted, suspicion: c.suspicion, lookYaw, bodyYaw: c.yaw, fade: Math.max(this.crackFade, 0.9 * (1 - crackEase), this.deathStage?.fade ?? 0),
       reduced: calm, scan: sc ? sc.phase : null, scanK: fx.prog, curseK: cf.on && cf.mode === 0 ? cf.prog : -1,
     });
     if (crackPose || !crackSeen) this.crackAcc = 0;
     if (c.mode !== this.crackModePrev) { this.crackAlertT = 1.6; this.crackModePrev = c.mode; }
     this.crackAlertT = Math.max(0, this.crackAlertT - dt);
     const hw = rig.headWorld;
-    const showX = this.crackShown && (c.mode === 'CHASE' || c.mode === 'ATTACK');
-    const showQ = this.crackShown && !showX && (c.mode === 'INVESTIGATE' || c.mode === 'SEARCH' || (c.mode === 'PATROL' && c.suspicion > 0.4));
+    const showX = this.crackShown && on && !this.deathStage && (c.mode === 'CHASE' || c.mode === 'ATTACK');
+    const showQ = this.crackShown && on && !this.deathStage && !showX && (c.mode === 'INVESTIGATE' || c.mode === 'SEARCH' || (c.mode === 'PATROL' && c.suspicion > 0.4));
     const bob = calm ? 0 : Math.sin(this.clock * 6) * 0.06;
     this.alertXc.visible = showX;
     this.alertQc.visible = showQ;
@@ -1195,7 +1383,8 @@ export class MysteryScene {
 
   /** Crackstone's glows, aura embers, status effects and the two telegraphs (scan ring, curse circle). */
   private crackVfx(run: RenderableMysteryRun, eff: ReturnType<RenderableMysteryRun['effects']>, dt: number, glows: GlowSet, rings: RingField, gc: THREE.Color): void {
-    const c = run.crackstone, rig = this.crack;
+    const rig = this.crack;
+    const c = this.crackRender(run, this.crackWas === true);
     if (!c || !rig) { this.scanTg.hide(); this.curseTg.hide(); return; }
     const T = this.clock, calm = this.options.reducedMotion, low = this.options.lowGraphics;
     // ---- telegraphs
@@ -1214,7 +1403,7 @@ export class MysteryScene {
     // ---- aura: a dim witch-green glow behind him (so the dark coat reads against the night), his eyes, a faint sigil underfoot, a few embers
     const fl = rig.flare;
     const stone = rig.stoneAmount > 0.5;
-    const a = (1 - this.crackFade) * (stone ? 0.35 : 1);
+    const a = (1 - this.crackFade) * (stone ? 0.35 : 1) * smoothstep(0.3, 1, this.crackK) * (1 - (this.deathStage?.fade ?? 0));
     const awayX = c.x - this.camera.position.x, awayZ = c.z - this.camera.position.z;
     const al = Math.hypot(awayX, awayZ) || 1;
     glows.add(c.x + (awayX / al) * 1.6, 1.35, c.z + (awayZ / al) * 1.6, 5.0 + fl * 3.2, gc.set(eff.crackstoneSlowed ? '#6ac8f0' : CRACK_GREEN), (0.17 + 0.3 * fl) * a);
@@ -1266,6 +1455,140 @@ export class MysteryScene {
     }
     if (eff.crackstonePetrified && !low && Math.random() < 0.4) {
       this.particles.emit({ x: c.x + (Math.random() - 0.5) * 1.0, y: 0.4 + Math.random() * 2.0, z: c.z + (Math.random() - 0.5) * 1.0, vy: -0.4, life: 1.0, size: 0.14, grow: 0.5, color: '#b8bcc8', alpha: 0.7 });
+    }
+  }
+
+  // ------------------------------------------------------------------------------------------------------ Slurp
+  private ensureSlurp(run: RenderableMysteryRun): void {
+    if (run.slurp && !this.slurp) {
+      this.slurp = new SlurpRig();
+      this.scene.add(this.slurp.root);
+      this.slurp.root.visible = false;
+      this.warmUp(); // his shaders are compiled now (while the world loads), not at the first spawn
+    } else if (!run.slurp && this.slurp) this.removeSlurp();
+  }
+
+  private removeSlurp(): void {
+    if (!this.slurp) return;
+    this.scene.remove(this.slurp.root);
+    this.slurp.dispose();
+    this.slurp = null;
+    this.slurpShown = false;
+    this.slurpOnScreen = false;
+    this.slurpWas = null;
+    this.alertQs.visible = this.alertXs.visible = false;
+  }
+
+  private readonly sinkSlurp: SlurpRuntime = { active: false, mode: 'WANDER', modeT: 0, x: 0, z: 0, yaw: 0, speed: 0, suspicion: 0, canSeePlayer: false, lastKnown: null, target: null, path: [], stunnedUntil: 0, slowedUntil: 0, slowMult: 1, distractedUntil: 0, attacking: false };
+  /** Slurp as drawn: the sim's runtime while spawned, a frozen copy at his last place while he sinks into the fog. */
+  private slurpRender(run: RenderableMysteryRun, on: boolean): SlurpRuntime | null {
+    const s = run.slurp;
+    if (!s) return null;
+    if (on || this.slurpWas !== false) return s;
+    const a = this.slurpAnchor;
+    return Object.assign(this.sinkSlurp, { x: a.x, z: a.z, yaw: a.yaw, mode: 'LEAVE' as SlurpMode, speed: 0, attacking: false, lastKnown: null, target: null });
+  }
+
+  private slurpChasing(run: RenderableMysteryRun): boolean {
+    const s = run.slurp;
+    return !!s && this.slurpShown && this.slurpWas === true && !this.deathStage && (s.mode === 'CHASE' || s.mode === 'ATTACK');
+  }
+
+  getSlurpScreen(): { onScreen: boolean; ndcX: number; ndcY: number; behind: boolean; distance: number } {
+    const run = this.lastRun;
+    const s = run?.slurp;
+    const d = run && s && this.slurpShown && this.slurpWas ? Math.hypot(s.x - run.player.x, s.z - run.player.z) : 999;
+    return { onScreen: !!s && this.slurpShown && this.slurpOnScreen, ndcX: this.slurpNdc.x, ndcY: this.slurpNdc.y, behind: this.slurpNdc.z > 1, distance: d };
+  }
+
+  private updateSlurp(run: RenderableMysteryRun, dt: number): void {
+    this.ensureSlurp(run);
+    const s0 = run.slurp;
+    const rig = this.slurp;
+    if (!s0 || !rig) { this.slurpShown = false; this.alertQs.visible = this.alertXs.visible = false; return; }
+    const calm = this.options.reducedMotion;
+    const on = this.enemyOn('slurp', run);
+    if (this.slurpWas === null) { this.slurpWas = on; this.slurpK = on ? 1 : 0; }
+    else if (on && !this.slurpWas) { this.slurpWas = true; if (!this.deathStage) this.slurpK = 0; }
+    else if (!on && this.slurpWas) { this.slurpWas = false; if (!this.deathStage) this.mistAt('slurp', this.slurpAnchor.x, this.slurpAnchor.z, -1); }
+    if (on) { this.slurpAnchor.x = s0.x; this.slurpAnchor.z = s0.z; this.slurpAnchor.yaw = s0.yaw; }
+    this.slurpK = this.deathStage ? (on ? 1 : 0) : on ? Math.min(1, this.slurpK + dt / 2.0) : Math.max(0, this.slurpK - dt / 1.5);
+    const s = this.slurpRender(run, on);
+    if (!s) return;
+    this.slurpShown = (on || this.slurpK > 0.02) && run.status !== 'tutorial' && !this.showcase;
+    this.slurpSpeedSm = damp(this.slurpSpeedSm, s.speed, 8, dt);
+    const k = this.slurpK;
+    const ease = 1 - Math.pow(1 - k, 3);
+    rig.root.position.set(s.x, -(1 - ease) * 1.9, s.z);
+    const seen = this.slurpShown && this.inView(s.x, 1.0, s.z, 2.6);
+    rig.root.visible = seen;
+    const pose = seen && !(this.options.lowGraphics && (this.frameNo & 1));
+    this.slurpAcc += dt;
+    let lookYaw: number | null = null;
+    const target = s.lastKnown ?? s.target;
+    if (target) lookYaw = wrapAngle(yawOf(target.x - s.x, target.z - s.z) - s.yaw);
+    const st = this.deathStage;
+    if (pose) {
+      rig.update({
+        dt: this.slurpAcc, clock: this.clock, mode: s.mode, speed: this.slurpSpeedSm, attacking: s.attacking,
+        windup: s.mode === 'ATTACK' && !s.attacking ? (st && st.enemy === 'slurp' ? st.windup : clamp(s.modeT / 0.6, 0, 1)) : 0,
+        stunned: s.stunnedUntil > run.t, slowed: s.slowedUntil > run.t && s.slowMult < 1, distracted: s.distractedUntil > run.t,
+        suspicion: s.suspicion, lookYaw, bodyYaw: s.yaw, fade: Math.max(this.slurpFade, 0.9 * (1 - ease)), reduced: calm,
+        emerge: on ? k : 1, sink: on ? 0 : 1 - k, reach: st?.enemy === 'slurp' ? st.reach : undefined, jaw: st?.enemy === 'slurp' ? st.jaw : undefined,
+      });
+    }
+    if (pose || !seen) this.slurpAcc = 0;
+    if (s.mode !== this.slurpModePrev) { this.slurpAlertT = 1.6; this.slurpModePrev = s.mode; }
+    this.slurpAlertT = Math.max(0, this.slurpAlertT - dt);
+    const hw = rig.headWorld;
+    const live = this.slurpShown && on && !this.deathStage && k >= 1;
+    const showX = live && (s.mode === 'CHASE' || s.mode === 'ATTACK');
+    const showQ = live && !showX && (s.mode === 'INVESTIGATE' || s.mode === 'SEARCH' || (s.mode === 'WANDER' && s.suspicion > 0.4));
+    const bob = calm ? 0 : Math.sin(this.clock * 6) * 0.06;
+    this.alertXs.visible = showX;
+    this.alertQs.visible = showQ;
+    if (showX) { this.alertXs.position.set(hw.x, hw.y + 0.75 + bob, hw.z); this.alertXs.scale.setScalar(1.1 * (0.85 + 0.15 * Math.sin(this.clock * 8))); (this.alertXs.material as THREE.SpriteMaterial).opacity = 1; }
+    if (showQ) { this.alertQs.position.set(hw.x, hw.y + 0.75 + bob, hw.z); this.alertQs.scale.setScalar(0.95); (this.alertQs.material as THREE.SpriteMaterial).opacity = clamp(0.55 + s.suspicion * 0.6, 0, 1); }
+  }
+  private slurpAcc = 0;
+
+  /** Slurp's glows: pale-orchid eyes, a faint orchid back-halo so the dark clothes read against the night, a drip in the chase, status cues. */
+  private slurpVfx(run: RenderableMysteryRun, dt: number, glows: GlowSet, rings: RingField, gc: THREE.Color): void {
+    const rig = this.slurp;
+    if (!rig || !this.slurpShown) return;
+    const s = this.slurpRender(run, this.slurpWas === true);
+    if (!s) return;
+    const T = this.clock, low = this.options.lowGraphics, calm = this.options.reducedMotion;
+    const a = smoothstep(0.35, 1, this.slurpK) * (1 - this.slurpFade) * (1 - (this.deathStage?.fade ?? 0));
+    const chase = s.mode === 'CHASE' || s.mode === 'ATTACK' ? 1 : 0;
+    const awayX = s.x - this.camera.position.x, awayZ = s.z - this.camera.position.z;
+    const al = Math.hypot(awayX, awayZ) || 1;
+    glows.add(s.x + (awayX / al) * 1.3, 1.05, s.z + (awayZ / al) * 1.3, 3.8 + chase * 1.4, gc.set(SLURP_GLOW), (0.1 + 0.12 * chase) * a);
+    if (rig.root.visible) {
+      const esz = (0.2 + 0.1 * (rig.look.eyeScale - 1)) * clamp(this.camera.position.distanceTo(rig.headWorld) / 6, 0.45, 1.3);
+      gc.copy(rig.look.eyeColor).lerp(this.tmpCol.set(SLURP_GLOW), 0.5);
+      glows.add(rig.eyeL.x, rig.eyeL.y, rig.eyeL.z, esz, gc, 0.9 * a);
+      glows.add(rig.eyeR.x, rig.eyeR.y, rig.eyeR.z, esz, gc, 0.9 * a);
+      if (chase && !low && !calm && this.slurpWas === true) {
+        this.slurpDrip += dt;
+        if (this.slurpDrip > 0.45) {
+          this.slurpDrip = 0;
+          const m = rig.mouthWorld;
+          this.particles.emit({ x: m.x, y: m.y, z: m.z, vx: (Math.random() - 0.5) * 0.15, vy: -0.2, vz: (Math.random() - 0.5) * 0.15, life: 0.8, size: 0.07, grow: 0.5, color: SLURP_GLOW, alpha: 0.85, gravity: 6 });
+        }
+      }
+    }
+    const hw = rig.headWorld;
+    if (s.distractedUntil > run.t) {
+      for (let i = 0; i < 4; i++) {
+        const an = T * 3 + (i / 4) * Math.PI * 2;
+        glows.add(hw.x + Math.cos(an) * 0.4, hw.y + 0.4 + Math.sin(an * 2) * 0.08, hw.z + Math.sin(an) * 0.4, 0.34, gc.set(i % 2 ? '#ffe08a' : '#c9a2ff'), 0.9);
+      }
+    }
+    if (s.stunnedUntil > run.t) glows.add(rig.chestWorld.x, rig.chestWorld.y + 0.2, rig.chestWorld.z, 2.2, gc.set('#bfe8ff'), 0.35 + 0.3 * Math.sin(T * 40));
+    if (s.slowedUntil > run.t && s.slowMult < 1) {
+      rings.push(s.x, 0.1, s.z, 1.0, '#cfeaff', 0.6);
+      rings.push(s.x, 0.1, s.z, 0.7, '#8fd8ff', 0.5);
     }
   }
 
@@ -1400,7 +1723,7 @@ export class MysteryScene {
 
   private updateCamera(run: RenderableMysteryRun, dt: number): void {
     const p = run.player;
-    const h = run.hyde;
+    const h = this.hydeRender(run);
     const calm = this.options.reducedMotion;
     this.refreshNearGeometry(run);
     if (!this.cameraReady) { this.camYaw = p.yaw; this.camPitch = p.pitch; this.pivotY = p.crouched ? 1.1 : 1.68; this.cameraReady = true; this.camDist = 3.5; }
@@ -1422,9 +1745,11 @@ export class MysteryScene {
     const pivotX = p.x + cosY * shoulder, pivotZ = p.z - sinY * shoulder, pivotY = this.pivotY + bobY;
     // desired distance (wider when sprinting or chased), shortened by the nearest obstruction
     const hs = this.hydeShown;
-    const cr = this.crackShown ? run.crackstone ?? null : null;
-    const crChase = !!cr && (cr.mode === 'CHASE' || cr.mode === 'ATTACK') && Math.hypot(cr.x - p.x, cr.z - p.z) < 14;
-    const chased = (hs && h.mode === 'CHASE' && Math.hypot(h.x - p.x, h.z - p.z) < 14) || crChase;
+    const cr = this.crackShown ? this.crackRender(run, this.crackWas === true) : null;
+    const crChase = !!cr && this.crackWas === true && (cr.mode === 'CHASE' || cr.mode === 'ATTACK') && Math.hypot(cr.x - p.x, cr.z - p.z) < 14;
+    const sl = this.slurpShown && this.slurpWas === true && !this.deathStage ? this.slurpRender(run, true) : null;
+    const slChase = !!sl && (sl.mode === 'CHASE' || sl.mode === 'ATTACK') && Math.hypot(sl.x - p.x, sl.z - p.z) < 14;
+    const chased = (hs && h.mode === 'CHASE' && Math.hypot(h.x - p.x, h.z - p.z) < 14) || crChase || slChase;
     let want = (p.crouched ? 3.0 : 3.7) + (p.stance === 'sprint' && !calm ? 0.45 : 0) + (chased ? 0.5 : 0);
     let free = want;
     const bx = -look.x, by = -look.y, bz = -look.z;
@@ -1468,6 +1793,19 @@ export class MysteryScene {
       const cx = pivotX + bx * dist, cy = pivotY + by * dist, cz = pivotZ + bz * dist;
       if (cy < 2.8) this.crackFade = smoothstep(2.7, 1.4, Math.hypot(cx - cr.x, cz - cr.z)) * 0.75;
     }
+    // Slurp is slim, but never let the lens sit inside him either
+    this.slurpFade = 0;
+    const slv = this.slurpShown ? this.slurpRender(run, this.slurpWas === true) : null;
+    if (slv) {
+      for (let it = 0; it < 6; it++) {
+        const cx = pivotX + bx * dist, cy = pivotY + by * dist, cz = pivotZ + bz * dist;
+        const dc = Math.hypot(cx - slv.x, cz - slv.z);
+        if (dc >= 1.1 || dist <= 1.9 || cy > 2.2) break;
+        dist = Math.max(1.9, dist - (1.1 - dc) * 0.9);
+      }
+      const cx = pivotX + bx * dist, cy = pivotY + by * dist, cz = pivotZ + bz * dist;
+      if (cy < 2.2) this.slurpFade = smoothstep(1.4, 0.7, Math.hypot(cx - slv.x, cz - slv.z)) * 0.7;
+    }
     // last line of defence: the straight line from the final lens position to the player's head must be clear of solid geometry
     for (let it = 0; it < 4; it++) {
       const cx = pivotX + bx * dist, cy = Math.max(0.45, pivotY + by * dist), cz = pivotZ + bz * dist;
@@ -1478,6 +1816,7 @@ export class MysteryScene {
       if (t >= hl - 0.25 || dist <= 0.9) break;
       dist = Math.max(0.9, dist * 0.78);
     }
+    if (this.deathStage) { this.hydeFade = 0; this.crackFade = 0; this.slurpFade = 0; } // the cutscene lens is not the gameplay one
     want = dist;
     this.camDist = want < this.camDist ? damp(this.camDist, want, 26, dt) : damp(this.camDist, want, 3.2, dt);
     this.camPos.set(pivotX + bx * this.camDist, Math.max(0.45, pivotY + by * this.camDist), pivotZ + bz * this.camDist);
@@ -1490,11 +1829,11 @@ export class MysteryScene {
     // chase assist: when the Hyde is right behind the player (between lens and runner) lift and slide the lens to the clear side and
     // aim ahead of the player, so he is seen over the runner's shoulder instead of the lens sitting at his back
     const hChase = hs && (h.mode === 'CHASE' || h.grabbing);
-    const eT = !hChase && crChase && cr ? cr : h; // whichever enemy is chasing
+    const eT = !hChase && crChase && cr ? cr : !hChase && !crChase && slChase && sl ? sl : h; // whichever enemy is chasing
     const hdx = eT.x - pivotX, hdz = eT.z - pivotZ;
     const along = hdx * sinY + hdz * cosY;
     const lat = hdx * cosY - hdz * sinY;
-    const near = (hChase || crChase) && along > -1.5 && along < this.camDist + 3.5 && Math.abs(lat) < 3.4 && Math.hypot(hdx, hdz) < 16;
+    const near = (hChase || crChase || slChase) && along > -1.5 && along < this.camDist + 3.5 && Math.abs(lat) < 3.4 && Math.hypot(hdx, hdz) < 16;
     this.assistK = damp(this.assistK, near ? 1 : 0, near ? 6 : 3, dt);
     if (Math.abs(lat) > 0.35) this.assistSide = lat > 0 ? -1 : 1;
     const ak = this.assistK;
@@ -1528,6 +1867,8 @@ export class MysteryScene {
       this.camera.updateProjectionMatrix();
       if (this.debugCam.fog !== undefined) { this.fog.density = this.debugCam.fog; this.fx.uFogDensity.value = this.debugCam.fog; }
     }
+    if (this.deathStage) this.applyDeathCamera();
+    else if (!this.debugCam) this.applyPeekCamera(run);
     this.camera.updateMatrixWorld(true);
     this.frustum.setFromProjectionMatrix(this.frustumM.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
     this.lastDebugCam = { yaw: this.camYaw, pitch: this.camPitch, dist: this.camDist };
@@ -1563,6 +1904,13 @@ export class MysteryScene {
       const lc = Math.hypot(rc.x, rc.y) || 1;
       this.crackEdge = { x: rc.x / lc, y: rc.y / lc };
     } else this.crackOnScreen = false;
+    if (slv && this.slurpShown) {
+      this.slurpNdc.set(slv.x, 1.2, slv.z).project(this.camera);
+      this.slurpOnScreen = this.slurpNdc.z < 1 && this.slurpNdc.z > -1 && Math.abs(this.slurpNdc.x) < 0.98 && Math.abs(this.slurpNdc.y) < 0.98;
+      const rs = this.tmp2.set(slv.x, 1.2, slv.z).applyMatrix4(this.camera.matrixWorldInverse);
+      const ls = Math.hypot(rs.x, rs.y) || 1;
+      this.slurpEdge = { x: rs.x / ls, y: rs.y / ls };
+    } else this.slurpOnScreen = false;
     void this.lastDebugCam;
   }
 
@@ -1585,29 +1933,45 @@ export class MysteryScene {
 
   // ------------------------------------------------------------------------------------------------------ overlay
   private updateOverlay(run: RenderableMysteryRun, eff: ReturnType<RenderableMysteryRun['effects']>, dt: number): void {
-    const h = run.hyde;
+    const h = this.hydeRender(run);
     const p = run.player;
     const dist = Math.hypot(h.x - p.x, h.z - p.z);
     const prox = clamp(1 - dist / 30, 0, 1);
     const base: Record<HydeMode, number> = { PATROL: 0, INVESTIGATE_SOUND: 0.22, SEARCH: 0.32, CHASE: 0.85, COOLDOWN: 0.18 };
-    let tgt = this.hydeShown ? base[h.mode] * (0.45 + 0.55 * prox) + h.suspicion * 0.22 * prox : 0;
+    let tgt = this.hydeLive ? base[h.mode] * (0.45 + 0.55 * prox) + h.suspicion * 0.22 * prox : 0;
     if (eff.hydeStunned || eff.hydePetrified) tgt *= 0.3;
     const hydeTgt = tgt;
-    const cr = this.crackShown ? run.crackstone ?? null : null;
+    const cr = this.crackShown ? this.crackRender(run, this.crackWas === true) : null;
     let crEdge = 0;
     if (cr) {
       const cdist = Math.hypot(cr.x - p.x, cr.z - p.z);
       const cprox = clamp(1 - cdist / 26, 0, 1);
       const cbase: Record<CrackstoneMode, number> = { PATROL: 0, INVESTIGATE: 0.2, SEARCH: 0.26, CHASE: 0.75, ATTACK: 0.85, RETURN: 0.1 };
-      let ct = cbase[cr.mode] * (0.45 + 0.55 * cprox) + cr.suspicion * 0.2 * cprox;
+      let ct = this.crackWas === true && !this.deathStage ? cbase[cr.mode] * (0.45 + 0.55 * cprox) + cr.suspicion * 0.2 * cprox : 0;
       if (eff.crackstoneStunned || eff.crackstonePetrified) ct *= 0.3;
       tgt = Math.max(tgt, ct);
-      if (!this.crackOnScreen && (cr.mode === 'CHASE' || cr.mode === 'ATTACK')) crEdge = clamp(1.1 - cdist / 24, 0.25, 1);
+      if (this.crackWas === true && !this.deathStage && !this.crackOnScreen && (cr.mode === 'CHASE' || cr.mode === 'ATTACK')) crEdge = clamp(1.1 - cdist / 24, 0.25, 1);
     }
+    const crackT = tgt;
+    let slEdge = 0;
+    const sv = this.slurpShown && this.slurpWas === true && !this.deathStage ? this.slurpRender(run, true) : null;
+    let slurpT = 0;
+    if (sv) {
+      const sdist = Math.hypot(sv.x - p.x, sv.z - p.z);
+      const sprox = clamp(1 - sdist / 24, 0, 1);
+      const sbase: Record<SlurpMode, number> = { WANDER: 0, INVESTIGATE: 0.2, SEARCH: 0.26, CHASE: 0.75, ATTACK: 0.85, LEAVE: 0.04 };
+      slurpT = sbase[sv.mode] * (0.45 + 0.55 * sprox) + sv.suspicion * 0.2 * sprox;
+      if (sv.stunnedUntil > run.t) slurpT *= 0.3;
+      if (!this.slurpOnScreen && (sv.mode === 'CHASE' || sv.mode === 'ATTACK')) slEdge = clamp(1.1 - sdist / 24, 0.25, 1);
+    }
+    tgt = Math.max(tgt, slurpT);
+    if (this.deathStage) tgt = 0;
     this.threat = damp(this.threat, clamp(tgt, 0, 1), 4, dt);
-    this.crackMix = damp(this.crackMix, tgt > hydeTgt + 1e-4 ? 1 : 0, 4, dt);
-    this.hideK = damp(this.hideK, p.hidden ? 1 : 0, 5, dt);
-    this.dimK = damp(this.dimK, run.status === 'dnf' ? 0.55 : 0, 2, dt);
+    const crackLead = crackT > hydeTgt + 1e-4 && crackT >= slurpT;
+    this.crackMix = damp(this.crackMix, crackLead ? 1 : 0, 4, dt);
+    this.slurpMix = damp(this.slurpMix, slurpT > Math.max(hydeTgt, crackT) + 1e-4 ? 1 : 0, 4, dt);
+    this.hideK = damp(this.hideK, p.hidden && !p.cabinet && this.cabBlend < 0.01 ? 1 : 0, 5, dt);
+    this.dimK = damp(this.dimK, run.status === 'dnf' && !this.death ? 0.55 : 0, 2, dt);
     this.flash = Math.max(0, this.flash - dt * 2.2);
     const u = this.overlay.u;
     u.uThreat.value = this.threat;
@@ -1617,23 +1981,38 @@ export class MysteryScene {
     u.uReduced.value = this.options.reducedMotion ? 1 : 0;
     u.uFlash.value.set(this.flashRGB[0], this.flashRGB[1], this.flashRGB[2], this.flash);
     // directional glow toward an off-screen Hyde when he matters
-    const matters = this.hydeShown && h.mode === 'CHASE' || ((h.mode === 'SEARCH' || h.mode === 'INVESTIGATE_SOUND') && dist < 14) || h.grabbing;
+    const matters = this.hydeLive && h.mode === 'CHASE' || ((h.mode === 'SEARCH' || h.mode === 'INVESTIGATE_SOUND') && dist < 14) || h.grabbing;
     const edge = !this.hydeOnScreen && matters ? clamp(1.1 - dist / 24, 0.25, 1) : 0;
     u.uCrack.value = this.crackMix;
-    if (crEdge > edge) {
+    u.uSlurp.value = this.slurpMix;
+    if (slEdge > edge && slEdge >= crEdge) {
+      u.uEdge.value.set(this.slurpEdge.x, this.slurpEdge.y, slEdge);
+      u.uEdgeCrack.value = 2;
+    } else if (crEdge > edge) {
       u.uEdge.value.set(this.crackEdge.x, this.crackEdge.y, crEdge);
       u.uEdgeCrack.value = 1;
     } else {
       u.uEdge.value.set(this.hydeEdge.x, this.hydeEdge.y, edge);
       u.uEdgeCrack.value = 0;
     }
-    this.overlay.mesh.visible = this.threat > 0.004 || this.hideK > 0.004 || this.flash > 0.004 || this.dimK > 0.004 || edge > 0.004 || crEdge > 0.004;
+    // hiding view (cabinet) + cutscene fades
+    u.uPeek.value = smoothstep(0, 1, this.peekK);
+    u.uPeekOpen.value = this.cabinets?.byId(this.peekId) ? clamp(this.cabinets.byId(this.peekId)!.open, 0, 1) : 0;
+    const S = this.deathStage;
+    if (S) {
+      u.uDeath.value.set(S.fadeRGB[0], S.fadeRGB[1], S.fadeRGB[2], S.fadeA);
+      u.uDark.value = S.dark;
+      if (S.flashA > this.flash) u.uFlash.value.set(S.flashRGB[0], S.flashRGB[1], S.flashRGB[2], S.flashA);
+      u.uEdge.value.z = 0;
+      u.uDim.value = 0;
+    } else { u.uDeath.value.w = 0; u.uDark.value = 0; }
+    this.overlay.mesh.visible = this.threat > 0.004 || this.hideK > 0.004 || this.flash > 0.004 || this.dimK > 0.004 || edge > 0.004 || crEdge > 0.004 || slEdge > 0.004 || this.peekK > 0.004 || !!S;
   }
 
   // ------------------------------------------------------------------------------------------------------ VFX
   private updateVfx(run: RenderableMysteryRun, eff: ReturnType<RenderableMysteryRun['effects']>, dt: number): void {
     const p = run.player;
-    const h = run.hyde;
+    const h = this.hydeRender(run);
     const e = run.egg;
     const low = this.options.lowGraphics;
     const calm = this.options.reducedMotion;
@@ -1660,10 +2039,11 @@ export class MysteryScene {
 
     // ---- hiding spots: faint sigils, brighter as you approach, green while hidden inside
     for (const hs of this.map.hidingSpots) {
+      if (hs.kind === 'cabinet') continue; // cabinets have their own door-front outline
       const d = Math.hypot(p.x - hs.x, p.z - hs.z);
       if (d > 8) continue; // nothing is drawn for far-away hiding spots
       const near = 1 - smoothstep(2.5, 8, d);
-      const inside = p.hidden && d < hs.radius + 0.6;
+      const inside = p.hidden && !p.cabinet && d < hs.radius + 0.6;
       const pulse = calm ? 1 : 0.8 + 0.2 * Math.sin(T * 2.4 + hs.x);
       rings.push(hs.x, 0.1, hs.z, hs.radius * 1.15, inside ? '#8affc8' : '#b79cff', (inside ? 0.9 : 0.12 + near * 0.55) * pulse);
       if (near > 0.2 && !inside) rings.push(hs.x, 0.1, hs.z, hs.radius * 0.7, '#b79cff', near * 0.35 * pulse);
@@ -1672,7 +2052,7 @@ export class MysteryScene {
 
     // ---- investigation: site props' clue items / outlines / searched cues / glints (investigationView.ts). The hidden truth is only
     //      read there for known / revealed / near-range clues, so nothing visible tells which candidate site is real.
-    const it = run.interactable();
+    const it = this.itNow;
     {
       const fi = this.invDirty;
       this.invDirty = false;
@@ -1943,8 +2323,18 @@ export class MysteryScene {
       glows.add(ex.x, 0.6, ex.z, 5.5 * (1 - 0.4 * this.riseK), gc.set('#6a58c8'), 0.32 * (1 - this.riseK));
     }
     this.crackVfx(run, eff, dt, glows, rings, gc);
+    this.slurpVfx(run, dt, glows, rings, gc);
+    // ground mist while an enemy rises out of / sinks into the fog (the spawn and despawn effect)
+    for (const m of this.mists) m.t += dt;
+    this.mists = this.mists.filter((m) => m.t < m.dur);
+    for (const m of this.mists) {
+      const u = m.t / m.dur;
+      const a = m.dir > 0 ? Math.sin(Math.min(1, u) * Math.PI) : 1 - u;
+      glows.add(m.x, 0.6, m.z, m.size * (m.dir > 0 ? 1 - 0.35 * u : 0.8 + 0.2 * u), gc.set(m.color), 0.3 * a);
+    }
+    if (this.deathStage && this.deathStage.sigil > 0) this.deathSigilVfx(this.deathStage.sigil, rings, beams);
     // companion + egg-carrier warmth
-    if (!this.showcase) glows.add(this.companion.root.position.x, this.companion.root.position.y, this.companion.root.position.z, 1.5, gc.set(this.companion.glowColor), 0.55);
+    if (!this.showcase && !this.deathStage && this.cabBlend < 0.3) glows.add(this.companion.root.position.x, this.companion.root.position.y, this.companion.root.position.z, 1.5, gc.set(this.companion.glowColor), 0.55);
 
     // ---- blob shadows
     {
@@ -1953,12 +2343,16 @@ export class MysteryScene {
         const m = this.blobM.makeScale(s, 1, s).setPosition(this.tmp);
         this.blobs.setMatrixAt(i, m);
       };
-      set(0, p.x, p.z, 1.0);
+      const hidden = !!this.deathStage || this.cabBlend > 0.5;
+      set(0, p.x, p.z, hidden ? 0.001 : 1.0);
       set(1, h.x, h.z, this.hydeShown ? 2.9 * this.riseK : 0.001);
-      set(2, this.companion.root.position.x, this.companion.root.position.z, 0.5 + (this.companion.root.position.y - 1.4) * -0.1);
+      set(2, this.companion.root.position.x, this.companion.root.position.z, hidden ? 0.001 : 0.5 + (this.companion.root.position.y - 1.4) * -0.1);
       set(3, eggPos.x, eggPos.z, e.state === 'carried' || e.state === 'delivered' || !this.eggShown ? 0.01 : 0.55);
-      set(4, run.crackstone?.x ?? 0, run.crackstone?.z ?? 0, this.crackShown ? 1.5 : 0.001);
-      this.blobs.count = 5;
+      const cb = this.crackRender(run, this.crackWas === true);
+      set(4, cb?.x ?? 0, cb?.z ?? 0, this.crackShown ? 1.5 * this.crackK : 0.001);
+      const sl = this.slurp && this.slurpShown ? this.slurpRender(run, this.slurpWas === true) : null;
+      set(5, sl?.x ?? 0, sl?.z ?? 0, sl ? 1.0 * this.slurpK : 0.001);
+      this.blobs.count = 6;
       this.blobs.instanceMatrix.needsUpdate = true;
     }
 
@@ -1979,6 +2373,219 @@ export class MysteryScene {
 
     rings.end(); glows.end(); beams.end(); this.streaks.end(); this.ghosts.end(); this.coins.end(); this.bolts.end();
     void PAL;
+  }
+
+  // ------------------------------------------------------------------------------------------------------ cabinets + hiding view
+  private updateCabinets(run: RenderableMysteryRun, dt: number): void {
+    const cs = this.cabinets;
+    if (!cs) return;
+    const p = run.player;
+    const cab = this.deathStage ? null : p.cabinet ?? null;
+    const it = (this.itNow = run.interactable());
+    const k = it?.kind as string | undefined;
+    const promptId = it && (k === 'cabinet' || k === 'hide') ? it.id : null;
+    const sim = this.deathStage ? null : run.cabinetStatus ? run.cabinetStatus() : null;
+    cs.update({ dt, reduced: this.options.reducedMotion, px: p.x, pz: p.z, insideId: cab?.spotId ?? null, phase: cab ? cab.phase : null, promptId, door: sim && sim.spotId === cab?.spotId ? sim.door : null });
+    if (cab) this.peekId = cab.spotId;
+    const inWant = !!cab && cab.phase !== 'exiting';
+    this.cabIn = inWant;
+    const fade = this.options.reducedMotion ? 0.2 : 0.4; // the camera moves into / out of the cabinet in 0.4 s
+    this.peekK = clamp(this.peekK + (inWant ? dt / fade : -dt / fade), 0, 1);
+    this.cabBlend = clamp(this.cabBlend + (inWant ? dt / 0.5 : -dt / 0.6), 0, 1);
+    if (!cab && this.peekK <= 0 && this.cabBlend <= 0) this.peekId = null;
+    this.cabPullT = Math.max(0, this.cabPullT - dt);
+  }
+
+  /** Blends the camera into the cabinet: just inside the door looking out through it (open door = wider view, mouse look limited). */
+  private applyPeekCamera(run: RenderableMysteryRun): void {
+    const c = this.cabinets?.byId(this.peekId);
+    const near = this.peekK > 0.001 ? 0.08 : 0.3;
+    if (near !== this.nearNow) { this.nearNow = near; this.camera.near = near; this.camera.updateProjectionMatrix(); }
+    if (!c || this.peekK <= 0.001) return;
+    const p = run.player;
+    const s = smoothstep(0, 1, this.peekK);
+    this.cabinets!.eye(c, this.peekPos);
+    const open = clamp(c.open, 0, 1);
+    const calm = this.options.reducedMotion;
+    const lim = lerp(0.3, 0.8, open);
+    const yaw = clampLook(p.yaw, c.yaw, lim);
+    const pitch = clamp(p.pitch, -0.3, 0.32);
+    const T = this.clock;
+    const sway = calm ? 0 : 1;
+    // slight breathing sway (a held breath when the door is shut); a jolt when pulled out
+    this.peekPos.y += Math.sin(T * 1.5) * 0.007 * sway * (c.open > 0.3 ? 1 : 0.5);
+    this.peekPos.x += Math.sin(T * 0.9) * 0.004 * sway;
+    const jolt = this.cabPullT > 0 && !calm ? Math.sin(this.cabPullT * 60) * this.cabPullT * 0.08 : 0;
+    this.peekEuler.set(pitch + Math.sin(T * 1.5 + 1) * 0.004 * sway + jolt, yaw + Math.sin(T * 0.8) * 0.006 * sway, Math.sin(T * 0.6) * 0.004 * sway, 'YXZ');
+    this.peekQuat.setFromEuler(this.peekEuler);
+    this.camera.position.lerp(this.peekPos, s);
+    this.camera.quaternion.slerp(this.peekQuat, s);
+    const fov = lerp(this.camera.fov, lerp(60, 72, open), s);
+    if (Math.abs(fov - this.camera.fov) > 0.01) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); }
+  }
+
+  // ------------------------------------------------------------------------------------------------------ death cutscene
+  /**
+   * Plays the death cutscene for `enemy` (3-4 s, first person; reduced motion: a 1.2 s still of the monster's pose). The promise resolves when
+   * it ends (or when skipDeath() is called); the final frame (black) is held until stopDeath(). Calling it again returns the same promise.
+   * The caller disables input and shows the game-over card when it resolves; sound cues arrive through opts.onCue.
+   */
+  playDeath(enemy: EnemyId, opts: DeathOptions): Promise<void> {
+    if (this.deathPromise) return this.deathPromise;
+    const run = this.lastRun;
+    this.deathPromise = new Promise<void>((resolve) => { this.deathResolve = resolve; });
+    if (!run || this.disposed) { this.resolveDeath(); return this.deathPromise; }
+    const p = run.player;
+    const eye = p.crouched ? 1.05 : 1.55;
+    const need = enemy === 'slurp' ? 7.5 : 9.5;
+    const { psi, free } = this.pickDeathDir(run, enemy, need);
+    this.deathCamFrom = { pos: this.camera.position.clone(), quat: this.camera.quaternion.clone(), fov: this.camera.fov };
+    this.death = new DeathCutscene(enemy, p.x, p.z, psi, eye, opts, clamp(free / need, 0.5, 1));
+    // the dying enemy is already "there" (no rise effect); every other enemy is gone for the shot
+    this.hydeWasEmerged = enemy === 'hyde'; this.riseK = enemy === 'hyde' ? 1 : 0;
+    this.crackWas = enemy === 'crackstone'; this.crackK = enemy === 'crackstone' ? 1 : 0;
+    this.slurpWas = enemy === 'slurp'; this.slurpK = enemy === 'slurp' ? 1 : 0;
+    this.emerge = null;
+    this.alertQ.visible = this.alertX.visible = this.alertQc.visible = this.alertXc.visible = this.alertQs.visible = this.alertXs.visible = false;
+    if (this.death.reduced) { for (let i = 0; i < 24; i++) this.update(run, [], 1 / 30); } // settle the held pose
+    return this.deathPromise;
+  }
+
+  /** Jumps the cutscene to its end frame (resolves the promise at once). */
+  skipDeath(): void {
+    if (!this.death) return;
+    this.death.skip();
+    this.resolveDeath();
+  }
+
+  /** Leaves the held end frame and returns to the normal camera (a new run, or the card closed). */
+  stopDeath(): void {
+    this.resolveDeath();
+    this.death = null;
+    this.deathStage = null;
+    this.deathPromise = null;
+    this.deathCamFrom = null;
+    this.camera.near = 0.3; this.nearNow = 0.3;
+    this.cameraReady = false;
+    this.camera.fov = this.baseVFov; this.camera.updateProjectionMatrix();
+  }
+
+  get deathPlaying(): boolean { return !!this.death && !this.death.done; }
+
+  private resolveDeath(): void {
+    const r = this.deathResolve;
+    this.deathResolve = null;
+    if (r) r();
+  }
+
+  /** The best direction for the shot: toward the monster when it is close, else where the player looks; it must have open ground ahead. */
+  private pickDeathDir(run: RenderableMysteryRun, enemy: EnemyId, need: number): { psi: number; free: number } {
+    const p = run.player;
+    const m = enemy === 'hyde' ? run.hyde : enemy === 'crackstone' ? run.crackstone : run.slurp;
+    const cands: number[] = [];
+    if (m && Math.hypot(m.x - p.x, m.z - p.z) < 14 && Math.hypot(m.x - p.x, m.z - p.z) > 0.5) cands.push(yawOf(m.x - p.x, m.z - p.z));
+    cands.push(p.yaw);
+    for (const a of [Math.PI, Math.PI / 2, -Math.PI / 2, Math.PI / 4, -Math.PI / 4, (3 * Math.PI) / 4, (-3 * Math.PI) / 4]) cands.push(p.yaw + a);
+    let best = { psi: p.yaw, free: -1 };
+    for (const psi of cands) {
+      const f = fwdOf(psi);
+      const hit = this.world ? this.world.solidHit(p.x, 1.0, p.z, f.x, 0, f.z, need + 2, 0.05) : need + 2;
+      const free = Math.min(hit, need + 2) - 0.6;
+      if (free >= need) return { psi, free };
+      if (free > best.free) best = { psi, free };
+    }
+    return best;
+  }
+
+  private ensureStagedRun(run: RenderableMysteryRun): RenderableMysteryRun {
+    if (!this.deathStageRun || this.deathBase !== run) {
+      const o = Object.create(run) as RenderableMysteryRun;
+      const self = this;
+      Object.defineProperties(o, {
+        t: { get: () => self.deathStage?.t ?? run.t, configurable: true },
+        hyde: { get: () => (self.deathStage?.enemy === 'hyde' ? self.sHyde : run.hyde), configurable: true },
+        crackstone: { get: () => (self.deathStage?.enemy === 'crackstone' ? self.sCrack : run.crackstone), configurable: true },
+        slurp: { get: () => (self.deathStage?.enemy === 'slurp' ? self.sSlurp : run.slurp), configurable: true },
+        hydeEmerged: { get: () => true, configurable: true },
+        enemyActive: { value: (id: EnemyId) => self.deathStage?.enemy === id, configurable: true },
+      });
+      this.deathStageRun = o as RenderableMysteryRun & Record<string, unknown>;
+      this.deathBase = run;
+    }
+    return this.deathStageRun;
+  }
+
+  /** Advances the cutscene and returns the staged run to draw (null = no cutscene). */
+  private stepDeath(run: RenderableMysteryRun, dt: number): RenderableMysteryRun | null {
+    const d = this.death;
+    if (!d) { this.deathStage = null; return null; }
+    const S = d.step(dt);
+    this.deathStage = S;
+    const px = run.player.x, pz = run.player.z;
+    if (S.enemy === 'hyde') {
+      Object.assign(this.sHyde, { x: S.x, z: S.z, yaw: S.yaw, mode: S.mode as HydeMode, speed: S.speed, grabbing: S.grabbing, suspicion: S.suspicion, canSeePlayer: true, lastKnown: { x: px, z: pz } });
+    } else if (S.enemy === 'crackstone') {
+      Object.assign(this.sCrack, { x: S.x, z: S.z, yaw: S.yaw, mode: S.mode as CrackstoneMode, speed: S.speed, suspicion: S.suspicion, canSeePlayer: true, lastKnown: { x: px, z: pz }, curse: S.curse, scan: null });
+    } else {
+      Object.assign(this.sSlurp, { active: true, x: S.x, z: S.z, yaw: S.yaw, mode: S.mode as SlurpMode, speed: S.speed, attacking: S.attacking, modeT: S.windup * 0.6, suspicion: S.suspicion, canSeePlayer: true, lastKnown: { x: px, z: pz } });
+    }
+    const rr = this.ensureStagedRun(run);
+    for (const ev of S.events) {
+      if (ev === 'burst') this.onEvent({ type: 'curse', phase: 'hit', hpLost: 0, blocked: false, t: S.t, seq: 0 } as StampedEvent, rr);
+    }
+    if (d.done) this.resolveDeath();
+    return rr;
+  }
+
+  /** The cutscene camera (first person at the player's eye, a head-hung close-up for Slurp), blended in from the gameplay camera. */
+  private applyDeathCamera(): void {
+    const S = this.deathStage, d = this.death;
+    if (!S || !d) return;
+    const cam = this.camera;
+    const pos = this.tmp.copy(S.cam);
+    const look = this.tmp2.copy(S.look);
+    if (S.headK > 0 && this.slurp) {
+      // hang the lens off the face: from the head back toward the shot origin, looking between the eyes and the mouth
+      const hw = this.slurp.headWorld, mw = this.slurp.mouthWorld;
+      const dx = S.cam.x - hw.x, dz = S.cam.z - hw.z, dl = Math.hypot(dx, dz) || 1;
+      this.deathHeadCam.set(hw.x + (dx / dl) * S.headDist, hw.y - 0.02, hw.z + (dz / dl) * S.headDist);
+      pos.lerp(this.deathHeadCam, S.headK);
+      look.set(lerp(S.look.x, (hw.x + mw.x) / 2, S.headK), lerp(S.look.y, (hw.y + mw.y) / 2 + 0.01, S.headK), lerp(S.look.z, (hw.z + mw.z) / 2, S.headK));
+    }
+    const sh = S.shake * S.shake * 0.2;
+    if (sh > 0.0005) { pos.x += (Math.random() - 0.5) * sh; pos.y += (Math.random() - 0.5) * sh; pos.z += (Math.random() - 0.5) * sh; }
+    cam.position.copy(pos);
+    cam.lookAt(look);
+    if (S.roll || sh > 0.0005) cam.rotateZ(S.roll + (Math.random() - 0.5) * sh * 0.6);
+    cam.fov = S.fov;
+    cam.updateProjectionMatrix();
+    // blend in from where the gameplay camera was (0.35 s), unless reduced motion (a straight cut to the still)
+    const from = this.deathCamFrom;
+    if (from && !d.reduced && d.time < 0.35) {
+      const u = smoothstep(0, 1, d.time / 0.35);
+      cam.position.lerpVectors(from.pos, cam.position, u);
+      cam.quaternion.slerpQuaternions(from.quat, cam.quaternion, u);
+      cam.fov = lerp(from.fov, S.fov, u);
+      cam.updateProjectionMatrix();
+    }
+    const near = 0.08;
+    if (this.nearNow !== near) { this.nearNow = near; cam.near = near; cam.updateProjectionMatrix(); }
+  }
+
+  /** The cursed sigil rising around the lens: rings climbing and tightening, beams of green light standing up around the player. */
+  private deathSigilVfx(sig: number, rings: RingField, beams: BeamField): void {
+    const d = this.death;
+    if (!d) return;
+    const ox = d.originX, oz = d.originZ;
+    const fade = 1 - smoothstep(0.75, 1, sig);
+    for (let i = 0; i < 3; i++) {
+      const u = clamp(sig * 1.15 - i * 0.12, 0, 1);
+      rings.push(ox, 0.08 + u * 2.8, oz, 3.4 * (1 - 0.45 * u), i % 2 ? CRACK_GREEN_HI : CRACK_GREEN, (1 - u) * 0.9 * fade);
+    }
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + sig * 0.8;
+      beams.push(ox + Math.cos(a) * 2.5, oz + Math.sin(a) * 2.5, 0.12, 1.2 + sig * 8, CRACK_GREEN, 0.55 * fade);
+    }
   }
 
   private hazardK = 0;

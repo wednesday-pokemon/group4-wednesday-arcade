@@ -50,7 +50,16 @@
 // crouches during a curse / scan dodge and sprints only when a walk would not get out in time (sprints are loud: the
 // Hyde hears them). Abilities against him only in an emergency (a curse about to land on the bot); they are the Hyde's
 // counters.
+//
+// Final (docs/final/FINAL_CONTRACT.md): the Hyde counts as present only while ACTIVE (the encounter director despawns and
+// respawns it). Slurp is read only when a player could know it — while visible (run.slurpVisible()) or chasing /
+// lunging (public, like Crackstone R4): a chase or lunge → sprint away out of his sight line (he is slower than a sprint);
+// a visible Slurp close by (stealthy) → step out of his view. Cabinets (stealthy, `hide`): when a hunter is searching /
+// investigating near the bot (and does not see it right now) and a cabinet's door is within 8 m and closer than the
+// threat, it walks there, enters (E), closes the door (E), waits until no hunter is close and alert for 2 s (or a
+// creak is due, or 20 s passed), then opens the door (E) and walks on. Crouch-in hiding spots exclude cabinets.
 import type { MysteryRun } from './run.ts';
+import { cabinetDoor } from './cabinet.ts';
 import { mentionCounts } from './caseLogic.ts';
 import { World, wrapAngle, yawTo } from './geometry.ts';
 import { noisyFloorAt, searchlightEtaS, searchlightsOf, type SearchlightHazard } from './hazards.ts';
@@ -118,7 +127,8 @@ type Goal =
   | { kind: 'lever'; id: string; at: Vec2 }
   | { kind: 'examine'; id: string; at: Vec2 }
   | { kind: 'hide'; at: Vec2; until: number }
-  | { kind: 'flee'; at: Vec2 };
+  | { kind: 'flee'; at: Vec2 }
+  | { kind: 'cabinet'; id: string; at: Vec2; until: number };
 
 /** Distance penalty (m) in the site score p / (d + K). */
 const SCORE_K = 15;
@@ -151,6 +161,13 @@ export class Bot {
   // ---- Crackstone response state
   private crackGoal: { goal: Goal; why: 'curse' | 'scan' | 'view'; key: number; until: number } | null = null;
   private crackViewReadyAt = -Infinity;
+  // ---- Slurp / cabinet state
+  private slurpGoal: { goal: Goal; until: number } | null = null;
+  private cabinetGoal: { id: string; at: Vec2; until: number } | null = null;
+  private calmSince = -Infinity;
+  private cabinetReadyAt = -Infinity;
+  private enteredCabinetAt = -Infinity;
+  private slurpEvadeReadyAt = -Infinity;
 
   constructor(readonly run: MysteryRun, options: BotOptions, seed: string) {
     this.o = resolveBotOptions(options);
@@ -260,7 +277,7 @@ export class Bot {
     const t = run.t;
     const h = run.hyde;
     const inv = run.investigation();
-    const threatened = run.hydeEmerged && (h.mode !== 'PATROL' || Math.hypot(h.x - p.x, h.z - p.z) < 15);
+    const threatened = run.hydeActive && (h.mode !== 'PATROL' || Math.hypot(h.x - p.x, h.z - p.z) < 15);
     if (this.extraGoal) {
       const g = this.extraGoal.goal;
       const done = g.kind === 'lever' ? inv.passageOpen : g.kind === 'examine' ? inv.examined.includes(g.id) : true;
@@ -338,7 +355,8 @@ export class Bot {
       move: false, hint: false, interactHeld: false,
     };
     if (t < this.startAt) return input;
-    const emerged = run.hydeEmerged;
+    if (p.cabinet) return this.insideCabinet(input);
+    const emerged = run.hydeActive;
     const dHyde = emerged ? Math.hypot(h.x - p.x, h.z - p.z) : Infinity;
     const chased = emerged && h.mode === 'CHASE';
     const alert = emerged && (h.mode === 'INVESTIGATE_SOUND' || h.mode === 'SEARCH');
@@ -395,6 +413,12 @@ export class Bot {
     // ---- Joseph Crackstone (public information only)
     const crack = cs ? this.crackstoneResponse(chased) : null;
     if (crack) goal = crack;
+    // ---- Slurp (public information only)
+    const slurpFlee = this.slurpResponse();
+    if (slurpFlee) goal = slurpFlee;
+    // ---- cabinets: a hunter searching nearby (not seeing me) and a cabinet close at hand
+    const cab = !slurpFlee && !chased ? this.cabinetChoice(alert, dHyde) : null;
+    if (cab) goal = cab;
     if (!goal) return input;
 
     // ---- stance
@@ -407,8 +431,13 @@ export class Bot {
       this.nextSprintDraw = t + this.rng.range(1.5, 4);
     }
     let sprint = !crouch && this.sprinting;
-    if (chased && o.fleeSprint) {
+    const slurpHunting = !!run.slurp && run.slurp.active && (run.slurp.mode === 'CHASE' || run.slurp.mode === 'ATTACK');
+    if ((chased || (slurpFlee && slurpHunting)) && o.fleeSprint) {
       sprint = true;
+      crouch = false;
+    }
+    if (goal.kind === 'cabinet') {
+      sprint = false; // a slam would be heard
       crouch = false;
     }
     if (crack && this.crackGoal && this.crackGoal.why !== 'view') {
@@ -424,7 +453,16 @@ export class Bot {
     // ---- arrival / interaction
     const dGoal = Math.hypot(goal.at.x - p.x, goal.at.z - p.z);
     const R = run.tuning.player.interactRangeM;
-    if (goal.kind === 'hide' || goal.kind === 'flee') {
+    if (goal.kind === 'cabinet') {
+      const it = run.interactable();
+      if (it?.kind === 'cabinet' && it.id === goal.id) {
+        input.interact = true;
+        this.cabinetGoal = null;
+        this.calmSince = -Infinity;
+        this.enteredCabinetAt = t;
+        return input;
+      }
+    } else if (goal.kind === 'hide' || goal.kind === 'flee') {
       if (dGoal < 0.6) {
         input.crouch = goal.kind === 'hide';
         if (!chased && !alert) this.hideGoal = null;
@@ -586,6 +624,7 @@ export class Bot {
     let spot: Vec2 | null = null;
     let spotD = 9;
     for (const s of run.map.hidingSpots) {
+      if (s.kind === 'cabinet') continue;
       const d = Math.hypot(s.x - p.x, s.z - p.z);
       if (d < spotD && nav.reachable(p, s, 1.5)) {
         spot = nav.nearestWalkable(s, 1) ?? { x: s.x, z: s.z };
@@ -656,11 +695,11 @@ export class Bot {
     return this.path[0] ?? goal;
   }
 
-  /** A nearby walkable point out of the Hyde's sight line and away from it (fallback when no hiding spot fits). */
-  private pickEvade(radii: number[]): Vec2 | null {
+  /** A nearby walkable point out of the threat's (default: the Hyde's) sight line and away from it. */
+  private pickEvade(radii: number[], threat?: Vec2): Vec2 | null {
     const run = this.run;
     const p = run.player;
-    const h = run.hyde;
+    const h = threat ?? run.hyde;
     const nav = run.playerNav();
     let best: Vec2 | null = null;
     let bestScore = -Infinity;
@@ -697,7 +736,7 @@ export class Bot {
     const p = run.player;
     const h = run.hyde;
     const nav = run.playerNav();
-    const cands: Vec2[] = run.map.hidingSpots.map((s) => ({ x: s.x, z: s.z }));
+    const cands: Vec2[] = run.map.hidingSpots.filter((s) => s.kind !== 'cabinet').map((s) => ({ x: s.x, z: s.z }));
     if (fleeing && !this.o.hide) cands.push(...run.map.safeReleasePoints);
     let best: Vec2 | null = null;
     let bestScore = -Infinity;
@@ -720,6 +759,99 @@ export class Bot {
       }
     }
     return best;
+  }
+
+  // ------------------------------------------------------------------------------------------------ Slurp + cabinets
+
+  /** Slurp chasing / lunging (public) → sprint out of his sight line; visible and close (stealthy) → step out of view. */
+  private slurpResponse(): Goal | null {
+    const run = this.run;
+    const sl = run.slurp;
+    if (!sl || !sl.active) {
+      this.slurpGoal = null;
+      return null;
+    }
+    const p = run.player;
+    const t = run.t;
+    const hunting = sl.mode === 'CHASE' || sl.mode === 'ATTACK';
+    const visible = run.slurpVisible();
+    const d = Math.hypot(sl.x - p.x, sl.z - p.z);
+    if (this.slurpGoal && t < this.slurpGoal.until && (hunting || visible)) return this.slurpGoal.goal;
+    this.slurpGoal = null;
+    if (hunting && d < 16) {
+      const at = this.pickEvade([6, 10, 14], sl);
+      if (at) this.slurpGoal = { goal: { kind: 'flee', at }, until: t + 1 };
+    } else if (this.o.hide && visible && d < 9 && sl.mode !== 'LEAVE' && t >= this.slurpEvadeReadyAt) {
+      // step out of his view, at most once per 8 s (so a route past him stays possible)
+      this.slurpEvadeReadyAt = t + 8;
+      const at = this.pickEvade([4, 7], sl);
+      if (at) this.slurpGoal = { goal: { kind: 'hide', at, until: t + 2.5 }, until: t + 2.5 };
+    }
+    return this.slurpGoal?.goal ?? null;
+  }
+
+  /** A cabinet worth using right now (stealthy only): a hunter alert nearby that does not see me, a door within 8 m. */
+  private cabinetChoice(hydeAlert: boolean, dHyde: number): Goal | null {
+    const run = this.run;
+    const p = run.player;
+    const t = run.t;
+    if (!this.o.hide) return null;
+    if (this.cabinetGoal && t < this.cabinetGoal.until) return { kind: 'cabinet', ...this.cabinetGoal };
+    this.cabinetGoal = null;
+    if (t < this.cabinetReadyAt || run.egg.state === 'carried') return null;
+    const h = run.hyde;
+    const hydeNear = hydeAlert && dHyde < 14 && !h.canSeePlayer && !!h.lastKnown && Math.hypot(h.lastKnown.x - p.x, h.lastKnown.z - p.z) < 9;
+    const sl = run.slurp;
+    const slurpNear = !!sl && sl.active && run.slurpVisible() && (sl.mode === 'INVESTIGATE' || sl.mode === 'SEARCH') && !sl.canSeePlayer
+      && Math.hypot(sl.x - p.x, sl.z - p.z) < 12;
+    if (!hydeNear && !slurpNear) return null;
+    const threat = hydeNear ? { x: h.x, z: h.z } : { x: sl!.x, z: sl!.z };
+    const nav = run.playerNav();
+    let best: { id: string; at: Vec2; d: number } | null = null;
+    for (const s of run.map.hidingSpots) {
+      if (s.kind !== 'cabinet') continue;
+      const door = cabinetDoor(s);
+      const d = Math.hypot(door.x - p.x, door.z - p.z);
+      if (d > 8 || Math.hypot(door.x - threat.x, door.z - threat.z) < d + 1) continue;
+      if (best && d >= best.d) continue;
+      const at = nav.nearestWalkable(door, 1.5);
+      if (!at || !nav.reachable(p, at, 1)) continue;
+      best = { id: s.id, at, d };
+    }
+    if (!best) return null;
+    this.cabinetGoal = { id: best.id, at: best.at, until: t + 6 };
+    this.cabinetReadyAt = t + 20;
+    return { kind: 'cabinet', ...this.cabinetGoal };
+  }
+
+  /** Inside a cabinet: close the door, wait for calm (or a due creak), then open and step out. */
+  private insideCabinet(input: MysteryInput): MysteryInput {
+    const run = this.run;
+    const t = run.t;
+    const st = run.cabinetStatus();
+    const cab = run.player.cabinet;
+    if (!cab || !st || cab.phase === 'entering' || cab.phase === 'exiting' || st.closing) return input;
+    const p = run.player;
+    const h = run.hyde;
+    const hydeClose = run.hydeActive && h.mode !== 'PATROL' && Math.hypot(h.x - p.x, h.z - p.z) < 14;
+    const sl = run.slurp;
+    const slurpClose = !!sl && sl.active && sl.mode !== 'WANDER' && sl.mode !== 'LEAVE' && Math.hypot(sl.x - p.x, sl.z - p.z) < 12;
+    const threat = hydeClose || slurpClose;
+    if (!threat) {
+      if (this.calmSince === -Infinity) this.calmSince = t;
+    } else this.calmSince = -Infinity;
+    const leave = (this.calmSince > -Infinity && t - this.calmSince >= 2) || (st.creakInS !== null && st.creakInS <= 1)
+      || st.witnessedBy !== null || t - this.enteredCabinetAt > 20;
+    if (cab.phase === 'open') {
+      if (leave && !threat) {
+        input.moveZ = 1;
+        return input;
+      }
+      input.interact = true; // close the door
+      return input;
+    }
+    if (leave) input.interact = true; // open and step out
+    return input;
   }
 
   /**

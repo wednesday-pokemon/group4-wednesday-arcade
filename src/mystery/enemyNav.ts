@@ -27,10 +27,48 @@ export function nearHiding(map: MapDef, p: Vec2): boolean {
   return map.hidingSpots.some((s) => Math.hypot(s.x - p.x, s.z - p.z) < hidingSafeM(s));
 }
 
-/** revealM of the hiding spot containing (x, z), or null when the point is in none. */
+/** revealM of the crouch-in hiding spot containing (x, z), or null when the point is in none (cabinets are entered with E). */
 export function hidingRevealAt(ctx: Pick<SimContext, 'map'>, x: number, z: number): number | null {
-  for (const s of ctx.map.hidingSpots) if (Math.hypot(s.x - x, s.z - z) <= s.radius) return s.revealM;
+  for (const s of ctx.map.hidingSpots) if (s.kind !== 'cabinet' && Math.hypot(s.x - x, s.z - z) <= s.radius) return s.revealM;
   return null;
+}
+
+/** Stands for "never seen": a closed cabinet hides the player at any distance (canSee: distance > −1 → hidden). */
+export const CLOSED_CABINET_REVEAL_M = -1;
+
+/**
+ * How a hidden player can be seen right now (canSee's hiddenRevealM): null = not hidden; inside a CLOSED cabinet →
+ * CLOSED_CABINET_REVEAL_M (invisible); an OPEN cabinet → that cabinet's revealM (like a crouch spot); crouched in a hiding
+ * spot → its revealM.
+ */
+export function playerRevealAt(ctx: Pick<SimContext, 'map' | 'player'>): number | null {
+  const p = ctx.player;
+  if (!p.hidden) return null;
+  const cab = p.cabinet;
+  if (cab) {
+    if (cab.phase === 'closed') return CLOSED_CABINET_REVEAL_M;
+    return ctx.map.hidingSpots.find((s) => s.id === cab.spotId)?.revealM ?? 1.5;
+  }
+  return hidingRevealAt(ctx, p.x, p.z);
+}
+
+/** The player is inside a cabinet with the door open or closed (not while stepping in / out). */
+export function inCabinetNow(p: { cabinet?: { phase: string } | null }): boolean {
+  return !!p.cabinet && (p.cabinet.phase === 'open' || p.cabinet.phase === 'closed');
+}
+
+/**
+ * The cabinet an enemy at `body` finds the player in right now (its spot id), or null: the player is inside (open /
+ * closed), the enemy either sees them (an open door within revealM) or remembers that cabinet (witnessed / creak), and it
+ * stands within cabinet.pullOutM of the cabinet's exit point (ctx.cabinetExit).
+ */
+export function cabinetFound(ctx: SimContext, body: Vec2, remembered: { spotId: string } | null, seen: boolean): string | null {
+  const cab = ctx.player.cabinet;
+  if (!cab || !inCabinetNow(ctx.player) || !ctx.pullOut) return null;
+  if (!seen && remembered?.spotId !== cab.spotId) return null;
+  const door = ctx.cabinetExit?.();
+  if (!door) return null;
+  return Math.hypot(body.x - door.x, body.z - door.z) <= ctx.tuning.cabinet.pullOutM ? cab.spotId : null;
 }
 
 export interface SearchSpot { at: Vec2; look: Vec2 }

@@ -175,7 +175,10 @@ describe('controls: Q power, R move, F silent alias (R4)', () => {
       }
     }
     expect(controlRows('full').flatMap((r) => r.keys)).toContain('M');
-    expect(controlRows('strip').map((r) => `${r.keys[0]} ${r.label}`)).toEqual(['Tab Evidence', 'V Hint', 'Esc Pause']);
+    // UX_FINAL §0: the strip reads "Tab Evidence · X Map · Esc Pause"; V (Ask Weems, −50) lives in Pause + the Weems button
+    expect(controlRows('strip').map((r) => `${r.keys[0]} ${r.label}`)).toEqual(['Tab Evidence', 'X Map', 'Esc Pause']);
+    expect(controlRows('full').find((r) => r.id === 'hint')).toMatchObject({ keys: ['V'], label: 'Ask Weems (−50)' });
+    expect(controlRows('full').find((r) => r.id === 'lens')).toMatchObject({ keys: ['X'], label: 'Map: switch danger view' });
     const full = controlRows('full', { power: 'Wolf Shift', move: 'Shadow Ball' });
     expect(full.find((r) => r.id === 'power')).toMatchObject({ keys: ['Q'], label: 'Wolf Shift' });
     expect(full.find((r) => r.id === 'ability_move')).toMatchObject({ keys: ['R'], label: 'Shadow Ball' });
@@ -250,7 +253,7 @@ describe('HUD render (static)', () => {
     examineToast: null, clueCard: { id: 1, clueId: 'access_ledger', title: 'Door Ledger', fullTitle: 'Archive and Greenhouse Access Ledger', short: 'Someone signed in late.', meaning: 'The door was used at night.', icon: 'key', leaving: false },
     stack: { log: { id: 'l', kind: 'log', head: "THING'S LOG", text: '1 of 3 clues found.', why: null, basis: null, priority: 0 }, card: { id: 'w', kind: 'why', head: 'PATTERN', text: '2 of 3 alerts came while sprinting. Not proof.', why: null, basis: 'pattern', priority: 1 } },
     captions: [], toast: null, catchFlashSeq: 0, hintCooldownS: 0, hintLevel: 0, risk: null,
-    odds: { phase: 'hidden', groups: [], footer: [] }, areaName: null,
+    odds: { phase: 'hidden', rows: [], footer: [] }, areaName: null,
     crack: null, banner: null, cursedLeftS: null, threatEdge: null,
   };
   const html = renderToStaticMarkup(createElement(MysteryHud, { hud, tutorial: false, pointerLocked: false, showPredictions: true, nav: () => null }));
@@ -260,7 +263,8 @@ describe('HUD render (static)', () => {
     expect(html).not.toMatch(/<kbd[^>]*>M<\/kbd>/);
     expect(html).toMatch(/data-testid="hud-ability-F".*?<kbd[^>]*>Q<\/kbd>/s);
     expect(html).toMatch(/data-testid="hud-ability-Q".*?<kbd[^>]*>R<\/kbd>/s);
-    expect(html).toContain('Hyde emerges in 0:18');
+    expect(html).toContain('Arrives in 0:18'); // UX_FINAL §1a director state (was "Hyde emerges in 0:18")
+    expect(html).toContain('>HYDE<');
     expect(html).toContain('Egg: seen · Potting shed');
     expect(html).toContain('data-testid="hud-keystrip"');
     expect(html).toContain('data-basis="pattern"');

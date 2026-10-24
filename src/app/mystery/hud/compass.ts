@@ -19,7 +19,9 @@ export const FOCUS_LABEL_DEG = 10;
 export type CompassMarkerKind = 'objective' | 'area' | 'egg' | 'tower' | 'landmark' | 'hyde_heard' | 'hyde_seen'
   // Joseph Crackstone (UX_ENEMIES §4): filled hat only per R4, hat outline 3 s after a directional caption, the text
   // "CURSED" toward his area's centroid (≤ 60 m, player outside the area)
-  | 'crack_seen' | 'crack_heard' | 'cursed_area';
+  | 'crack_seen' | 'crack_heard' | 'cursed_area'
+  // Slurp (UX_FINAL §1a): filled 14 px only per R4, outline held 3 s after a directional caption
+  | 'slurp_seen' | 'slurp_heard';
 
 export interface CompassMarkerIn {
   id: string;
@@ -82,9 +84,9 @@ export const fmtM = (m: number) => `${Math.max(0, Math.round(m))} m`;
 
 /** Label priority (lower wins a collision): objective > lantern > tower > Hyde > area > egg > landmark. */
 const LABEL_RANK: Record<CompassMarkerKind, number> = {
-  objective: 0, tower: 2, hyde_seen: 3, hyde_heard: 3, crack_seen: 3, crack_heard: 3, area: 4, egg: 5, cursed_area: 5.5, landmark: 6,
+  objective: 0, tower: 2, hyde_seen: 3, hyde_heard: 3, crack_seen: 3, crack_heard: 3, slurp_seen: 3, slurp_heard: 3, area: 4, egg: 5, cursed_area: 5.5, landmark: 6,
 };
-const ENEMY = new Set<CompassMarkerKind>(['hyde_seen', 'hyde_heard', 'crack_seen', 'crack_heard']);
+const ENEMY = new Set<CompassMarkerKind>(['hyde_seen', 'hyde_heard', 'crack_seen', 'crack_heard', 'slurp_seen', 'slurp_heard']);
 /** Text-only markers (the text IS the marker). */
 const TEXT_ONLY = new Set<CompassMarkerKind>(['landmark', 'cursed_area']);
 

@@ -1,4 +1,4 @@
-# Three cases — integration contract (rules `mystery-v3.1`, case system v1)
+# Three cases — integration contract (rules `mystery-v4`, case content version 3; history below)
 
 Single source of truth for the three-case feature. Shared types: `src/mystery/types.ts` (`CaseId`, `CaseDef`,
 `ClueDef`, `CaseNoteDef`, `CaseSolution`, `Accusation`, `RunResult.caseId/caseVersion/evidence/deductionCorrect`).
@@ -9,7 +9,33 @@ Home → nickname → three random duo cards (choose one) → **case-file reveal
 skippable, reduced motion) → **Thing's case-specific prologue** → tutorial → investigation → egg → Iago Tower →
 **accusation = suspect + cited evidence** (one shot) → results (case resolution) + analytics.
 
-## Content version 2 (overhaul 2026-10-23)
+## Content version 3 (final 2026-10-24) — current
+- Rules version `mystery-v4` (types.ts). `CaseDef.version` = `CaseSolution.version` = **3** for all three cases.
+- Suspects in every case: **Marilyn Thornhill** (archivist, `thornhill`), **Françoise Galpin** (visiting historian
+  restoring the crypt — a role invented for this story, `galpin`), **Barry Dort** (night guard, `barry`). Isaac Night is
+  no longer a suspect: he is the roaming monster **Slurp**. Old rows keep `isaac` readable server-side (backend).
+- Culprits: 01 thornhill · **02 galpin** · 03 barry. Clue ids unchanged (no `ClueId` change).
+- Case 02 rewritten: `sabotaged_gate` (METHOD, names Galpin: her restoration key opened the gate lock, chain sawn) ·
+  `tunnel_access_record` (OPPORTUNITY, Galpin 11:12 pm, clears Thornhill 8:40–8:55 pm) · `equipment_match` → *Restorer's
+  Tool Satchel* (BROKEN ALIBI: her stamped satchel with wire saw, brass pin and tunnel clay was below although she says
+  her kit was locked in the library; clears Barry, pier lantern 11:15 pm). Truth table: `docs/MYSTERY_DESIGN.md` §12.2.
+- Cases 01 / 03: Galpin replaces Isaac in the clue that cleared him (01 `botanical_residue` key returned 9:05 pm;
+  03 `watchtower_signal` observatory star log 11:00–11:45). 01 `access_ledger` is now kept at the Porter's Lodge.
+- Compact maps moved candidate sites (`caseWorlds.ts`, design §12.4); `location` strings and first-site `roomId`s
+  follow: 01 residue "Greenhouse Annex or Poison Garden", ledger "Porter's Lodge" (`path`); 02 sign-in "Tunnel office or
+  side path" (`courtyard`), satchel "By the cage or tunnel bend"; 03 patrol log / console now in `path` (ravine post,
+  control hut). Every clue has `shortTitle` (≤ 26), `short` (≤ 90), `meaning` (≤ 60).
+
+| # | id | culprit (secret) | clues (candidate sites → prior) | egg (candidate sites → prior) |
+|---|---|---|---|---|
+| 01 | `poisoned_archive` | thornhill | falsified_transfer (archive desk .6 / stacks terminal .4), botanical_residue (greenhouse shelf .6 / Poison bed .4), access_ledger (porter's lodge 1) | potting store .5 / garden nest .3 / yard crate .2 |
+| 02 | `crypt_last_witness` | galpin | sabotaged_gate (gate mechanism 1), tunnel_access_record (tunnel office .55 / side-path register .45), equipment_match (by the cage .6 / tunnel bend .4) | catacomb nest .4 / hall altar .35 / office nest .25 |
+| 03 | `midnight_signal` | barry | falsified_patrol_log (ravine guard post .55 / checkpoint booth .45), alarm_override (control-hut console 1), watchtower_signal (yard recorder .6 / tower relay .4) | potting shed .5 / yard crates .3 / kennel straw .2 |
+
+Innocents (results screen): 01 Galpin (key back 9:05 pm), Barry (east-wall card) · 02 Thornhill (out 8:55 pm), Barry
+(pier 11:15 pm) · 03 Thornhill (no console clearance), Galpin (star log every five minutes).
+
+## Content version 2 (overhaul 2026-10-23) — superseded by version 3
 - `CaseDef.version` and `CaseSolution.version` are **2** for all three cases (answers, links, innocents unchanged).
 - Clue and egg positions are no longer fixed: each clue has 1–2 candidate sites and the egg 3, drawn once per session
   with the priors in `src/mystery/data/caseWorlds.ts` (`CaseWorldDef`; design `docs/MYSTERY_DESIGN.md` §10). The
@@ -29,7 +55,7 @@ skippable, reduced motion) → **Thing's case-specific prologue** → tutorial �
 - ClueDef titles longer than the 26-char UI budget (kept, `shortTitle` requested from the orchestrator):
   `falsified_transfer` (30), `botanical_residue` (28), `access_ledger` (36).
 
-## Cases (data: `src/mystery/data/cases.ts`, answers: `src/mystery/data/solutions.ts`)
+## Cases, version 2 (superseded — see version 3 above; data: `src/mystery/data/cases.ts`, answers: `src/mystery/data/solutions.ts`)
 | # | id | culprit (secret) | clues (candidate sites → prior) | egg (candidate sites → prior) |
 |---|---|---|---|---|
 | 01 | `poisoned_archive` | thornhill | falsified_transfer (archive desk .6 / Rare Book Stacks .4), botanical_residue (greenhouse shelf .6 / Restricted Vault .4), access_ledger (Records Crypt 1) | potting store .5 / vault shrine .3 / crypt reliquary .2 |

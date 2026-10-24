@@ -1,6 +1,7 @@
 // TelemetryCollector + MysteryAnalytics driven like the app (run.update per frame): immutable log, thinned uploads that
 // keep every rule event, payloads accepted by the real Edge Function parsers, V hints → advice records, results panels.
 import { describe, expect, it } from 'vitest';
+import { LOCAL_ONLY_FORECAST_TARGETS } from '../../../src/mystery/analytics/types.ts';
 import { parseMysteryAppend } from '../../../supabase/functions/_shared/mystery-validation.ts';
 import { createMysteryAnalytics } from '../../../src/mystery/analytics/index.ts';
 import { MysteryAnalytics } from '../../../src/mystery/analytics/session.ts';
@@ -97,8 +98,10 @@ describe('MysteryAnalytics (app wiring)', () => {
       const { run, analytics, outputs } = playLikeApp(duo, `app-${i}`);
       const hints = run.log.filter((e) => e.type === 'hint_requested').length;
       expect(hints).toBeGreaterThan(0);
-      const hintAdvice = analytics.adviceRecords.filter((r) => r.trigger === 'hint');
-      expect(hintAdvice.length).toBe(hints);
+      // final: every counted hint_requested is a PRINCIPAL WEEMS hint (recorded weems_l{n}); Thing's advice is never a hint
+      expect(analytics.weemsHints().length).toBe(hints);
+      expect(analytics.collector.recommendations.filter((r) => /^weems_l[123]$/.test(r.action) && r.trigger === 'hint').length).toBe(hints);
+      expect(analytics.adviceRecords.filter((r) => r.trigger === 'hint').length).toBe(0);
       expect(outputs.some((o) => o.risk && o.risk.source === 'ml')).toBe(true);
       // risk updates at ≤ 1 Hz
       const sampledTimes = analytics.riskSeries.map((p) => p.t);
@@ -121,7 +124,8 @@ describe('MysteryAnalytics (app wiring)', () => {
         recs += body.recommendations.length;
         analytics.ackBatch(b);
       }
-      expect(forecasts).toBe(analytics.collector.forecasts.length);
+      // final: slurp_risk / enemy_spawn stay LOCAL until the server accepts those targets
+      expect(forecasts).toBe(analytics.collector.forecasts.filter((f) => !LOCAL_ONLY_FORECAST_TARGETS.includes(f.target)).length);
       expect(recs).toBeGreaterThanOrEqual(analytics.adviceRecords.length);
       // dashboard over this session
       const d = dashboard([analytics.sessionRecord()]);

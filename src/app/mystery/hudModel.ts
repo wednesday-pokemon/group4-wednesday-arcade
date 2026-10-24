@@ -11,9 +11,14 @@ import type {
 import type { Interactable, MysteryRunLike } from './runTypes.ts';
 import { CASES } from '../../mystery/data/cases.ts';
 import type { SpokenLine } from './thingLines.ts';
-import type { OddsView } from './hud/oddsModel.ts';
 import type { StackKind } from './hud/thingStack.ts';
 import type { BannerView, CrackHudView } from './hud/crackstone.ts';
+import type { EnemyId } from '../../mystery/types.ts';
+import type { ThreatChipView } from './hud/enemies.ts';
+import { HIDDEN_ODDS_V3, type OddsV3View } from './hud/oddsV3.ts';
+import type { CabinetView } from './hud/cabinet.ts';
+import type { WeemsButtonView, WeemsCardView } from './hud/weems.ts';
+import type { TallyView } from './hud/tally.ts';
 
 // ------------------------------------------------------------------------------------------------- noise meter
 
@@ -235,7 +240,30 @@ export interface StackView { id: string; kind: StackKind; head: string; text: st
 export type HydeLevel = 0 | 1 | 2;
 
 /** The one screen-edge chevron (§4 order). `icon` null = the plain chevron (the Hyde). */
-export interface ThreatEdgeView { at: { x: number; y: number; rot: number }; enemy: 'hyde' | 'crack'; icon: 'hat' | 'curse' | null; strong: boolean }
+export interface ThreatEdgeView { at: { x: number; y: number; rot: number }; enemy: 'hyde' | 'crack' | 'slurp'; icon: 'hat' | 'curse' | 'slurp' | null; strong: boolean }
+
+/** Minimap danger view (UX_FINAL §1d): the ONE threat layer shown, and why. */
+export interface LensView {
+  enemy: EnemyId;
+  auto: boolean;
+  /** The lens enemy is not on the map: spawn pins ("may appear"). */
+  inactive: boolean;
+  label: string;
+  /** Monsters of this case (toggle icons). */
+  present: EnemyId[];
+}
+
+/** Death sequence overlay (UX_FINAL §3). */
+export interface DeathView {
+  phase: 'cutscene' | 'card';
+  enemy: EnemyId;
+  reduced: boolean;
+  /** Skip button visible (t0 + 0.5 s, cutscene only). */
+  skip: boolean;
+  /** Bottom-left letterbox caption. */
+  caption: string;
+  card: { kicker: string; name: string; flavour: string; why: string[]; tally: string; countdownS: number } | null;
+}
 export interface MysteryHudModel {
   t: number;
   status: RunStatus;
@@ -275,7 +303,8 @@ export interface MysteryHudModel {
   hintLevel: 0 | 1 | 2 | 3;
   /** Detection risk (pill right segment; ≤ 1 Hz, band held ≥ 2 s); null before emergence / in the tutorial. */
   risk: RiskView | null;
-  odds: OddsView;
+  /** Odds panel v3 (UX_FINAL §1c): one line per monster + the objective row. */
+  odds: OddsV3View;
   /** Current area / room name (minimap chip). */
   areaName: string | null;
   /** Joseph Crackstone's plaque (null = no Crackstone in this case: the Hyde pill keeps its centred box). */
@@ -286,6 +315,18 @@ export interface MysteryHudModel {
   cursedLeftS: number | null;
   /** The single threat-edge chevron, null when none applies. */
   threatEdge: ThreatEdgeView | null;
+  // ---- final (UX_FINAL) — optional so older fixtures still render (the strip is then derived from hyde / crack)
+  /** Threats strip: Hyde · Crackstone · Slurp chips (absent monsters omitted). */
+  threats?: ThreatChipView[];
+  lens?: LensView | null;
+  tally?: TallyView;
+  cabinet?: CabinetView;
+  weems?: { button: WeemsButtonView; card: WeemsCardView | null } | null;
+  death?: DeathView | null;
+  /** Slurp chases / grabs (orchid mist). */
+  slurpHunting?: boolean;
+  /** Pulled out of a cabinet: catch flash tinted in that enemy's colour. */
+  catchTint?: EnemyId | null;
 }
 
 /** UX §1 objective copy (R5: the egg line never names a site). */
@@ -334,7 +375,7 @@ export function tooCloseWhileHidden(run: MysteryRunLike): boolean {
   return Math.hypot(run.hyde.x - p.x, run.hyde.z - p.z) <= spot.revealM;
 }
 
-function effectChip(run: MysteryRunLike): { word: string; leftS: number | null } | null {
+export function effectChip(run: MysteryRunLike): { word: string; leftS: number | null } | null {
   const fx = run.effects();
   const h = run.hyde;
   const left = (until: number) => (until > run.t ? Math.round((until - run.t) * 10) / 10 : null);
@@ -369,7 +410,17 @@ export interface HudExtras {
   clueCard?: ClueCardView | null;
   examineToast?: ExamineToastView | null;
   stack?: { log: StackView | null; card: StackView | null };
-  odds?: OddsView;
+  odds?: OddsV3View;
+  threats?: ThreatChipView[];
+  lens?: LensView | null;
+  tally?: TallyView;
+  cabinet?: CabinetView;
+  weems?: { button: WeemsButtonView; card: WeemsCardView | null } | null;
+  death?: DeathView | null;
+  /** Slurp's CHASE / ATTACK edge point (R4: his chase is public), null otherwise. */
+  slurpEdge?: { x: number; y: number; rot: number } | null;
+  slurpHunting?: boolean;
+  catchTint?: EnemyId | null;
   /** E is held while moving (hold-to-search needs standing still). */
   standStill?: boolean;
   areaName?: string | null;
@@ -384,13 +435,18 @@ export interface HudExtras {
  * The ONE threat-edge chevron (UX_ENEMIES §4): Hyde CHASE > Crackstone ATTACK (curse circle cue first, else his
  * position) > Crackstone CHASE > Hyde SEARCH. Crackstone SEARCH never gets a chevron (his position is not public).
  */
-export function pickThreatEdge(hydeMode: HydeMode, hydeAt: { x: number; y: number; rot: number } | null, crack: HudExtras['crackEdge'] | null | undefined, crackMode: 'CHASE' | 'ATTACK' | null): ThreatEdgeView | null {
+export function pickThreatEdge(
+  hydeMode: HydeMode, hydeAt: { x: number; y: number; rot: number } | null, crack: HudExtras['crackEdge'] | null | undefined, crackMode: 'CHASE' | 'ATTACK' | null,
+  slurpAt: { x: number; y: number; rot: number } | null = null,
+): ThreatEdgeView | null {
   if (hydeMode === 'CHASE') return hydeAt ? { at: hydeAt, enemy: 'hyde', icon: null, strong: true } : null;
   if (crackMode === 'ATTACK') {
     if (crack?.curse) return { at: crack.curse, enemy: 'crack', icon: 'curse', strong: true };
     if (crack?.attack) return { at: crack.attack, enemy: 'crack', icon: 'curse', strong: true };
   }
   if (crackMode === 'CHASE' && crack?.chase) return { at: crack.chase, enemy: 'crack', icon: 'hat', strong: true };
+  // UX_FINAL §1a: the single ENGAGED enemy first (≤ 1 engaged at a time), then the Hyde's SEARCH
+  if (slurpAt) return { at: slurpAt, enemy: 'slurp', icon: 'slurp', strong: true };
   if (hydeMode === 'SEARCH' && hydeAt) return { at: hydeAt, enemy: 'hyde', icon: null, strong: false };
   return null;
 }
@@ -424,7 +480,6 @@ export function threatEdgePoint(
   return { x, y, rot };
 }
 
-const HIDDEN_ODDS: OddsView = { phase: 'hidden', groups: [], footer: [] };
 
 /** Prompt copy (UX §5): tower warning before deposit, the egg set-down hold. */
 export function promptView(prompt: Interactable | null, found: number, total: number, standStill: boolean): MysteryHudModel['prompt'] {
@@ -482,12 +537,22 @@ export function buildHud(run: MysteryRunLike, x: HudExtras): MysteryHudModel {
     hintCooldownS: x.hintCooldownS,
     hintLevel: x.hintLevel ?? 0,
     risk: x.risk,
-    odds: x.odds ?? HIDDEN_ODDS,
+    odds: x.odds ?? HIDDEN_ODDS_V3,
     areaName: x.areaName ?? null,
     crack: x.crack ?? null,
     banner: x.banner ?? null,
     cursedLeftS: x.cursedLeftS ?? null,
-    threatEdge: emerged || x.crack ? pickThreatEdge(emerged ? x.shownMode : 'PATROL', emerged ? edgeAt : null, x.crackEdge, x.crack?.key === 'CHASE' || x.crack?.key === 'ATTACK' ? x.crack.key : null) : null,
+    threatEdge: emerged || x.crack || x.slurpEdge
+      ? pickThreatEdge(emerged ? x.shownMode : 'PATROL', emerged ? edgeAt : null, x.crackEdge, x.crack?.key === 'CHASE' || x.crack?.key === 'ATTACK' ? x.crack.key : null, x.slurpEdge ?? null)
+      : null,
+    ...(x.threats ? { threats: x.threats } : {}),
+    ...(x.lens !== undefined ? { lens: x.lens } : {}),
+    ...(x.tally ? { tally: x.tally } : {}),
+    ...(x.cabinet ? { cabinet: x.cabinet } : {}),
+    ...(x.weems !== undefined ? { weems: x.weems } : {}),
+    ...(x.death !== undefined ? { death: x.death } : {}),
+    slurpHunting: !!x.slurpHunting,
+    catchTint: x.catchTint ?? null,
   };
 }
 

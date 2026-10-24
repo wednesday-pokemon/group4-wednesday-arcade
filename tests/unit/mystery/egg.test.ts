@@ -103,12 +103,14 @@ describe('egg carry / drop / deposit', () => {
     expect(acc.map((e) => e.type)).toEqual(['accusation', 'finish']);
     // no clue was found: the uncitable clue ids are dropped from the recorded evidence
     expect(acc[0]).toMatchObject({ type: 'accusation', suspectId: sol.culprit, correct: true, cluesFound: 0, evidence: [], deductionCorrect: false });
-    expect(run.accuse({ suspectId: 'isaac', evidence: [] }, sol)).toEqual([]);
+    expect(run.accuse({ suspectId: 'galpin', evidence: [] }, sol)).toEqual([]);
     expect(run.status).toBe('finished');
     const r = run.result()!;
     expect(r.activeTimeS).toBeCloseTo(101, 0);
     expect(r.eggPoints).toBe(run.egg.points);
-    expect(r.score).toBeCloseTo(run.egg.points * 100 - r.activeTimeS, 5);
+    // mystery-v4: delivery 1000 + correct culprit 300 + no clues + no detections 150 + no hints 150 + time bonus
+    expect(r.scoreBreakdown).toMatchObject({ delivery: 1000, accusation: 300, clues: 0, noHints: 150, hintPenalty: 0 });
+    expect(r.score).toBe(r.scoreBreakdown!.total);
     expect(r.verdict).toBe('egg_secured_mystery_unsolved'); // no clues found
     expect(r).toMatchObject({ caseId: CASE.id, caseVersion: CASE.version, accused: sol.culprit, correct: true, deductionCorrect: false, evidence: [] });
   });

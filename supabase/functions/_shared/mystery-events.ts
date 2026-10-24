@@ -25,7 +25,21 @@
 // 'miss' must report hpLost 0; no hit after the deposit. A dnf 'hp_depleted' is accepted only when the recorded HP loss
 // (catches + curse hits) reaches the player's max HP (RulesContext.maxHp; heals only raise the bar, so this is a
 // necessary condition of a genuine HP death) — the sim must emit `curse {phase:'hit'}` BEFORE its `dnf`.
-import type { ClueId, DnfReason, EggState, SuspectId, Verdict } from './mystery/types.ts';
+//
+// Final wave / rules mystery-v4 (2026-10-24, docs/final/FINAL_CONTRACT.md §1, §4, migration 20261025000100):
+//   * TELEMETRY (lenient, analytics only): enemy_spawned, enemy_despawned, slurp_mode, cabinet.
+//   * RULE events (strict payloads; replayed by finalize; part of ruleFingerprint):
+//       enemy_detected {enemy, via}         -> progress.detections +1 (any detection removes the no-detection bonus)
+//       enemy_hit {enemy, hpLost, blocked}  -> progress.hits[enemy] +1 (blocked hits count), progress.hitHpLost, lastHitBy;
+//                                              a Slurp hit also adds hpLost to progress.hpLost (Slurp has no other HP
+//                                              event); blocked => hpLost 0; never after the deposit
+//       hint_requested {level?: 1|2|3}      -> progress.hints +1 (each explicit Ask-Weems press; already a rule event)
+//       dnf {reason, by?: enemy | null}     -> `by`, when non-null, must be the enemy of the LAST enemy_hit
+//   * v4 sessions only (RulesContext.rulesVersion === 'mystery-v4'), checked at the terminal event (finish / dnf):
+//     hits.hyde >= catches and hits.crackstone >= landed curses (every Hyde grab and every curse hit has its enemy_hit;
+//     extra hits, e.g. a cabinet pull-out, are fine) — so the sim must emit `enemy_hit` BEFORE `dnf`. A v4 hp_depleted
+//     DNF accepts either HP accounting (catch + curse + Slurp hits, or the sum of every enemy_hit) reaching max HP.
+import type { ClueId, DnfReason, EggState, EnemyId, MysteryRulesVersion, SuspectId, Verdict } from './mystery/types.ts';
 import { HttpError } from './errors.ts';
 import { jsonEqual } from './validation.ts';
 
@@ -39,17 +53,19 @@ export const MYSTERY_EVENT_TYPES = [
   'hyde_emerged', 'site_checked', 'trace_found', 'examined', 'passage_opened', 'hazard_triggered',
   // Joseph Crackstone (enemy contract): four telemetry types + the `curse` rule event
   'crackstone_mode', 'crackstone_sighted', 'crackstone_lost', 'crackstone_scan', 'curse',
+  // final wave (mystery-v4): encounter director, Slurp, cabinets (telemetry) + enemy_detected / enemy_hit (rule events)
+  'enemy_spawned', 'enemy_despawned', 'enemy_detected', 'enemy_hit', 'slurp_mode', 'cabinet',
   'accusation', 'finish', 'dnf',
 ] as const;
 export type MysteryEventType = (typeof MYSTERY_EVENT_TYPES)[number];
 
 /**
  * Types the rules depend on (finalize re-validates exactly these from the database). Mirrored by the partial index
- * mystery_events_rule_idx (latest definition: migration 20261024000100, which added 'curse').
+ * mystery_events_rule_idx (latest definition: migration 20261025000100, which added 'enemy_detected' and 'enemy_hit').
  */
 export const RULE_EVENT_TYPES: readonly MysteryEventType[] = [
   'catch', 'clue_found', 'egg_pickup', 'egg_drop', 'egg_damage', 'egg_delivered', 'accusation', 'finish', 'dnf',
-  'hyde_sighted', 'hint_requested', 'curse',
+  'hyde_sighted', 'hint_requested', 'curse', 'enemy_detected', 'enemy_hit',
 ];
 
 /** The six overhaul telemetry types (stored for analytics; no rule depends on them). */
@@ -61,6 +77,9 @@ export const OVERHAUL_TELEMETRY_TYPES: readonly MysteryEventType[] = [
 export const CRACKSTONE_TELEMETRY_TYPES: readonly MysteryEventType[] = [
   'crackstone_mode', 'crackstone_sighted', 'crackstone_lost', 'crackstone_scan',
 ];
+
+/** Final-wave telemetry: encounter director, Slurp and cabinets (analytics only; enemy_detected / enemy_hit are rules). */
+export const DIRECTOR_TELEMETRY_TYPES: readonly MysteryEventType[] = ['enemy_spawned', 'enemy_despawned', 'slurp_mode', 'cabinet'];
 
 /** Content ids carried by telemetry (site / spawn / examine / passage / hazard / clue ids): snake_case, ≤ 40 chars. */
 export const SAFE_ID_RE = /^[a-z][a-z0-9_]{0,39}$/;
@@ -81,6 +100,8 @@ export const MAX_SCAN_RADIUS_M = 100;
 export const MAX_CURSE_HP = 100;
 /** Tolerance of the hp_depleted check (HP values are integers; this only absorbs float noise). */
 export const HP_EPSILON = 0.5;
+/** HP one enemy_hit may report (never more than a full bar). */
+export const MAX_HIT_HP = 100;
 
 export interface RulesContext {
   clueIds: readonly ClueId[];
@@ -93,6 +114,11 @@ export interface RulesContext {
    * curse hits) ≥ maxHp. null / absent = do not check.
    */
   maxHp?: number | null;
+  /**
+   * The SESSION's rules version (mystery_sessions.rules_version). 'mystery-v4' enables the v4 terminal checks (hits vs
+   * catches / curse hits). Absent = a v3.1 context (no v4 checks; the new event types are still parsed and counted).
+   */
+  rulesVersion?: MysteryRulesVersion;
 }
 
 /** A parsed, structurally valid event as stored in mystery_events. */
@@ -127,18 +153,37 @@ export interface MysteryProgress {
   /** Landed Crackstone curses (curse phase 'hit', blocked or not). Not a catch (rule R7). */
   curses: number;
   sightings: number;
+  /** Explicit Ask-Weems hints (hint_requested rule events). */
   hints: number;
+  /** mystery-v4: enemy_detected rule events (any enemy, any channel). */
+  detections: number;
+  /** mystery-v4: enemy_hit rule events per enemy (blocked hits count). */
+  hits: Record<EnemyId, number>;
+  /** Sum of enemy_hit.hpLost (second HP accounting, used by the v4 hp_depleted check). */
+  hitHpLost: number;
+  /** Enemy of the last enemy_hit (dnf.by must name it; the defeat log stores it). */
+  lastHitBy: EnemyId | null;
   terminal:
     | { type: 'finish'; seq: number; t: number; claimedVerdict: Verdict; claimedScore: number }
-    | { type: 'dnf'; seq: number; t: number; reason: DnfReason }
+    /** `by` is set only when the dnf event named an enemy (keeps pre-v4 stored progress fingerprint-identical). */
+    | { type: 'dnf'; seq: number; t: number; reason: DnfReason; by?: EnemyId }
     | null;
 }
+
+export const ENEMIES = ['hyde', 'crackstone', 'slurp'] as const;
+const noHits = (): Record<EnemyId, number> => ({ hyde: 0, crackstone: 0, slurp: 0 });
 
 export function initialProgress(): MysteryProgress {
   return {
     v: 1, lastSeq: -1, lastT: 0, cluesFound: [], egg: 'resting', eggSecurity: 100, pickups: 0, delivered: null,
-    accusation: null, catches: 0, hpLost: 0, curses: 0, sightings: 0, hints: 0, terminal: null,
+    accusation: null, catches: 0, hpLost: 0, curses: 0, sightings: 0, hints: 0, detections: 0, hits: noHits(), hitHpLost: 0,
+    lastHitBy: null, terminal: null,
   };
+}
+
+/** Total enemy_hit count (the v4 score's `hits`). */
+export function totalHits(p: MysteryProgress): number {
+  return ENEMIES.reduce((s, e) => s + (p.hits?.[e] ?? 0), 0);
 }
 
 /** Restores progress from the jsonb column ({} for a fresh session). */
@@ -148,6 +193,12 @@ export function progressFromRow(raw: unknown): MysteryProgress {
     // progress stored before the Crackstone fields existed: a curse-free run (no curse event could have been accepted)
     if (typeof p.curses !== 'number') p.curses = 0;
     if (typeof p.hpLost !== 'number') p.hpLost = 0;
+    // progress stored before mystery-v4 (20261025000100): no enemy_detected / enemy_hit could have been accepted
+    if (typeof p.detections !== 'number') p.detections = 0;
+    if (!p.hits || typeof p.hits !== 'object') p.hits = noHits();
+    for (const e of ENEMIES) if (typeof p.hits[e] !== 'number') p.hits[e] = 0;
+    if (typeof p.hitHpLost !== 'number') p.hitHpLost = 0;
+    if (p.lastHitBy === undefined) p.lastHitBy = null;
     return p;
   }
   return initialProgress();
@@ -167,7 +218,9 @@ type Field =
   | { k: 'str' }
   | { k: 'id' } // SAFE_ID_RE
   | { k: 'nstr' } // string or null
-  | { k: 'strs'; max: number; len: number };
+  | { k: 'strs'; max: number; len: number }
+  /** Optional key: absent is fine; when present it must satisfy `f` (or be null when `nullable`). */
+  | { k: 'opt'; f: Field; nullable: boolean };
 
 const num = (min = -1e6, max = 1e6): Field => ({ k: 'num', min, max });
 const int = (min: number, max: number): Field => ({ k: 'int', min, max });
@@ -178,6 +231,7 @@ const id: Field = { k: 'id' };
 const coord = num(-MAX_COORD_M, MAX_COORD_M);
 const strs: Field = { k: 'strs', max: 16, len: 40 };
 const evidenceIds: Field = { k: 'strs', max: MAX_EVIDENCE, len: 40 };
+const opt = (f: Field, nullable = false): Field => ({ k: 'opt', f, nullable });
 
 // Enums mirror the unions in src/mystery/types.ts (NoiseSource, Stance, RoomId, HydeMode, hyde_mode reason). Exported so
 // supabase/tests/unit/mystery-overhaul.test.ts can compare them with the synced types.ts and catch drift before a live
@@ -200,6 +254,18 @@ export const CRACKSTONE_REASONS = [
 export const CRACKSTONE_VIA = ['sight', 'proximity', 'scan'] as const;
 export const CRACKSTONE_SCAN_PHASES = ['warning', 'pulse'] as const;
 export const CURSE_PHASES = ['cast', 'hit', 'miss'] as const;
+// Final wave (types.ts EnemyId, SlurpMode and the inline unions of enemy_despawned / enemy_detected / slurp_mode / cabinet
+// / hint_requested). Drift-checked against the synced types.ts by mystery-v4.test.ts.
+export const ENEMY_IDS = ENEMIES;
+export const DESPAWN_REASONS = ['far', 'cycle_done', 'encounter_resolved'] as const;
+export const DETECT_VIA = ['sight', 'sound', 'proximity', 'scan', 'witnessed_hide'] as const;
+export const SLURP_MODES = ['WANDER', 'INVESTIGATE', 'CHASE', 'ATTACK', 'SEARCH', 'LEAVE'] as const;
+export const SLURP_REASONS = [
+  'saw_player', 'sensed_player', 'heard_noise', 'lost_sight', 'search_timeout', 'reached_target', 'attack_done', 'stunned',
+  'lured', 'leash', 'gave_up', 'deferred',
+] as const;
+export const CABINET_ACTIONS = ['enter', 'close', 'open', 'exit', 'pulled_out'] as const;
+export const HINT_LEVELS = [1, 2, 3] as const;
 const VERDICTS: readonly Verdict[] = ['case_solved', 'egg_secured_mystery_unsolved', 'not_accused'];
 
 /**
@@ -225,7 +291,8 @@ const SCHEMAS: Record<MysteryEventType, { fields: Record<string, Field>; strict:
   egg_delivered: { fields: { tier: en('common', 'rare', 'legendary'), points: int(1, 6), security: num(0, 100) }, strict: true },
   ability_used: { fields: { key: en('F', 'Q'), abilityId: str, kinds: strs, success: bool, detail: str }, strict: false },
   ability_denied: { fields: { key: en('F', 'Q'), reason: en('cooldown', 'no_target') }, strict: false },
-  hint_requested: { fields: {}, strict: false },
+  // rule event (an explicit Ask-Weems press, -50 each in v4): exact keys, optional ladder level 1..3
+  hint_requested: { fields: { level: opt(int(1, 3)) }, strict: true },
   // ---- overhaul telemetry (not rule events)
   hyde_emerged: { fields: { spawnId: id, x: coord, z: coord }, strict: false },
   site_checked: { fields: { site: en('clue', 'egg'), siteId: id, found: bool }, strict: false },
@@ -243,12 +310,19 @@ const SCHEMAS: Record<MysteryEventType, { fields: Record<string, Field>; strict:
     fields: { phase: en(...CRACKSTONE_SCAN_PHASES), radiusM: num(0, MAX_SCAN_RADIUS_M), hit: bool }, strict: false,
   },
   curse: { fields: { phase: en(...CURSE_PHASES), hpLost: num(0, MAX_CURSE_HP), blocked: bool }, strict: true },
+  // ---- final wave: director / Slurp / cabinet telemetry (lenient) + enemy_detected / enemy_hit RULE events (strict)
+  enemy_spawned: { fields: { enemy: en(...ENEMIES), spawnId: id, x: coord, z: coord }, strict: false },
+  enemy_despawned: { fields: { enemy: en(...ENEMIES), reason: en(...DESPAWN_REASONS) }, strict: false },
+  enemy_detected: { fields: { enemy: en(...ENEMIES), via: en(...DETECT_VIA) }, strict: true },
+  enemy_hit: { fields: { enemy: en(...ENEMIES), hpLost: num(0, MAX_HIT_HP), blocked: bool }, strict: true },
+  slurp_mode: { fields: { from: en(...SLURP_MODES), to: en(...SLURP_MODES), reason: en(...SLURP_REASONS) }, strict: false },
+  cabinet: { fields: { spotId: id, action: en(...CABINET_ACTIONS), loud: bool }, strict: false },
   accusation: {
     fields: { suspectId: { k: 'nstr' }, correct: bool, cluesFound: int(0, 3), evidence: evidenceIds, deductionCorrect: bool },
     strict: true,
   },
   finish: { fields: { verdict: en(...VERDICTS), score: num(-1e6, 1e6) }, strict: true },
-  dnf: { fields: { reason: en('second_catch', 'hp_depleted') }, strict: true },
+  dnf: { fields: { reason: en('second_catch', 'hp_depleted'), by: opt(en(...ENEMIES), true) }, strict: true },
 };
 
 /** Declared payload keys of a type (drift tests compare them with the GameEvent union of the synced types.ts). */
@@ -270,6 +344,9 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
 function checkField(seq: number, name: string, f: Field, v: unknown): void {
   const bad = (what: string) => reject(seq, 'payload', `event ${seq}: "${name}" ${what}`);
   switch (f.k) {
+    case 'opt':
+      if (v === undefined || (v === null && f.nullable)) return;
+      return checkField(seq, name, f.f, v);
     case 'num':
       if (typeof v !== 'number' || !Number.isFinite(v)) bad('must be a finite number');
       if ((v as number) < f.min || (v as number) > f.max) bad(`must be between ${f.min} and ${f.max}`);
@@ -428,18 +505,42 @@ export function applyEvent(p: MysteryProgress, e: ParsedEvent, ctx: RulesContext
       p.hpLost += hpLost;
       break;
     }
+    case 'enemy_hit': {
+      // final wave: Hyde grab / curse hit / Slurp attack (blocked hits count; a blocked hit costs no HP)
+      const enemy = payload.enemy as EnemyId;
+      const hpLost = payload.hpLost as number;
+      if (afterDeposit) reject(seq, 'hit_after_deposit', `event ${seq}: no enemy can hit the player after the deposit`);
+      if (payload.blocked === true && hpLost !== 0) reject(seq, 'hit_hp', `event ${seq}: a blocked hit costs no HP (hpLost must be 0)`);
+      p.hits[enemy]++;
+      p.hitHpLost += hpLost;
+      p.lastHitBy = enemy;
+      // Hyde / Crackstone HP is already counted by their catch / curse events; Slurp's only HP event is this one
+      if (enemy === 'slurp') p.hpLost += hpLost;
+      break;
+    }
+    case 'enemy_detected':
+      p.detections++;
+      break;
     case 'finish':
       if (!p.accusation) reject(seq, 'finish_order', `event ${seq}: finish only after the accusation`);
+      checkV4Hits(p, seq, ctx);
       p.terminal = { type: 'finish', seq, t, claimedVerdict: payload.verdict as Verdict, claimedScore: payload.score as number };
       break;
     case 'dnf': {
       if (afterDeposit) reject(seq, 'dnf_after_deposit', `event ${seq}: dnf after the egg was delivered`);
       const reason = payload.reason as DnfReason;
+      const by = (payload.by ?? null) as EnemyId | null;
       if (reason === 'second_catch' && p.catches < 2) reject(seq, 'dnf_reason', `event ${seq}: second_catch DNF before catch #2`);
-      if (reason === 'hp_depleted' && typeof ctx.maxHp === 'number' && p.hpLost < ctx.maxHp - HP_EPSILON) {
-        reject(seq, 'dnf_reason', `event ${seq}: hp_depleted DNF with only ${p.hpLost} of ${ctx.maxHp} HP lost (catch + curse hits)`);
+      // v3.1: catch + curse HP; v4: also Slurp hits, or (second accounting) the sum of every enemy_hit
+      const lost = ctx.rulesVersion === 'mystery-v4' ? Math.max(p.hpLost, p.hitHpLost) : p.hpLost;
+      if (reason === 'hp_depleted' && typeof ctx.maxHp === 'number' && lost < ctx.maxHp - HP_EPSILON) {
+        reject(seq, 'dnf_reason', `event ${seq}: hp_depleted DNF with only ${lost} of ${ctx.maxHp} HP lost (recorded hits)`);
       }
-      p.terminal = { type: 'dnf', seq, t, reason };
+      if (by !== null && by !== p.lastHitBy) {
+        reject(seq, 'dnf_by', `event ${seq}: dnf names ${by} but the last recorded hit was by ${p.lastHitBy ?? 'nobody'}`);
+      }
+      checkV4Hits(p, seq, ctx);
+      p.terminal = by === null ? { type: 'dnf', seq, t, reason } : { type: 'dnf', seq, t, reason, by };
       break;
     }
     case 'hyde_sighted':
@@ -454,6 +555,20 @@ export function applyEvent(p: MysteryProgress, e: ParsedEvent, ctx: RulesContext
   p.lastSeq = seq;
   p.lastT = t;
   return p;
+}
+
+/**
+ * mystery-v4 terminal check: every Hyde grab (catch) and every landed curse has its enemy_hit. Extra hits are fine (a
+ * Slurp attack or a cabinet pull-out has no catch / curse counterpart). v3.1 sessions never carry enemy_hit: skipped.
+ */
+function checkV4Hits(p: MysteryProgress, seq: number, ctx: RulesContext): void {
+  if (ctx.rulesVersion !== 'mystery-v4') return;
+  if (p.hits.hyde < p.catches) {
+    reject(seq, 'hits_missing', `event ${seq}: ${p.catches} Hyde catch(es) but only ${p.hits.hyde} enemy_hit {enemy: hyde}`);
+  }
+  if (p.hits.crackstone < p.curses) {
+    reject(seq, 'hits_missing', `event ${seq}: ${p.curses} landed curse(s) but only ${p.hits.crackstone} enemy_hit {enemy: crackstone}`);
+  }
 }
 
 /** Applies a batch to a COPY of `progress`; the input is never mutated. */
@@ -475,12 +590,13 @@ export function canonicalJson(x: unknown): string {
 
 /**
  * The rule-relevant fields two progress values must agree on (append-time state stored as jsonb vs finalize replay).
- * hpLost + curses since 20261024000100 (both derive only from rule events: catch + curse).
+ * hpLost + curses since 20261024000100 (both derive only from rule events: catch + curse); detections, hits, hitHpLost and
+ * lastHitBy since 20261025000100 (enemy_detected / enemy_hit). Missing fields count as their initial values.
  */
 export function ruleFingerprint(p: MysteryProgress): string {
   return canonicalJson([
     p.cluesFound, p.delivered, p.accusation, p.catches, p.terminal, p.egg, p.eggSecurity, p.sightings, p.hints,
-    p.hpLost ?? 0, p.curses ?? 0,
+    p.hpLost ?? 0, p.curses ?? 0, p.detections ?? 0, p.hits ?? noHits(), p.hitHpLost ?? 0, p.lastHitBy ?? null,
   ]);
 }
 
@@ -492,6 +608,9 @@ export function progressSummary(p: MysteryProgress) {
     eggSecurity: p.eggSecurity,
     catches: p.catches,
     sightings: p.sightings,
+    hintsUsed: p.hints,
+    detections: p.detections ?? 0,
+    hits: totalHits(p),
     delivered: p.delivered !== null,
     accused: p.accusation !== null,
     terminal: p.terminal?.type ?? null,

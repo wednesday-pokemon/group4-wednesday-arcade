@@ -5,7 +5,8 @@ import type { MapDef, RoomDef, Vec2 } from '../../mystery/types.ts';
 import { MeshBuilder, clamp, smoothstep } from '../util.ts';
 import { TriBuilder, distToEdges, mergeAll, pointInPoly } from '../action/geom.ts';
 import type { GlowEntry } from '../action/fx.ts';
-import { CONE4, ICO0, PAL, distPointSeg, seeded, segHitsWall } from './common.ts';
+import { CONE4, CONE5, CYL5, ICO0, ICO1, PAL, distPointSeg, seeded, segHitsWall } from './common.ts';
+import { themeOf } from './look.ts';
 import { pointsOfSites } from './siteProps.ts';
 
 type V3 = [number, number, number];
@@ -59,7 +60,9 @@ function mul3(a: V3, k: number): V3 {
 export function buildTerrain(map: MapDef, piers: PierRect[], low: boolean): TerrainBuild {
   const rand = seeded('terrain:' + map.id);
   const b = map.bounds;
-  const margin = low ? 12 : 18;
+  // compact maps (final): the ground keeps going past the boundary walls, under a dense dark treeline, instead of a shoreline
+  const compact = !!map.world?.playArea;
+  const margin = compact ? (low ? 22 : 30) : low ? 12 : 18;
   const minX = Math.floor(b.minX - margin), maxX = Math.ceil(b.maxX + margin);
   const minZ = Math.floor(b.minZ - margin), maxZ = Math.ceil(b.maxZ + margin);
   const cell = low ? 3 : 2;
@@ -74,6 +77,7 @@ export function buildTerrain(map: MapDef, piers: PierRect[], low: boolean): Terr
   const height = (x: number, z: number): number => {
     const o = outsideDist(x, z);
     if (o <= 0) return 0;
+    if (compact) return -smoothstep(margin - 12, margin, o) * 3.4 + (vnoise(x * 0.3, z * 0.3) - 0.5) * 0.5 * smoothstep(0, 6, o);
     return -(smoothstep(0, 7, o) * 3.4 + (o > 0 ? 0.2 : 0)) + (vnoise(x * 0.4, z * 0.4) - 0.5) * 0.6 * smoothstep(0, 4, o);
   };
   const colAt = (x: number, z: number, y: number): V3 => {
@@ -133,6 +137,7 @@ export function buildTerrain(map: MapDef, piers: PierRect[], low: boolean): Terr
         const inside = pointInPoly(room.polygon, cx, cz) || distToEdges(room.polygon, cx, cz) < 0.55;
         if (!inside) continue;
         if (piers.some((p) => insidePier(p, cx, cz, 0))) continue;
+        if (compact && (cx < b.minX - 1 || cx > b.maxX + 1 || cz < b.minZ - 1 || cz > b.maxZ + 1)) continue; // floors of halls left beyond the fence
         tile(cx, cz, step * 1.02, y, colour(cx, cz, i, j));
       }
     }
@@ -258,8 +263,10 @@ export function buildTerrain(map: MapDef, piers: PierRect[], low: boolean): Terr
   const rim = new MeshBuilder(rand);
   const ring = (low ? 9 : 5.5);
   const perim: Vec2[] = [];
-  for (let x = b.minX - 3; x <= b.maxX + 3; x += ring) { perim.push({ x, z: b.minZ - 3 }, { x, z: b.maxZ + 3 }); }
-  for (let z = b.minZ - 3; z <= b.maxZ + 3; z += ring) { perim.push({ x: b.minX - 3, z }, { x: b.maxX + 3, z }); }
+  if (!compact) {
+    for (let x = b.minX - 3; x <= b.maxX + 3; x += ring) { perim.push({ x, z: b.minZ - 3 }, { x, z: b.maxZ + 3 }); }
+    for (let z = b.minZ - 3; z <= b.maxZ + 3; z += ring) { perim.push({ x: b.minX - 3, z }, { x: b.maxX + 3, z }); }
+  } else addTreeline(rim, map, rand, low);
   for (const p of perim) {
     if (piers.some((pr) => insidePier(pr, p.x, p.z, 4))) continue;
     const s = 1.2 + rand() * 2.2;
@@ -267,4 +274,51 @@ export function buildTerrain(map: MapDef, piers: PierRect[], low: boolean): Terr
   }
   const scatterGeo = mergeAll([sb.build(), rim.build()]);
   return { ground: gt.build(), decals: dt.build(), scatter: scatterGeo, scatterGlows: glows, indoor: map.rooms.filter((r) => INDOOR.has(r.id)) };
+}
+
+
+/**
+ * Compact maps: a dark treeline all round the boundary walls (so there is never a visible empty island beyond the fence). Two or three
+ * staggered rows of tall silhouettes at 3-16 m from the bounds, per case: round conifers (archive), gnarled dead trees (crypt), narrow storm pines
+ * (signal). Merged into the scatter mesh - no extra draw call.
+ */
+function addTreeline(mb: MeshBuilder, map: MapDef, rand: () => number, low: boolean): void {
+  const b = map.bounds;
+  const theme = themeOf(map);
+  const rows = low ? [{ off: 6, gap: 5.0, h: 8 }] : [{ off: 4.5, gap: 3.4, h: 7 }, { off: 10, gap: 4.2, h: 10 }, { off: 16, gap: 5.5, h: 12 }];
+  const foliage = theme === 'crypt' ? ['#1a1626', '#221c2e', '#15121f'] : theme === 'signal' ? ['#0f1c26', '#132430', '#0c1820'] : ['#10281f', '#0d2019', '#16322a'];
+  const trunk = theme === 'crypt' ? '#2a2230' : '#1c1a24';
+  rows.forEach((row, ri) => {
+    const x0 = b.minX - row.off, x1 = b.maxX + row.off, z0 = b.minZ - row.off, z1 = b.maxZ + row.off;
+    const per = 2 * (x1 - x0) + 2 * (z1 - z0);
+    const n = Math.round(per / row.gap);
+    for (let i = 0; i < n; i++) {
+      let u = ((i + rand() * 0.8) / n) * per;
+      let x: number, z: number;
+      const w = x1 - x0, d = z1 - z0;
+      if (u < w) { x = x0 + u; z = z0; } else if ((u -= w) < d) { x = x1; z = z0 + u; } else if ((u -= d) < w) { x = x1 - u; z = z1; } else { u -= w; x = x0; z = z1 - u; }
+      x += (rand() - 0.5) * row.gap * 0.6; z += (rand() - 0.5) * row.gap * 0.6;
+      const h = row.h * (0.7 + rand() * 0.5) + ri * 0.4;
+      const r = 0.9 + rand() * 0.8;
+      mb.add(CYL5, trunk, [x, h * 0.3, z], [0.03, rand() * 6, 0.03], [0.22, h * 0.6, 0.22], { gradient: 0.4, jitter: 0.1 });
+      if (theme === 'crypt') {
+        // graveyard yews: crooked trunks under dark, ragged, low crowns with a few bare limbs
+        for (let k = 0; k < 3; k++) {
+          const a = rand() * 6.28, y = h * (0.5 + k * 0.12);
+          mb.add(CYL5, trunk, [x + Math.cos(a) * 0.6, y, z + Math.sin(a) * 0.6], [Math.sin(a) * 0.9, rand() * 6, Math.cos(a) * 0.9], [0.07, 2.0, 0.07], { gradient: 0.2, jitter: 0.1 });
+        }
+        for (let k = 0; k < (low ? 2 : 4); k++) {
+          const a = rand() * 6.28, rr = 0.8 + rand() * 0.9;
+          mb.add(ICO1, foliage[Math.floor(rand() * 3)], [x + Math.cos(a) * rr, h * (0.55 + rand() * 0.4), z + Math.sin(a) * rr], [rand(), rand() * 6, rand()], [1.5 + rand() * 0.8, 1.0 + rand() * 0.7, 1.5 + rand() * 0.8], { gradient: 0.35, jitter: 0.12 });
+        }
+      } else {
+        const tiers = low ? 2 : 3;
+        for (let t = 0; t < tiers; t++) {
+          const k = t / tiers;
+          mb.add(CONE5, foliage[Math.floor(rand() * 3)], [x, h * (0.34 + k * 0.3) + h * 0.2, z], [0, rand() * 6, 0], [r * (theme === 'signal' ? 0.8 : 1.15) * (1 - k * 0.55), h * 0.42, r * (theme === 'signal' ? 0.8 : 1.15) * (1 - k * 0.55)], { gradient: 0.35, jitter: 0.1 });
+        }
+      }
+    }
+  });
+  void ICO0; void CONE4;
 }

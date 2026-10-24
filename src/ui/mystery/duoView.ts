@@ -172,7 +172,8 @@ export const STAT_ROWS: { key: keyof DuoStats; label: string }[] = [
   { key: 'stealth', label: 'Stealth' },
   { key: 'mobility', label: 'Mobility' },
   { key: 'defense', label: 'Defense' },
-  { key: 'hydeControl', label: 'Hyde Control' },
+  // UX_FINAL §7: every stun / slow / lure / distract hits all three monsters (Hyde, Crackstone, Slurp)
+  { key: 'hydeControl', label: 'Monster Control' },
   { key: 'eggProtection', label: 'Egg Protection' },
 ];
 
@@ -332,32 +333,32 @@ export function themeTypeOf(types: readonly string[]): ThemeType {
 
 export const POWER_SHORT: Readonly<Partial<Record<NightshadeId, string>>> = {
   wednesday: 'Marks the nearest clue (35 m) for 6 s · silent',
-  morticia: 'Shows the Hyde’s next 6 s of path · silent',
+  morticia: 'Shows a monster’s next 6 s of path · silent',
   enid: '+25% speed and a trail to a clue for 7 s',
-  bianca: 'Lures the Hyde up to 18 m ahead for 4 s',
-  eugene: 'Marks a clue and distracts a Hyde for 5 s',
-  gomez: 'Opens the Shortcut or stuns a Hyde 2 s',
-  ajax: 'Petrifies a Hyde you face for 2.5 s',
+  bianca: 'Lures a monster up to 18 m ahead for 4 s',
+  eugene: 'Marks a clue and distracts a monster for 5 s',
+  gomez: 'Opens the Shortcut or stuns a monster 2 s',
+  ajax: 'Petrifies a monster you face for 2.5 s',
 };
 
 export const MOVE_SHORT: Readonly<Partial<Record<PokemonId, string>>> = {
-  gengar: 'Decoy burst 22 m ahead; staggers a seen Hyde',
+  gengar: 'Decoy burst 22 m ahead; staggers a seen monster',
   alolan_marowak: 'Lights cover and hiding spots for 8 s',
-  misdreavus: 'A seen Hyde loses track of you for 4 s',
-  galarian_corsola: 'Slows a seen Hyde 40% for 5 s, heals 10 HP',
-  sableye: 'Stops a seen Hyde (6 m) for 1.2 s',
-  dusknoir: 'Stuns a close Hyde 1.8 s, even mid-grab',
+  misdreavus: 'A seen monster loses track of you for 4 s',
+  galarian_corsola: 'Slows a seen monster 40% for 5 s, heals 10 HP',
+  sableye: 'Stops a seen monster (6 m) for 1.2 s',
+  dusknoir: 'Stuns a close monster 1.8 s, even mid-grab',
   drifblim: '+30% speed for 6 s; louder footsteps',
-  froslass: 'Slows a Hyde you face by 45% for 5 s',
-  jellicent: 'Splash decoy holds the Hyde for 5 s',
+  froslass: 'Slows a monster you face by 45% for 5 s',
+  jellicent: 'Splash decoy holds a monster for 5 s',
   chandelure: 'Lights the nearest clue and cover for 6 s',
   aegislash: 'Blocks one grab’s damage (catch counts)',
-  trevenant: 'Slows a Hyde 35% for 6 s, heals 8 HP',
-  dhelmise: 'Tethers a seen Hyde 3 s, guards the egg 8 s',
-  decidueye: 'Pins a seen Hyde (15 m) for 2 s',
-  dragapult: 'Stuns a seen Hyde 1 s, then lures it 3 s',
+  trevenant: 'Slows a monster 35% for 6 s, heals 8 HP',
+  dhelmise: 'Tethers a seen monster 3 s, guards the egg 8 s',
+  decidueye: 'Pins a seen monster (15 m) for 2 s',
+  dragapult: 'Stuns a seen monster 1 s, then lures it 3 s',
   basculegion: 'Instant 5 m dash where you face',
-  ceruledge: 'Stuns a close Hyde 1.5 s and heals 10 HP',
+  ceruledge: 'Stuns a close monster 1.5 s and heals 10 HP',
   gholdengo: 'Coin decoy 4 s; halves egg damage 6 s',
 };
 

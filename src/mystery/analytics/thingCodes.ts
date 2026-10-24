@@ -46,6 +46,31 @@ const DIAG: Record<string, string> = {
   crack_scan_covered: 'Walls and hiding spots block scans.',
   crack_power_stun: 'An ability stopped Crackstone.',
   crack_power_lure: 'An ability lured Crackstone away.',
+  // ---- final: director / Slurp / cabinets (headword by prefix; UX_FINAL §8 copy where it exists)
+  det_hyde_steps: 'Hyde detected their footsteps.',
+  det_hyde_near: 'They came too close to the Hyde.',
+  noise_cabinet: 'The Hyde heard the cabinet door.',
+  cabinet_creak: 'The cabinet door creaked.',
+  witnessed_hyde: 'The Hyde saw them hide.',
+  witnessed_crackstone: 'Crackstone saw them hide.',
+  witnessed_slurp: 'Slurp saw them hide.',
+  pulled_out: 'They were pulled out of a cabinet.',
+  slurp_seen: 'Slurp saw them and gave chase.',
+  slurp_sensed: 'They came too close to Slurp.',
+  slurp_cabinet: 'Slurp heard the cabinet door.',
+  slurp_creak: 'The cabinet door creaked.',
+  slurp_egg: 'Slurp heard the egg hit the ground.',
+  slurp_sprint: 'Slurp heard them sprinting.',
+  slurp_ability: 'Slurp heard an ability.',
+  slurp_alarm: 'The alarm drew Slurp in.',
+  slurp_impact: 'Slurp heard a crash.',
+  slurp_hit: "Slurp's lunge hit them.",
+  hit_blocked: 'Their Pokémon blocked the attack.',
+  slurp_escape_cabinet: 'Lost Slurp: the cabinet door was shut.',
+  slurp_escape_hid: 'Hiding broke his line of sight.',
+  slurp_escape_leash: 'They left his haunt.',
+  slurp_power_stun: 'An ability stopped Slurp.',
+  slurp_power_lure: 'An ability lured Slurp away.',
 };
 
 const ADVICE: Record<string, string> = {
@@ -69,9 +94,12 @@ const ADVICE: Record<string, string> = {
   break_sight: 'Break his line of sight',
   avoid_area: "Stay out of Crackstone's sight",
   crackstone_area: "Crackstone's haunt announced",
+  hide_cabinet: 'Hide in a cabinet',
+  close_cabinet: 'Close the cabinet',
+  exit_cabinet: 'Step out of the cabinet',
 };
 
-const POWER_CODES = new Set(['power_stun', 'power_lure', 'power_escape', 'noise_ability', 'crack_power_stun', 'crack_power_lure']);
+const POWER_CODES = new Set(['power_stun', 'power_lure', 'power_escape', 'noise_ability', 'crack_power_stun', 'crack_power_lure', 'slurp_power_stun', 'slurp_power_lure']);
 
 function abilityName(id: string | null): string | null {
   if (!id) return null;
@@ -89,14 +117,17 @@ export function thingItemText(item: { kind: 'log' | 'diagnostic' | 'advice'; cod
     return { head: crackHead ? TITLES.crackstone : TITLES.advice, text: (item.code === 'use_power' || item.code === 'use_move') && ab ? `Use ${ab}` : base };
   }
   if (item.kind === 'diagnostic') {
-    const head = item.code.startsWith('power_') || item.code.startsWith('crack_power_') ? TITLES.power : item.code.startsWith('egg_') ? TITLES.egg
+    const head = item.code.startsWith('power_') || item.code.startsWith('crack_power_') || item.code.startsWith('slurp_power_') ? TITLES.power
+      : item.code.startsWith('egg_') ? TITLES.egg
       : item.code === 'clue_statement' ? TITLES.investigation : item.code.startsWith('pattern_') ? TITLES.pattern
-      : item.code.startsWith('crack_') ? TITLES.crackstone : TITLES.hyde;
+      : item.code.startsWith('crack_') || item.code === 'witnessed_crackstone' ? TITLES.crackstone
+      : item.code.startsWith('slurp_') || item.code === 'hit_blocked' || item.code === 'witnessed_slurp' ? TITLES.slurp : TITLES.hyde;
     const ab = POWER_CODES.has(item.code) ? abilityName(item.ref) : null;
     const text = ab
       ? item.code === 'power_stun' ? `${ab} stunned the Hyde.` : item.code === 'power_lure' ? `${ab} lured the Hyde away.`
         : item.code === 'power_escape' ? `${ab} helped them escape.` : item.code === 'crack_power_stun' ? `${ab} stopped Crackstone.`
-        : item.code === 'crack_power_lure' ? `${ab} lured Crackstone away.` : `${ab} made noise.`
+        : item.code === 'crack_power_lure' ? `${ab} lured Crackstone away.` : item.code === 'slurp_power_stun' ? `${ab} stopped Slurp.`
+        : item.code === 'slurp_power_lure' ? `${ab} lured Slurp away.` : `${ab} made noise.`
       : DIAG[item.code] ?? 'Thing explained an event.';
     return { head, text };
   }

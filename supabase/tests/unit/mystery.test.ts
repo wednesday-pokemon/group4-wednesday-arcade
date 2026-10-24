@@ -7,7 +7,7 @@ import {
   type MysteryProgress, type ParsedEvent, type RulesContext,
 } from '../../functions/_shared/mystery-events.ts';
 import {
-  assertValidOffer, caseReveal, caseVersions, computeOffer, computeResult, expectedEggTier, requireData, requireEggRules,
+  PLAYER_MAX_HP, assertValidOffer, caseReveal, caseVersions, computeOffer, computeResult, expectedEggTier, requireData, requireEggRules,
   resolveCase, rulesContext, type SessionCase,
 } from '../../functions/_shared/mystery-rules.ts';
 import {
@@ -17,6 +17,11 @@ import {
 import { parseAdminReset } from '../../functions/_shared/validation.ts';
 import { round1, scoreFor } from '../../functions/_shared/mystery/scoring.ts';
 import { CASE_IDS, CLUE_IDS, type CaseId, type DuoOffer } from '../../functions/_shared/mystery/types.ts';
+
+/** These tests pin the LEGACY mystery-v3.1 rules (v3.1 history stays verifiable/readable); v4 lives in mystery-v4.test.ts. */
+const V31 = 'mystery-v3.1' as const;
+const computeV31 = (...a: [Parameters<typeof computeResult>[0], Parameters<typeof computeResult>[1], Parameters<typeof computeResult>[2], Parameters<typeof computeResult>[3]?]) =>
+  computeResult(a[0], a[1], a[2], a[3], V31);
 
 const SID = '6f1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b';
 const ACT = 'a1b2c3d4-e5f6-4711-8899-aabbccddeeff';
@@ -239,23 +244,23 @@ describe('resend dedupe', () => {
 // ------------------------------------------------------------------------------------------------- result
 describe('server-side result recomputation', () => {
   it('all clues + culprit + exactly the supporting evidence -> case_solved; score = round1(points x 100 - activeTimeS)', () => {
-    const r = computeResult(run(solvedRun()), CASE, 'rare');
+    const r = computeV31(run(solvedRun()), CASE, 'rare');
     expect(r).toMatchObject({ outcome: 'finished', verdict: 'case_solved', accused: 'thornhill', correct: true, eggTier: 'rare',
       eggPoints: 3, activeTimeS: 245.7, score: 54.3, claimMatches: true, dnfReason: null, caseId: 'poisoned_archive', caseVersion: CASE.caseDef.version,
       deductionCorrect: true });
     expect([...r.evidence].sort()).toEqual([...ALL].sort());
   });
   it('wrong suspect, the culprit with missing clues, or weak evidence -> egg_secured_mystery_unsolved; null -> not_accused', () => {
-    expect(computeResult(run(solvedRun({ suspect: 'isaac' })), CASE, 'rare')).toMatchObject({ verdict: 'egg_secured_mystery_unsolved', correct: false, deductionCorrect: true });
-    expect(computeResult(run(solvedRun({ clues: ['access_ledger'] })), CASE, 'rare')).toMatchObject({ verdict: 'egg_secured_mystery_unsolved', correct: true, deductionCorrect: false });
-    expect(computeResult(run(solvedRun({ evidence: ['falsified_transfer', 'botanical_residue'] })), CASE, 'rare'))
+    expect(computeV31(run(solvedRun({ suspect: 'isaac' })), CASE, 'rare')).toMatchObject({ verdict: 'egg_secured_mystery_unsolved', correct: false, deductionCorrect: true });
+    expect(computeV31(run(solvedRun({ clues: ['access_ledger'] })), CASE, 'rare')).toMatchObject({ verdict: 'egg_secured_mystery_unsolved', correct: true, deductionCorrect: false });
+    expect(computeV31(run(solvedRun({ evidence: ['falsified_transfer', 'botanical_residue'] })), CASE, 'rare'))
       .toMatchObject({ verdict: 'egg_secured_mystery_unsolved', correct: true, deductionCorrect: false, claimMatches: true });
-    expect(computeResult(run(solvedRun({ evidence: [...ALL, 'note_drain_mud'] })), CASE, 'rare'))
+    expect(computeV31(run(solvedRun({ evidence: [...ALL, 'note_drain_mud'] })), CASE, 'rare'))
       .toMatchObject({ verdict: 'egg_secured_mystery_unsolved', deductionCorrect: false, evidence: [...ALL, 'note_drain_mud'] });
-    expect(computeResult(run(solvedRun({ suspect: null })), CASE, 'rare')).toMatchObject({ verdict: 'not_accused', accused: null, correct: false, outcome: 'finished', evidence: [], deductionCorrect: false });
+    expect(computeV31(run(solvedRun({ suspect: null })), CASE, 'rare')).toMatchObject({ verdict: 'not_accused', accused: null, correct: false, outcome: 'finished', evidence: [], deductionCorrect: false });
   });
   it('forged / uncitable evidence ids are dropped (unknown ids, clues of other cases, clues not found) and flag the claim', () => {
-    const r = computeResult(run(solvedRun({
+    const r = computeV31(run(solvedRun({
       clues: ['falsified_transfer', 'access_ledger'],
       evidence: ['falsified_transfer', 'botanical_residue', 'sabotaged_gate', 'note_keys_jangling', 'culprit_is_thornhill'],
       deduction: false,
@@ -266,20 +271,20 @@ describe('server-side result recomputation', () => {
   });
   it('a client claiming correct / deductionCorrect / case_solved for a wrong accusation is overruled', () => {
     const lying = solvedRun({ suspect: 'barry', correct: true, deduction: true, verdict: 'case_solved' });
-    const r = computeResult(run(lying), CASE, 'rare', { outcome: 'finished', verdict: 'case_solved', correct: true, deductionCorrect: true,
+    const r = computeV31(run(lying), CASE, 'rare', { outcome: 'finished', verdict: 'case_solved', correct: true, deductionCorrect: true,
       score: 54.3, activeTimeS: 245.7 });
     expect(r).toMatchObject({ accused: 'barry', correct: false, verdict: 'egg_secured_mystery_unsolved', claimMatches: false });
     expect(r.deductionCorrect).toBe(true); // the cited chain IS the supporting evidence; only the suspect is wrong
   });
   it('evidence cited with a null suspect is ignored (never an error)', () => {
-    const r = computeResult(run(solvedRun({ suspect: null, evidence: ['falsified_transfer'] })), CASE, 'rare');
+    const r = computeV31(run(solvedRun({ suspect: null, evidence: ['falsified_transfer'] })), CASE, 'rare');
     expect(r).toMatchObject({ verdict: 'not_accused', evidence: [], deductionCorrect: false, claimMatches: false });
   });
   it('honest runs of EVERY case are solved with their own answer key, and only with it', () => {
     for (const id of CASE_IDS) {
       const kase = resolveCase(id, undefined);
       const clues = kase.caseDef.clues.map((c) => c.id);
-      const ctx = rulesContext(SEED, kase.caseDef, requireEggRules());
+      const ctx = rulesContext(SEED, kase.caseDef, requireEggRules(), PLAYER_MAX_HP, V31);
       seqNo = 0;
       const tier = ctx.expectedTier!;
       const pts = requireEggRules().points[tier];
@@ -289,12 +294,12 @@ describe('server-side result recomputation', () => {
         ev('accusation', { suspectId: kase.solution.culprit, correct: true, cluesFound: 3, evidence: [...clues], deductionCorrect: true }, 99),
         ev('finish', { verdict: 'case_solved', score: scoreFor(pts, 99) }, 99),
       ];
-      const r = computeResult(applyBatch(initialProgress(), events, ctx), kase, tier);
+      const r = computeV31(applyBatch(initialProgress(), events, ctx), kase, tier);
       expect(r).toMatchObject({ caseId: id, verdict: 'case_solved', correct: true, deductionCorrect: true, claimMatches: true });
       const innocent = kase.caseDef.suspects.find((s) => s.id !== kase.solution.culprit)!.id;
       const wrong = applyBatch(initialProgress(), events.map((e) => e.type === 'accusation'
         ? { ...e, payload: { ...e.payload, suspectId: innocent } } : e), ctx);
-      expect(computeResult(wrong, kase, tier)).toMatchObject({ verdict: 'egg_secured_mystery_unsolved', correct: false });
+      expect(computeV31(wrong, kase, tier)).toMatchObject({ verdict: 'egg_secured_mystery_unsolved', correct: false });
       // another case's clue ids are unknown here
       const other = CASE_IDS.find((x) => x !== id)!;
       seqNo = 0;
@@ -303,30 +308,30 @@ describe('server-side result recomputation', () => {
     }
   });
   it('slow finishers get NEGATIVE scores (still finished)', () => {
-    const r = computeResult(run(solvedRun({ t: 745.66, tier: 'common', points: 1 }), { ...CTX, expectedTier: 'common' }), CASE, 'common');
+    const r = computeV31(run(solvedRun({ t: 745.66, tier: 'common', points: 1 }), { ...CTX, expectedTier: 'common' }), CASE, 'common');
     expect([r.outcome, r.activeTimeS, r.score]).toEqual(['finished', 745.7, -645.7]);
   });
   it('DNF: score null, verdict not_accused, no egg points, tier from the seed', () => {
     seqNo = 0;
     const p = run([ev('catch', { catchNumber: 1, hpLost: 35, eggSecurityLost: 0, blocked: false }, 10),
       ev('catch', { catchNumber: 2, hpLost: 35, eggSecurityLost: 0, blocked: false }, 88.04), ev('dnf', { reason: 'second_catch' }, 88.04)]);
-    expect(computeResult(p, CASE, 'legendary', { outcome: 'dnf', score: null, caseId: 'poisoned_archive' })).toMatchObject({
+    expect(computeV31(p, CASE, 'legendary', { outcome: 'dnf', score: null, caseId: 'poisoned_archive' })).toMatchObject({
       outcome: 'dnf', dnfReason: 'second_catch', verdict: 'not_accused', score: null, eggPoints: 0, eggTier: 'legendary', activeTimeS: 88, catches: 2, claimMatches: true,
       evidence: [], deductionCorrect: false, caseId: 'poisoned_archive',
     });
-    expect(computeResult(p, CASE, 'legendary', { outcome: 'dnf', score: null, caseId: 'midnight_signal' }).claimMatches).toBe(false);
+    expect(computeV31(p, CASE, 'legendary', { outcome: 'dnf', score: null, caseId: 'midnight_signal' }).claimMatches).toBe(false);
   });
   it('client claims are recorded and compared, never trusted', () => {
     const events = solvedRun();
     const fin = events[events.length - 1];
     const lying = [...events.slice(0, -1), { ...fin, payload: { verdict: 'case_solved', score: 599.9 } }];
-    const r = computeResult(run(lying), CASE, 'rare', { outcome: 'finished', score: 599.9, verdict: 'case_solved', activeTimeS: 0.1 });
+    const r = computeV31(run(lying), CASE, 'rare', { outcome: 'finished', score: 599.9, verdict: 'case_solved', activeTimeS: 0.1 });
     expect(r.score).toBe(54.3);
     expect(r.claimMatches).toBe(false);
     expect(r.clientClaim).toMatchObject({ finishScore: 599.9, result: { score: 599.9 } });
   });
   it('refuses to compute a result before a terminal event', () => {
-    expect(code(() => computeResult(run(solvedRun().slice(0, -1)), CASE, 'rare'))).toBe('RUN_NOT_FINISHED:');
+    expect(code(() => computeV31(run(solvedRun().slice(0, -1)), CASE, 'rare'))).toBe('RUN_NOT_FINISHED:');
   });
   it('shared scoreFor agrees EXACTLY with the SQL CHECK score = points*100 - active_time_s (integer tenths)', () => {
     const bad: string[] = [];
@@ -397,7 +402,7 @@ describe('server offer (shared draftOffer)', () => {
     const byCase = (id: CaseId) => [...rulesContext(SEED, data.cases[id], requireEggRules()).clueIds].sort();
     expect(byCase('crypt_last_witness')).toEqual(['equipment_match', 'sabotaged_gate', 'tunnel_access_record']);
     expect(byCase('midnight_signal')).toEqual(['alarm_override', 'falsified_patrol_log', 'watchtower_signal']);
-    expect([...ctx.suspectIds].sort()).toEqual(['barry', 'isaac', 'thornhill']);
+    expect([...ctx.suspectIds].sort()).toEqual(['barry', 'galpin', 'thornhill']); // final wave: Galpin replaces Isaac Night (now Slurp)
     expect(ctx.expectedTier).toBe(expectedEggTier(SEED));
     const n = { common: 0, rare: 0, legendary: 0 };
     for (let i = 0; i < 3000; i++) n[expectedEggTier(i.toString(16).padStart(32, '0'))]++;

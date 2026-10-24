@@ -7,7 +7,7 @@ import type {
 } from '../../mystery/types.ts';
 
 /** 'practice' = the tutorial crate at the pier; 'examine' / 'lever' = overhaul interactables (ExamineDef / PassageDef). */
-export interface Interactable { kind: 'clue' | 'egg' | 'tower' | 'switch' | 'practice' | 'examine' | 'lever'; id: string; label: string; progress: number }
+export interface Interactable { kind: 'clue' | 'egg' | 'tower' | 'switch' | 'practice' | 'examine' | 'lever' | 'cabinet'; id: string; label: string; progress: number }
 
 export interface MysteryRunLike {
   readonly map: MapDef;

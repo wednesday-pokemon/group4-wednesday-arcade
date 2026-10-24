@@ -9,7 +9,7 @@ import { CASES } from '../../../src/mystery/data/cases.ts';
 import { caseMap, defaultTuning } from '../../../src/mystery/defaults.ts';
 import { allPairs, POKEMON_IDS, REGISTRIES } from '../../../src/mystery/draft.ts';
 import { playEpisode } from '../../../src/mystery/episode.ts';
-import { pointInPolygon, World, yawTo } from '../../../src/mystery/geometry.ts';
+import { World, yawTo } from '../../../src/mystery/geometry.ts';
 import { navGridFor } from '../../../src/mystery/nav.ts';
 import { MysteryRun } from '../../../src/mystery/run.ts';
 import { combineMods } from '../../../src/mystery/stats.ts';
@@ -17,7 +17,8 @@ import {
   CASE_IDS, NIGHTSHADE_IDS, type CaseId, type CrackstoneDef, type Duo, type MapDef, type StampedEvent, type Vec2,
 } from '../../../src/mystery/types.ts';
 import { hold, input, neutralRegistries, place, placeHyde } from './helpers.ts';
-import { regressionHashes } from './regressionEpisodes.ts';
+import { preFinalView, regressionHashes } from './regressionEpisodes.ts';
+import { encounterSpawnsFor } from '../../../src/mystery/director.ts';
 import { fixtureWorldMap, worldRun, WORLD_TUNING } from './worldFixture.ts';
 
 // ------------------------------------------------------------------------------------------------- fixture
@@ -77,7 +78,7 @@ function forceScan(run: MysteryRun): void {
 // ------------------------------------------------------------------------------------------------- data
 
 describe('Crackstone haunts (case data)', () => {
-  it.each(CASE_IDS)('%s: start + every waypoint walkable for his radius, every loop segment walkable, ≥ 25 m from the pier', (id) => {
+  it.each(CASE_IDS)('%s: start + every waypoint walkable for his radius, every loop segment walkable, ≥ director.minSpawnM from the start', (id) => {
     const map = caseMap(id);
     const def = map.world!.crackstone!;
     expect(def).toBeTruthy();
@@ -92,7 +93,9 @@ describe('Crackstone haunts (case data)', () => {
       expect(nav.lineWalkable(p, q), `segment ${i}→${(i + 1) % def.patrol.length}`).toBe(true);
     });
     const pier = map.playerStart;
-    for (const p of [def.start, ...def.patrol]) expect(Math.hypot(p.x - pier.x, p.z - pier.z)).toBeGreaterThanOrEqual(25);
+    // compact maps (final): he appears only at director spawns, each ≥ minSpawnM from the start (and out of view at
+    // spawn time — director.test.ts); his loop may pass closer later, like the Hyde's
+    for (const p of encounterSpawnsFor(map.world!, 'crackstone')) expect(Math.hypot(p.x - pier.x, p.z - pier.z), p.id).toBeGreaterThanOrEqual(T.director.minSpawnM);
   });
 
   it('per-case overrides are applied at run construction (sight × sightRangeMult, scanEveryS)', () => {
@@ -321,7 +324,11 @@ describe('Crackstone curse (ATTACK)', () => {
     expect(hit.hpLost).toBe(10);
     expect(hit.seq).toBeLessThan(dnf.seq);
     expect(run.player.catches).toBe(0);
-    expect(ev.at(-1)).toMatchObject({ type: 'dnf', reason: 'hp_depleted' });
+    expect(ev.at(-1)).toMatchObject({ type: 'dnf', reason: 'hp_depleted', by: 'crackstone' });
+    // final: the curse hit is a rule event; the death names him
+    expect(ofType(ev, 'enemy_hit')).toEqual([expect.objectContaining({ enemy: 'crackstone', hpLost: 10, blocked: false })]);
+    expect(run.result()).toMatchObject({ defeatedBy: 'crackstone', hits: 1, score: null });
+    expect(run.death()).toMatchObject({ enemy: 'crackstone', durationS: 4 });
   });
 
   it('never lands after the deposit (no Crackstone step outside "playing")', () => {
@@ -364,6 +371,10 @@ describe('Crackstone leash, RETURN, R6', () => {
   it('R6: when the Hyde starts a chase he cancels his chase / curse and SEARCHes (deferred); no scan starts', () => {
     const run = crackRun();
     toCurse(run);
+    run.hydeBrain.active = true; // an absent Hyde cannot chase; park it far away, frozen
+    run.hyde.x = -18;
+    run.hyde.z = -18;
+    run.hyde.stunnedUntil = 1e9;
     run.hyde.mode = 'CHASE';
     const ev = hold(run, 0.05);
     expect(ofType(ev, 'curse')[0]).toMatchObject({ phase: 'miss' });
@@ -397,14 +408,19 @@ function playChecked(duo: Duo, seed: string, caseId: CaseId, profile: 'stealthy'
       run.applyLook(inp);
       run.setInput(inp);
     }
+    const before = run.log.length;
     run.step(dt);
     inp = { ...inp, interact: false, power: false, move: false, hint: false };
     run.setInput(inp);
     step++;
     acc.steps++;
-    if (run.hyde.mode === 'CHASE' && (c.mode === 'CHASE' || c.mode === 'ATTACK')) acc.overlaps++;
-    acc.maxExcessM = Math.max(acc.maxExcessM, Math.hypot(c.x - px, c.z - pz) - maxSpeed * dt);
-    if (!run.world.isFree(c.x, c.z, r * 0.9)) acc.inWall++;
+    // final: ≤ 1 engaged hunter among all three (generalised R6)
+    const engaged = [run.hydeBrain.engaged(), run.crackstoneBrain!.engaged(), run.slurpBrain?.engaged() ?? false].filter(Boolean).length;
+    if (engaged > 1) acc.overlaps++;
+    // a director (re)spawn places him; everything else is walking
+    const spawned = run.log.slice(before).some((e) => e.type === 'enemy_spawned' && e.enemy === 'crackstone');
+    if (!spawned) acc.maxExcessM = Math.max(acc.maxExcessM, Math.hypot(c.x - px, c.z - pz) - maxSpeed * dt);
+    if (run.crackstoneBrain!.active && !run.world.isFree(c.x, c.z, r * 0.9)) acc.inWall++;
     px = c.x;
     pz = c.z;
   }
@@ -413,7 +429,7 @@ function playChecked(duo: Duo, seed: string, caseId: CaseId, profile: 'stealthy'
 }
 
 describe('Crackstone over long seeded runs (bots, all three cases)', () => {
-  it('R6 never overlaps; never inside a wall; per-step displacement ≤ CHASE speed × dt (no teleport)', () => {
+  it('≤ 1 engaged hunter (R6 generalised); never inside a wall; per-step displacement ≤ CHASE speed × dt except director spawns', () => {
     const acc: Checked = { overlaps: 0, maxExcessM: 0, inWall: 0, crackChases: 0, deferrals: 0, steps: 0 };
     const pairs = allPairs();
     for (const caseId of CASE_IDS) {
@@ -436,8 +452,10 @@ describe('Crackstone over long seeded runs (bots, all three cases)', () => {
     expect(a.events.some((e) => e.type === 'crackstone_mode' || e.type === 'crackstone_scan')).toBe(true);
   });
 
-  it('maps WITHOUT Crackstone produce byte-identical logs to before he existed (hashes captured pre-change)', () => {
-    expect(regressionHashes()).toEqual({
+  it('maps WITHOUT Crackstone produce byte-identical logs to before he existed (hashes captured pre-change; final-only events stripped)', () => {
+    // Fixture maps have no encounterSpawns / Slurp / cabinets: the final wave may only ADD rule events there.
+    // (The case maps changed with the compact play areas, Slurp and the director: their pins live in finalRegression.test.ts.)
+    const pinned: Record<string, string> = {
       'fixture:wednesday+gengar:stealthy': '380cc01f69e24dc7',
       'world:wednesday+gengar:stealthy': '44f8b1da9cba8032',
       'fixture:wednesday+gengar:careless': 'aced2ae111fab853',
@@ -460,7 +478,9 @@ describe('Crackstone over long seeded runs (bots, all three cases)', () => {
       'case:crypt_last_witness:gomez+dusknoir': '893c1a1fcc00bab4',
       'case:midnight_signal:wednesday+gengar': 'c0073d5d3879acc6',
       'case:midnight_signal:gomez+dusknoir': 'd68a36e7c13339ba',
-    });
+    };
+    const fixtures = Object.fromEntries(Object.entries(pinned).filter(([k]) => !k.startsWith('case:')));
+    expect(regressionHashes(preFinalView, false)).toEqual(fixtures);
   }, 60_000);
 });
 
@@ -600,53 +620,59 @@ describe('MysteryRun Crackstone API', () => {
     expect(run.investigation().lastCrackstoneSighting).toBeNull();
   });
 
-  it('case maps: present from t = 0 of play at def.start; visible / sighting / bearing / snapshot', () => {
+  it('case maps (director): absent until his first spawn; then visible / sighting / bearing / snapshot', () => {
     const run = new MysteryRun({ duo: { characterId: 'enid', pokemonId: 'gengar' }, seed: 's1', caseDef: CASES.poisoned_archive });
     expect(run.crackstonePresent).toBe(true);
+    expect(run.crackstoneBrain!.active).toBe(false);
+    expect(run.enemyStatus().crackstone).toMatchObject({ present: true, active: false, phase: 'inactive', arrivesInS: run.tuning.director.firstSpawnS.crackstone });
+    expect(run.snapshot()).toMatchObject({ crackstonePresent: true, crackstoneActive: false, crackstoneDistanceM: 999 });
+    const sp = encounterSpawnsFor(run.map.world!, 'crackstone')[0];
+    run.director.spawnAt(run, 'crackstone', sp);
     expect(run.crackstoneBrain!.active).toBe(true);
-    const def = run.crackstoneDef!;
-    expect(Math.hypot(run.crackstone!.x - def.start.x, run.crackstone!.z - def.start.z)).toBeLessThan(0.5);
-    expect(run.snapshot()).toMatchObject({ crackstonePresent: true, crackstoneVisible: false });
-    expect(run.crackstoneBearing().distanceM).toBeGreaterThan(25);
+    expect(Math.hypot(run.crackstone!.x - sp.x, run.crackstone!.z - sp.z)).toBeLessThan(0.75);
+    expect(run.snapshot()).toMatchObject({ crackstonePresent: true, crackstoneActive: true });
     // stand 8 m from him with a clear line → visible, sighting recorded
     const c = run.crackstone!;
     place(run, c.x + 8, c.z);
     if (!run.world.lineOfSight(run.player.x, run.player.z, c.x, c.z)) place(run, c.x - 8, c.z);
+    if (!run.world.lineOfSight(run.player.x, run.player.z, c.x, c.z)) place(run, c.x, c.z + 8);
+    if (!run.world.lineOfSight(run.player.x, run.player.z, c.x, c.z)) place(run, c.x, c.z - 8);
     hold(run, run.tuning.fixedStepS);
     expect(run.crackstoneVisible()).toBe(true);
     expect(run.snapshot().crackstoneVisible).toBe(true);
     expect(run.investigation().lastCrackstoneSighting).toMatchObject({ x: expect.any(Number), z: expect.any(Number) });
   });
 
-  it('tutorial: he is inactive (no events, no movement); endTutorial starts him at def.start', () => {
+  it('tutorial: he is inactive (no events, no movement); after endTutorial the director brings him at firstSpawnS', () => {
     const run = new MysteryRun({ duo: { characterId: 'enid', pokemonId: 'gengar' }, seed: 's1', caseDef: CASES.crypt_last_witness, tutorial: true });
-    const def = run.crackstoneDef!;
     for (let i = 0; i < 120; i++) run.update(1 / 30, input({ moveZ: 1 }));
     expect(run.crackstoneBrain!.active).toBe(false);
-    expect(run.crackstone!.x).toBe(def.start.x);
     expect(run.crackstoneVisible()).toBe(false);
     run.endTutorial();
-    expect(run.crackstoneBrain!.active).toBe(true);
-    expect(Math.hypot(run.crackstone!.x - def.start.x, run.crackstone!.z - def.start.z)).toBeLessThan(0.5);
-    const ev = [];
-    for (let i = 0; i < 60; i++) ev.push(...run.update(0.1, input()));
-    expect(run.crackstone!.modeT).toBeGreaterThan(5);
+    expect(run.crackstoneBrain!.active).toBe(false);
+    const ev: StampedEvent[] = [];
+    for (let i = 0; i < 600 && !run.crackstoneBrain!.active; i++) ev.push(...run.update(0.1, input()));
+    const spawned = ev.find((e) => e.type === 'enemy_spawned' && e.enemy === 'crackstone');
+    expect(spawned).toBeTruthy();
+    expect(spawned!.t).toBeGreaterThanOrEqual(run.tuning.director.firstSpawnS.crackstone - 1e-6);
   });
 
-  it('Hyde-grab release prefers safe points away from him and outside his cursed area (Case 03 yard)', () => {
+  it('Hyde-grab release prefers safe points away from him (≥ releaseMinDistM) when one exists', () => {
     const run = new MysteryRun({ duo: { characterId: 'enid', pokemonId: 'gengar' }, seed: 's1', caseDef: CASES.midnight_signal });
-    const def = run.crackstoneDef!;
-    const yard = run.map.safeReleasePoints.find((s) => pointInPolygon(s.x, s.z, def.polygon))!;
-    expect(yard).toBeTruthy();
+    run.director.spawnAt(run, 'crackstone', encounterSpawnsFor(run.map.world!, 'crackstone')[0]);
     run.emergeHyde();
-    place(run, yard.x, yard.z + 1); // grabbed right next to the yard's release point
-    placeHyde(run, yard.x + 1, yard.z + 2, 0);
-    run.crackstone!.x = yard.x - 3;
-    run.crackstone!.z = yard.z;
+    const pts = run.map.safeReleasePoints;
+    const near = pts[0];
+    place(run, near.x, near.z + 1); // grabbed right next to a release point
+    placeHyde(run, near.x + 25, near.z + 25, 0);
+    run.hyde.x = run.map.tower.x;
+    run.hyde.z = run.map.tower.z;
+    run.crackstone!.x = near.x - 2;
+    run.crackstone!.z = near.z;
     (run as unknown as { onCatch(): void }).onCatch();
     expect(run.player.catches).toBe(1);
-    expect(pointInPolygon(run.player.x, run.player.z, def.polygon)).toBe(false);
-    expect(Math.hypot(run.player.x - run.crackstone!.x, run.player.z - run.crackstone!.z)).toBeGreaterThanOrEqual(run.crackstoneBrain!.cfg.releaseMinDistM);
+    const far = pts.filter((q) => Math.hypot(q.x - run.crackstone!.x, q.z - run.crackstone!.z) >= run.crackstoneBrain!.cfg.releaseMinDistM);
+    if (far.length > 0) expect(Math.hypot(run.player.x - run.crackstone!.x, run.player.z - run.crackstone!.z)).toBeGreaterThanOrEqual(run.crackstoneBrain!.cfg.releaseMinDistM - 1);
   });
 
   it('boardAllowed is false while he chases', () => {

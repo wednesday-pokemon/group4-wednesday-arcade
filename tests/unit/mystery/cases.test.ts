@@ -10,7 +10,7 @@ import { CASE_IDS, CLUE_IDS, SUSPECT_IDS, type CaseDef, type RoomId, type Suspec
 /** How each suspect is named in clue text (surname, given name, initials as written in the clues). */
 const NAME_PATTERNS: Record<SuspectId, RegExp> = {
   thornhill: /\bThornhill\b|\bMarilyn\b/,
-  isaac: /\bIsaac\b|\bI\. Night\b|\bNight\b(?! guard)|\bI\.N\./,
+  galpin: /\bGalpin\b|\bFran[çc]oise\b|\bF\.G\./,
   barry: /\bBarry\b|\bDort\b/,
 };
 /**
@@ -19,7 +19,7 @@ const NAME_PATTERNS: Record<SuspectId, RegExp> = {
  */
 const ROLE_PATTERNS: Record<SuspectId, RegExp> = {
   thornhill: /\barchivist\b|\bcurator\b/i,
-  isaac: /\bgroundskeeper\b/i,
+  galpin: /\bhistorian\b|\brestorer\b/i,
   barry: /\b(night )?guard(['’]s)?\b(?! post)/i,
 };
 /** Words that would state a verdict before the accusation. */

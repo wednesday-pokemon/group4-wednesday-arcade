@@ -4,7 +4,10 @@
 //   1 EVIDENCE — three EvidenceSlots (found: title, TL;DR line, Meaning:, Mentions chips; Enter expands the full text.
 //     Locked: "EVIDENCE 2 — not found" + "Search: <areas still to search> · N spots left"), SUSPECTS rows (Enter
 //     expands the statement), a collapsed "Case-file notes (2)" row.
-//   2 MAP — north-up investigation map with layer toggles 1 Hyde zones · 2 Egg sites · 3 Clue areas (keys 1/2/3).
+//   2 MAP — north-up investigation map with layer toggles [1 Hyde] [2 Egg] [3 Clue] [4 Crackstone] [5 Slurp] (keys 1–5;
+//     4 / 5 only in cases with that monster). Header: the 4-chip AnalyticsLegend (UX_FINAL §1b).
+//   Column 1 also lists "Weems' hints (n)" (collapsed) — the paid hints given this run (UX_FINAL §1d / §4).
+//   The accusation step panel docks a small "Ask Weems (−50)" text button (same paid flow) when the sim supports it.
 //   3 THE ODDS — Hyde zones / spawns, egg sites + history line, clue areas, tower + detection, each with its exact
 //     source label; 5 % rounding (largest remainder for distributions), bands, facts as words (odds.ts).
 //   Hovering / focusing an odds row highlights its map item and a locked slot outlines its search areas.
@@ -30,7 +33,11 @@ import {
 } from './investigationView.ts';
 import { InvestigationMap, type MapLayers } from './InvestigationMap.tsx';
 import type { PublicMapState } from './map/mapData.ts';
+import { AnalyticsLegend } from './hud/AnalyticsLegend.tsx';
+import { HudIcon, type HudIconName } from './hud/HudIcon.tsx';
+import { WeemsPortrait } from './hud/Weems.tsx';
 import '../styles/investigation.css';
+import '../styles/mhudFinal.css';
 
 export interface EvidenceBoardProps {
   caseDef: CaseDef;
@@ -54,6 +61,10 @@ export interface EvidenceBoardProps {
   eggState?: EggState | null;
   /** Settings → "Predictions" (settings.showRisk). Off: no odds column, no map tints / %. Default true. */
   showPredictions?: boolean;
+  /** Principal Weems' hints given this run (paid, −50 each), oldest first. */
+  weemsHints?: readonly { level: 1 | 2 | 3; text: string }[];
+  /** Accusation step: "Ask Weems (−50)" (absent = not offered). */
+  onAskWeems?: () => void;
 }
 
 const ENTER_GUARD_MS = 500;
@@ -85,7 +96,8 @@ export function mentionedNames(caseDef: CaseDef, clue: ClueDef): string[] {
   return mentionNames(caseDef, clue);
 }
 
-const ALL_LAYERS: MapLayers = { zones: true, egg: true, clues: true, crack: true };
+const ALL_LAYERS: MapLayers = { zones: true, egg: true, clues: true, crack: true, slurp: true };
+const LAYER_KEYS = ['zones', 'egg', 'clues', 'crack', 'slurp'] as const;
 
 export function EvidenceBoard(p: EvidenceBoardProps) {
   const { caseDef, cluesFound: found, mode, onClose, onAccuse } = p;
@@ -122,6 +134,9 @@ export function EvidenceBoard(p: EvidenceBoardProps) {
   const eggState = p.eggState ?? p.mapState?.eggState ?? null;
   /** Joseph Crackstone in this case (public design data): layer toggle 4 + legend + "Will Crackstone see you?". */
   const hasCrack = !!(p.mapState?.crack ?? world?.crackstone);
+  /** Slurp in this case: layer toggle 5 + "Will Slurp find you?". */
+  const hasSlurp = !!(p.mapState?.slurp ?? world?.slurp);
+  const weemsHints = p.weemsHints ?? [];
   const slots = evidenceSlots(caseDef, found, world, investigation);
   const total = caseDef.clues.length;
   const citing = accuse && step === 'evidence';
@@ -157,10 +172,10 @@ export function EvidenceBoard(p: EvidenceBoardProps) {
         return;
       }
     }
-    // Layer toggles 1 / 2 / 3 (review map), unless typing in a field.
-    if (!accuse && !e.altKey && !e.ctrlKey && !e.metaKey && (['1', '2', '3'].includes(e.key) || (e.key === '4' && hasCrack))) {
-      const k = (['zones', 'egg', 'clues', 'crack'] as const)[Number(e.key) - 1]!;
-      setLayers((l) => ({ ...l, [k]: !l[k] }));
+    // Layer toggles 1–5 (review map), unless typing in a field.
+    if (!accuse && !e.altKey && !e.ctrlKey && !e.metaKey && (['1', '2', '3'].includes(e.key) || (e.key === '4' && hasCrack) || (e.key === '5' && hasSlurp))) {
+      const k = LAYER_KEYS[Number(e.key) - 1]!;
+      setLayers((l) => ({ ...l, [k]: l[k] === false }));
       e.preventDefault();
       return;
     }
@@ -184,8 +199,8 @@ export function EvidenceBoard(p: EvidenceBoardProps) {
   };
 
   const blocks = useMemo(
-    () => (accuse ? [] : oddsBlocks({ forecasts, world, investigation, cluesFound: found, clueTotal: total, eggState })),
-    [accuse, forecasts, world, investigation, found, total, eggState],
+    () => (accuse ? [] : oddsBlocks({ forecasts, world, investigation, cluesFound: found, clueTotal: total, eggState, active: p.mapState?.active ?? null, slurpPresent: hasSlurp })),
+    [accuse, forecasts, world, investigation, found, total, eggState, p.mapState?.active, hasSlurp],
   );
   const highlight: MapRef[] = hover ? [hover] : focusSlot ? focusSlot.areaIds.map((id) => ({ kind: 'area' as const, id })) : [];
 
@@ -215,6 +230,7 @@ export function EvidenceBoard(p: EvidenceBoardProps) {
           <p className="inv__victim">Victim: {caseDef.victim}</p>
           {!accuse && <Button ref={first} variant="secondary" size="sm" kbd="Tab" onClick={onClose} data-testid="btn-board-close">Close</Button>}
         </div>
+        {!accuse && <AnalyticsLegend variant="board" className="inv__legend" />}
       </header>
 
       <div className="inv__body">
@@ -259,6 +275,7 @@ export function EvidenceBoard(p: EvidenceBoardProps) {
                 </ul>
               </section>
               <NotesRow caseDef={caseDef} />
+              <WeemsHintsRow hints={weemsHints} />
             </>
           )}
         </section>
@@ -278,13 +295,24 @@ export function EvidenceBoard(p: EvidenceBoardProps) {
           <section className="inv__col inv__col--map" aria-labelledby="board-map">
             <h3 id="board-map" className="sr-only">Investigation map (north up)</h3>
             <div className="inv-layers" role="group" aria-label="Map layers">
-              <LayerToggle n={1} label={hasCrack ? 'Hyde' : 'Hyde zones'} on={layers.zones} tone="hyde" onClick={() => setLayers((l) => ({ ...l, zones: !l.zones }))} />
-              <LayerToggle n={2} label={hasCrack ? 'Egg' : 'Egg sites'} on={layers.egg} tone="egg" onClick={() => setLayers((l) => ({ ...l, egg: !l.egg }))} />
-              <LayerToggle n={3} label={hasCrack ? 'Clues' : 'Clue areas'} on={layers.clues} tone="clue" onClick={() => setLayers((l) => ({ ...l, clues: !l.clues }))} />
+              <LayerToggle n={1} label={hasCrack || hasSlurp ? 'Hyde' : 'Hyde zones'} on={layers.zones} tone="hyde" onClick={() => setLayers((l) => ({ ...l, zones: !l.zones }))} />
+              <LayerToggle n={2} label={hasCrack || hasSlurp ? 'Egg' : 'Egg sites'} on={layers.egg} tone="egg" onClick={() => setLayers((l) => ({ ...l, egg: !l.egg }))} />
+              <LayerToggle n={3} label={hasCrack || hasSlurp ? 'Clue' : 'Clue areas'} on={layers.clues} tone="clue" onClick={() => setLayers((l) => ({ ...l, clues: !l.clues }))} />
               {hasCrack && <LayerToggle n={4} label="Crackstone" on={layers.crack !== false} tone="crack" onClick={() => setLayers((l) => ({ ...l, crack: l.crack === false }))} />}
+              {hasSlurp && <LayerToggle n={5} label="Slurp" on={layers.slurp !== false} tone="slurp" onClick={() => setLayers((l) => ({ ...l, slurp: l.slurp === false }))} />}
             </div>
             <InvestigationMap state={p.mapState ?? null} layers={layers} highlight={highlight} onHover={setHover} showPredictions={showPredictions} />
-            {hasCrack && (
+            {hasSlurp ? (
+              // three monsters: a compact two-column legend (sources are spelled out on the odds column)
+              <ul className="inv-legend inv-legend--compact" aria-label="Map legend" data-testid="inv-legend">
+                <li><span className="inv-legend__sw inv-legend__sw--hyde" aria-hidden="true" />Hyde likely here</li>
+                <li><span className="inv-legend__sw inv-legend__sw--slurp" aria-hidden="true" />Slurp may find you</li>
+                {hasCrack && <li><span className="inv-legend__sw inv-legend__sw--crack" aria-hidden="true" />Crackstone may see (10 s)</li>}
+                <li><span className="inv-legend__sw inv-legend__sw--pin" aria-hidden="true" />May appear next</li>
+                {hasCrack && <li><span className="inv-legend__sw inv-legend__sw--area" aria-hidden="true" />Cursed area</li>}
+                <li className="inv-legend__src">Bayesian (Hyde) · rule-based (others)</li>
+              </ul>
+            ) : hasCrack && (
               <ul className="inv-legend" aria-label="Map legend" data-testid="inv-legend">
                 <li><span className="inv-legend__sw inv-legend__sw--hyde" aria-hidden="true" />Hyde likely here · Bayesian estimate</li>
                 <li><span className="inv-legend__sw inv-legend__sw--crack" aria-hidden="true" />Crackstone may see this spot (next 10 s) · Rule-based estimate</li>
@@ -298,6 +326,7 @@ export function EvidenceBoard(p: EvidenceBoardProps) {
         {accuse ? (
           <section className="inv__col inv__col--steps">
             <div className="accuse-panel inv-steps" data-testid="accuse-panel" data-step={gated ? 'gated' : step}>
+              {p.onAskWeems && <AccuseWeems hints={weemsHints} onAsk={p.onAskWeems} disabled={done} />}
               {gated ? (
                 <>
                   <p className="inv-steps__q display" id="accuse-q">Who released the Hyde?</p>
@@ -509,7 +538,38 @@ function NotesRow({ caseDef }: { caseDef: CaseDef }) {
 
 // ----------------------------------------------------------------------------------------------------- column 2
 
-function LayerToggle({ n, label, on, tone, onClick }: { n: number; label: string; on: boolean; tone: 'hyde' | 'egg' | 'clue' | 'crack'; onClick: () => void }) {
+/** "Weems' hints (n)": collapsed row listing the paid hints given this run (Principal Weems, never Thing). */
+function WeemsHintsRow({ hints }: { hints: readonly { level: 1 | 2 | 3; text: string }[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="inv-notes inv-weems" aria-labelledby="board-weems" data-testid="board-weems-hints">
+      <button type="button" className="inv-notes__toggle" id="board-weems" aria-expanded={open} aria-controls="inv-weems-list" onClick={() => setOpen((o) => !o)} disabled={hints.length === 0}>
+        <WeemsPortrait size={18} />
+        <span>Weems’ hints ({hints.length})</span>
+      </button>
+      {open && hints.length > 0 && (
+        <ol id="inv-weems-list" className="inv-weems__list">
+          {hints.map((h, i) => <li key={`${i}${h.text}`} className="inv-weems__item"><span className="inv-weems__lvl caps">Hint {h.level}</span> {h.text}</li>)}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+/** Accusation step panel: a small docked "Ask Weems (−50)" text button + her latest line (same paid flow). */
+function AccuseWeems({ hints, onAsk, disabled }: { hints: readonly { level: 1 | 2 | 3; text: string }[]; onAsk: () => void; disabled: boolean }) {
+  const last = hints[hints.length - 1] ?? null;
+  return (
+    <div className="inv-askweems" data-testid="accuse-weems">
+      <button type="button" className="inv-askweems__btn" onClick={onAsk} disabled={disabled} data-testid="btn-accuse-weems">
+        <WeemsPortrait size={16} /> Ask Weems (−50)
+      </button>
+      {last && <p className="inv-askweems__text">{last.text}</p>}
+    </div>
+  );
+}
+
+function LayerToggle({ n, label, on, tone, onClick }: { n: number; label: string; on: boolean; tone: 'hyde' | 'egg' | 'clue' | 'crack' | 'slurp'; onClick: () => void }) {
   return (
     <button type="button" className={`inv-layer inv-layer--${tone}`} aria-pressed={on} onClick={onClick} data-testid={`layer-${n}`}>
       <kbd className="kcap">{n}</kbd>
@@ -583,7 +643,7 @@ function SuspectPicker({ suspects, value, onChange, interactive, disabled }: {
 
 // ----------------------------------------------------------------------------------------------------- column 3
 
-const BLOCK_ICON: Record<OddsBlockView['id'], IconName> = { hyde: 'claw', egg: 'egg', clues: 'search', tower: 'gauge', crack: 'hat' };
+const BLOCK_ICON: Record<OddsBlockView['id'], HudIconName> = { hyde: 'claw', egg: 'egg', clues: 'search', tower: 'gauge', crack: 'hat', slurp: 'slurp', appear: 'hourglass' };
 
 function sameRef(a: MapRef | null, b: MapRef | null): boolean {
   return !!a && !!b && a.kind === b.kind && a.id === b.id;
@@ -593,7 +653,7 @@ function OddsBlock({ b, hover, onHover }: { b: OddsBlockView; hover: MapRef | nu
   return (
     <section className={`inv-oblock inv-oblock--${b.id}`} aria-labelledby={`odds-${b.id}`} data-testid={`odds-${b.id}`}>
       <p className="inv-oblock__q" id={`odds-${b.id}`}>
-        <Icon name={BLOCK_ICON[b.id]} />
+        <HudIcon name={BLOCK_ICON[b.id]} />
         <span>{b.question}</span>
         {b.note && <span className="inv-oblock__note">{b.note}</span>}
       </p>

@@ -65,7 +65,7 @@ describe('minimap / compass content key', () => {
 
 describe('React HUD render key', () => {
   // the loop keeps ONE odds object between its 1 Hz rebuilds (keyed by identity)
-  const ODDS: MysteryHudModel['odds'] = { phase: 'hidden', groups: [], footer: [] };
+  const ODDS: MysteryHudModel['odds'] = { phase: 'hidden', rows: [], footer: [] };
   const ab = (key: 'F' | 'Q', cd = 0) => ({ key, name: 'X', art: '', ready: cd === 0, cooldownLeftS: cd, cooldownS: 20, activeLeftS: 0, loud: false, denied: null, aimed: false });
   const model = (over: Partial<MysteryHudModel> = {}): MysteryHudModel => ({
     t: 30, status: 'playing', hp: 100, maxHp: 100, catches: 0, stance: 'walk', hidden: false, tooClose: false,
@@ -92,7 +92,7 @@ describe('React HUD render key', () => {
     expect(hudRenderKey(model({ move: ab('Q', 10.9) }))).not.toBe(a);
     expect(hudRenderKey(model({ hp: 64.6 }))).not.toBe(a);
     expect(hudRenderKey(model({ objectiveText: 'Find the egg.' }))).not.toBe(a);
-    expect(hudRenderKey(model({ odds: { phase: 'hidden', groups: [], footer: [] } }))).not.toBe(a); // a rebuilt Odds view re-renders
+    expect(hudRenderKey(model({ odds: { phase: 'hidden', rows: [], footer: [] } }))).not.toBe(a); // a rebuilt Odds view re-renders
     expect(hudRenderKey(model({ prompt: { kind: 'clue', id: 'c', label: 'Search', progress: 0.5, warning: null, standStill: false } }))).not.toBe(a);
   });
 });

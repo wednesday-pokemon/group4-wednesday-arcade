@@ -21,6 +21,12 @@
 // sight-based guardian of one area per case (haunts in caseWorlds.ts). Rationale and escape math: docs/MYSTERY_DESIGN.md
 // §11. Changed vs the orchestrator's proposal: scanEveryS 26 → 25, scanJitterS 6 → 4 (interval 21–29 s), scanWarnS
 // 2.0 → 2.2, scanRadiusM 11 → 10, curseWindupS 1.3 → 1.4, curseSlowS 3 → 2.5. No existing number changed.
+//
+// Final (2026-10-24, docs/final/FINAL_CONTRACT.md §1 + §4–§6; rationale docs/MYSTERY_DESIGN.md §12): NEW sections
+// `director` (encounter director), `slurp` (Isaac Night's zombie form), `cabinet` (hiding cabinets) and `scoring`
+// (mystery-v4 constants mirrored for the game-developer's scoreV4). Key names match src/mystery/config.ts readers.
+// No existing number changed: the compact maps shorten every route (~180–230 m instead of 275–389 m), so speeds,
+// hearing, sight and the Hyde's 20 s first appearance (= director.firstSpawnS.hyde) stay as validated.
 import { EGG_POINTS } from '../../game/constants.ts';
 
 export const MYSTERY_TUNING = {
@@ -268,6 +274,106 @@ export const MYSTERY_TUNING = {
     lureRangeM: 20, // a decoy this close pulls him too (rule R8); 20 m ≈ the Hyde lure ranges (10–22 m)
     playerSeesCrackstoneM: 20, // HUD / minimap / lastCrackstoneSighting; > his best sight 16.1 m (Case 02)
     releaseMinDistM: 12, // Hyde-grab release prefers safe points ≥ this from him (> his 10 m scan, ≈ his 14 m sight)
+  },
+
+  /**
+   * Final: the encounter director (FINAL_CONTRACT §4). Eligible spawn = ≥ minSpawnM from the player and not visible
+   * to them; weight × objectiveMult when its zone holds the active objective, × recentMult if used in the last
+   * recentSpawnS. Staggered first appearances (Hyde 20 s → Crackstone 35 s → Slurp 50 s) introduce one threat at a
+   * time in the first minute; maxActive 2 + "one engaged at a time" (sim) keeps escapes predictable.
+   * minSpawnM 18 = the player's own sight of the Hyde (sight.playerSeesHydeM): a spawn can never pop in where the
+   * player could already see it, and on the 55–70 m maps there is always an eligible point. despawnM 24 > minSpawnM
+   * (hysteresis: an enemy that despawns cannot be the one that respawns next to you). minActiveS 35 ≈ one Hyde lap
+   * (48 s / 59 s / 39 s per case) minus the walk-in, so every appearance has time to be read and avoided.
+   */
+  director: {
+    minSpawnM: 18,
+    despawnM: 24,
+    minActiveS: 35,
+    recentSpawnS: 60,
+    recentMult: 0.3,
+    objectiveMult: 1.5,
+    maxActive: 2,
+    firstSpawnS: { hyde: 20, crackstone: 35, slurp: 50 },
+    respawnCooldownS: { hyde: 25, crackstone: 30, slurp: 30 },
+  },
+
+  /**
+   * Final: Slurp — Isaac Night's zombie form (FINAL_CONTRACT §5). An unpredictable stalker: slow lurching wander with
+   * random pauses, short sight (cone 90°, 10 m clear / 7 m fog — shorter than the Hyde's 13 m and Crackstone's 14 m),
+   * a 3 m "smell" all round, and ears only for LOUD noises (≥ 0.8: sprint 0.95, egg drop 1.0, cabinet slam 0.85).
+   * CHASE 3.8: walk 3.2 < 3.8 < slowest legal sprint while carrying 4.22 — the same fairness promise as the Hyde
+   * (4.0) and Crackstone (3.5). The lunge is telegraphed (0.6 s wind-up, connects within 2.0 m): a sprinting player
+   * leaves 1.6 m in 0.6 s × 4.22 = 2.5 m of headroom; a stun / lure during the wind-up cancels it.
+   * Hit 30 HP (× catchDamageMult; between the curse 15 and the grab 35), knock-back 3 m to a free cell, 3 s safety,
+   * then he LEAVEs (walks off, the director despawns him) — a hit is never a death spiral.
+   */
+  slurp: {
+    radiusM: 0.5,
+    turnRateRadPerS: 2.6, // slower turning than Crackstone (3.0) and the Hyde (4.0): circling behind him works
+    speedMps: { WANDER: 1.4, INVESTIGATE: 2.4, CHASE: 3.8, ATTACK: 0, SEARCH: 1.8, LEAVE: 2.2 },
+    sight: { coneDeg: 90, rangeClearM: 10, rangeFogM: 7, crouchRangeMult: 0.7, instantChaseM: 2.5 },
+    playerSeesSlurpM: 18, // > his 10 m sight: a watchful player always sees him first
+    proximityM: 3, // senses a non-hidden player this close all round (LOS; not through walls, not in a hiding spot)
+    hearMinLoudness: 0.8, // only loud noises draw him (INVESTIGATE): sprinting, a dropped egg, a slammed cabinet
+    suspicion: { sightGainPerS: 0.9, chaseAt: 1, decayPerS: 0.2 }, // 0.55–1.1 s visible ramp, like the Hyde
+    chaseLossS: 3.5,
+    searchS: 7,
+    searchRadiusM: 6,
+    investigateMaxS: 10,
+    waypointReachedM: 1.0,
+    pauseMinS: 0.8, // lurching pause at each wander waypoint, seeded in [pauseMinS, pauseMaxS] ("wanderPauseS")
+    pauseMaxS: 2.4,
+    cycleWaypoints: 4, // after 4 wander waypoints his cycle is done → the director may despawn him (≈ 60–80 s)
+    attackRangeM: 1.6,
+    attackWindupS: 0.6,
+    attackConnectM: 2.0,
+    attackHp: 30, // "hitHp"
+    knockbackM: 3,
+    attackInvulnerableS: 3, // "invulnerableS"
+    attackCooldownS: 6,
+    lureRangeM: 20, // a visible / audible decoy this close pulls him, like Crackstone (R8)
+  },
+
+  /**
+   * Final: hiding cabinets (FINAL_CONTRACT §6; 4–8 per case in caseWorlds.ts, radius 0.6, revealM 1.2).
+   * Noise → hearing radius (hearingRadiusM): enter 0.3 → 6 m, close 0.2 → 4 m, open 0.25 → 5 m, creak 0.4 → 7.5 m,
+   * slam 0.85 → 12 m. A calm entry is heard only by a Hyde already within ~6 m; running in (slam) is heard across a
+   * room and by Slurp (≥ 0.8). After 20 s inside the door creaks every 5 s (0.4) — no permanent invulnerability, but
+   * long enough to wait out one Hyde search (8 s) + cooldown (5 s) or a Crackstone search (7 s).
+   */
+  cabinet: {
+    useM: 1.6,
+    enterS: 0.5,
+    closeS: 0.4,
+    exitS: 0.6,
+    exitM: 1.2,
+    enterNoise: 0.3,
+    slamNoise: 0.85, // entering at a sprint
+    closeNoise: 0.2,
+    openNoise: 0.25,
+    creakAfterS: 20,
+    creakEveryS: 5,
+    creakNoise: 0.4,
+    pullOutM: 1.6, // an enemy that witnessed the entry pulls the player out from this close to the door
+  },
+
+  /**
+   * Final scoring constants (mystery-v4, FINAL_CONTRACT §1) — mirrored here for one source of numbers; the shared
+   * `scoreV4()` (game-developer) is the authority. total = max(0, delivery + accusation (correct) + perClue × min(clues,
+   * maxClues) + noDetection (0 detections) + noHints (0 hints) + max(0, timeBonusMax − floor(activeTimeS))
+   * − hintPenalty × hints − hitPenalty × hits). Best case 2200; a typical clean 150 s run ≈ 2050.
+   */
+  scoring: {
+    delivery: 1000,
+    accusation: 300,
+    perClue: 100,
+    maxClues: 3,
+    noDetection: 150,
+    noHints: 150,
+    timeBonusMax: 300,
+    hintPenalty: 50,
+    hitPenalty: 75,
   },
 
   /** Clamp range for the COMBINED (Nightshade × Pokémon) PlayMods, applied in combineMods(). */

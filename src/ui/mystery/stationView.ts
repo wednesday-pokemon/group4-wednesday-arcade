@@ -5,6 +5,9 @@
 // Joseph Crackstone (UX_ENEMIES §8): a chip with his MODE (Patrol / Glimpse / HUNTING / CURSING / Search / Return) —
 // never his position; "Chases H2 · C1"; a "HUNTED" card state while he chases; the "Curses dodged" KPI.
 // A board that cannot hear a station (signal lost / offline board) never claims "Idle": it says it does not know.
+// Final wave (UX_FINAL; FINAL_CONTRACT §4/§5): when the status / heartbeat carries all three monsters (feature-detected:
+// `enemies {hyde, crackstone, slurp}` or `slurpMode` / `slurpPresent`), the card shows three compact monster chips
+// (mode word only, never a position); older stations keep the Hyde + Crackstone chips.
 import { bandFor } from '../../mystery/analytics/predictive.ts';
 import { thingItemText } from '../../mystery/analytics/thingCodes.ts';
 import type { DescriptiveAggregate } from '../../mystery/analytics/descriptive.ts';
@@ -13,7 +16,7 @@ import { CASES } from '../../mystery/data/cases.ts';
 import { caseWorld } from '../../mystery/data/caseWorlds.ts';
 import { NIGHTSHADES } from '../../mystery/data/nightshades.ts';
 import { PARTNERS } from '../../mystery/data/partners.ts';
-import { CASE_IDS, type CaseId, type CrackstoneMode, type Duo, type HydeMode, type Objective, type StampedEvent } from '../../mystery/types.ts';
+import { CASE_IDS, ENEMY_IDS, type CaseId, type CrackstoneMode, type Duo, type EnemyId, type HydeMode, type Objective, type SlurpMode, type StampedEvent } from '../../mystery/types.ts';
 import { CRACK_CHIP } from '../../app/mystery/hud/crackstone.ts';
 import type { LivePhase, LiveStatus } from '../../app/mystery/records.ts';
 import type { BoardStation } from '../../lib/supabase/mysteryDashboardFeed.ts';
@@ -58,6 +61,8 @@ export interface StationCardView {
   crack: { word: string; icon: IconName; hunting: boolean } | null;
   /** He chases / curses: double green card border + "HUNTED" chip (never together with CHASING — R6). */
   hunted: boolean;
+  /** All three monsters (when the station reports them); null = older station → the Hyde / Crackstone chips. */
+  monsters: MonsterChip[] | null;
   risk: { band: 'Low' | 'Medium' | 'High'; source: Source } | null;
   tower: { pct: number; source: Source } | null;
   eggOdds: { name: string; pct: number } | null;
@@ -191,6 +196,7 @@ export function stationViewFromLocal(live: LiveStatusWithInsights | null, now: n
     hyde: hydeChip(mode, emerged, active),
     crack: cr,
     hunted: !!cr?.hunting && mode !== 'CHASE',
+    monsters: monsterChipsOf(live, active && !lost),
     risk: live.risk && mode !== null ? { band: bandWord(live.risk.p), source: riskSource } : null,
     tower: a?.extraction ? { pct: pct5(a.extraction.p), source: a.extraction.source === 'ml' ? 'ml' : 'rule' } : null,
     eggOdds: odds,
@@ -248,6 +254,7 @@ export function stationViewFromBoard(station: BoardStation, now: number): Statio
     hyde: hydeChip(mode, beat?.hydeEmerged ?? null, ACTIVE(phase)),
     crack: cr,
     hunted: !!cr?.hunting && mode !== 'CHASE',
+    monsters: monsterChipsOf(beat, ACTIVE(phase) && !station.signalLost),
     risk: beat?.risk !== null && beat?.risk !== undefined && mode !== null ? { band: bandWord(beat.risk), source: beat.riskSource === 'ml' ? 'ml' : 'rule' } : null,
     tower: typeof beat?.extraction === 'number' ? { pct: pct5(beat.extraction), source: beat.extractionSource === 'ml' ? 'ml' : 'rule' } : null,
     eggOdds: odds,
@@ -274,7 +281,7 @@ function idleView(label: string, notice: string | null): StationCardView {
   return {
     ...common(label, 'idle', false, false), active: false, timeText: null, nickname: null, duo: null, duoText: null, caseId: null, caseText: null,
     clues: 0, cluesTotal: 3, egg: 'unknown', towerReached: false, objectiveText: null, hp: null, maxHp: 100, catches: null, chases: null,
-    chasesText: null, hyde: null, crack: null, hunted: false, risk: null, tower: null, eggOdds: null, thing: null, ageText: null, notice: notice ?? 'No visitor yet.',
+    chasesText: null, hyde: null, crack: null, hunted: false, monsters: null, risk: null, tower: null, eggOdds: null, thing: null, ageText: null, notice: notice ?? 'No visitor yet.',
   };
 }
 
@@ -297,6 +304,66 @@ export function crackOf(present: boolean | null, mode: CrackstoneMode | null, ac
 export function chasesText(hyde: number | null, crackPresent: boolean, crack: number | null): string | null {
   if (hyde === null) return null;
   return crackPresent ? `Chases H${hyde} · C${crack ?? '—'}` : `Chases ${hyde}`;
+}
+
+// ----------------------------------------------------------------------------------------------------- monsters
+
+export interface MonsterChip {
+  enemy: EnemyId;
+  word: string;
+  /** Away / not spawned yet (dotted, muted). */
+  away: boolean;
+  /** Chasing / attacking the visitor (bold, enemy colour). */
+  hot: boolean;
+}
+
+const SLURP_WORD: Record<SlurpMode, string> = {
+  WANDER: 'Wandering', INVESTIGATE: 'Heard something', SEARCH: 'Searching', CHASE: 'CHASING', ATTACK: 'GRABBING', LEAVE: 'Wandering off',
+};
+const SLURP_MODES = Object.keys(SLURP_WORD) as SlurpMode[];
+const HYDE_MODES = Object.keys(HYDE) as HydeMode[];
+
+function modeWord(enemy: EnemyId, mode: unknown): { word: string; hot: boolean } | null {
+  if (enemy === 'hyde' && typeof mode === 'string' && (HYDE_MODES as string[]).includes(mode)) {
+    const m = mode as HydeMode;
+    return { word: m === 'CHASE' ? 'CHASING' : HYDE[m].word, hot: m === 'CHASE' };
+  }
+  if (enemy === 'crackstone' && isCrackMode(mode)) return { word: CRACK_CHIP[mode].word, hot: mode === 'CHASE' || mode === 'ATTACK' };
+  if (enemy === 'slurp' && typeof mode === 'string' && (SLURP_MODES as string[]).includes(mode)) {
+    const m = mode as SlurpMode;
+    return { word: SLURP_WORD[m], hot: m === 'CHASE' || m === 'ATTACK' };
+  }
+  return null;
+}
+
+type EnemyWire = { present?: unknown; active?: unknown; mode?: unknown; spawned?: unknown };
+
+/**
+ * The three monsters' public states from a station status / heartbeat, feature-detected (null = the station does not
+ * report Slurp yet → keep the older chips). Accepts `enemies: { hyde | crackstone | slurp: { present?, active?, mode? } }`
+ * or flat fields `hydeMode` / `crackstoneMode` / `slurpMode` (+ `crackstonePresent` / `slurpPresent` / `…Active`).
+ * Only monsters present in the case are listed; an inactive one reads "Away". Never a position.
+ */
+export function monsterChipsOf(src: unknown, active: boolean): MonsterChip[] | null {
+  if (!active || src === null || typeof src !== 'object') return null;
+  const o = src as Record<string, unknown>;
+  const nested = o.enemies !== null && typeof o.enemies === 'object' ? (o.enemies as Partial<Record<EnemyId, EnemyWire>>) : null;
+  const flat = 'slurpMode' in o || 'slurpPresent' in o || 'slurpActive' in o;
+  if (!nested && !flat) return null;
+  const out: MonsterChip[] = [];
+  for (const enemy of ENEMY_IDS) {
+    const w: EnemyWire | undefined = nested ? nested[enemy] : {
+      present: enemy === 'hyde' ? true : o[`${enemy}Present`],
+      active: o[`${enemy}Active`],
+      mode: o[`${enemy}Mode`],
+    };
+    if (!w || w.present === false) continue;
+    if (enemy !== 'hyde' && w.present !== true && w.mode == null && w.active == null) continue; // not in this case
+    const mw = modeWord(enemy, w.mode);
+    if (w.active === false || w.spawned === false || !mw) out.push({ enemy, word: 'Away', away: true, hot: false });
+    else out.push({ enemy, word: mw.word, away: false, hot: mw.hot });
+  }
+  return out.length > 0 ? out : null;
 }
 
 function hydeChip(mode: HydeMode | null, emerged: boolean | null, active: boolean): StationCardView['hyde'] {

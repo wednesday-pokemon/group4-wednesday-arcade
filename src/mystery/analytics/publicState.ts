@@ -12,7 +12,8 @@ import type { MysteryRun } from '../run.ts';
 import { polygonCentroid, type CrackstoneBrain } from '../crackstone.ts';
 import type { CrackstoneTuning } from '../config.ts';
 import type {
-  ActiveEffects, CaseWorldDef, ClueId, CrackstoneDef, CrackstoneMode, CrackstoneRuntime, InvestigationState, Vec2,
+  ActiveEffects, CaseWorldDef, ClueId, CrackstoneDef, CrackstoneMode, CrackstoneRuntime, HidingSpotDef, InvestigationState, SlurpDef,
+  SlurpMode, SlurpRuntime, StateSnapshot, Vec2,
 } from '../types.ts';
 
 /** Default `sight.playerSeesHydeM` when the tuning does not define it yet (contract §8). */
@@ -206,4 +207,101 @@ export function crackstoneOf(run: CrackRun, withReveal = true): CrackstonePublic
 /** The leash disc / area centroid of a Crackstone def (vertex mean, as the sim measures his leash). */
 export function crackstoneCentroid(def: CrackstoneDef): Vec2 {
   return polygonCentroid(def.polygon); // the sim's leash centre (src/mystery/crackstone.ts)
+}
+
+// ----------------------------------------------------------------------------------------------------- final (director)
+// FINAL_CONTRACT §4–§6: the encounter director, Slurp and hiding cabinets. Every sim surface is FEATURE-DETECTED (the
+// final sim lands in parallel): a run without them reports "absent" / the legacy behaviour. Slurp's position follows the
+// same rule as Crackstone's (R4): only while the player sees him, he chases / attacks, or a reveal effect shows enemies.
+// This is the ONLY place in src/mystery/analytics that reads his runtime (leakage.test.ts scans for other reads).
+
+interface FinalRun {
+  slurp?: SlurpRuntime | null;
+  slurpVisible?: () => boolean;
+  hydeBrain?: { active?: boolean };
+  crackstoneBrain?: { active?: boolean } | null;
+  snapshot?: () => Partial<StateSnapshot>;
+}
+
+/**
+ * Is the Hyde in play right now? Final sims: a `hydeActive` getter (director) when the run has one, else the brain's
+ * `active` flag (the director parks a despawned Hyde as inactive); before emergence always false.
+ */
+export function hydeActiveOf(run: object): boolean {
+  const r = run as FinalRun & { hydeActive?: boolean };
+  if (!hydeEmergedOf(run)) return false;
+  if (typeof r.hydeActive === 'boolean') return r.hydeActive;
+  return r.hydeBrain?.active !== false;
+}
+
+/** Is Joseph Crackstone in play right now (present AND not despawned by the director)? */
+export function crackstoneActiveOf(run: object): boolean {
+  const r = run as FinalRun;
+  if (!r.crackstoneBrain) return false;
+  return r.crackstoneBrain.active === true;
+}
+
+/** Slurp is part of this case (his haunt exists). */
+export function slurpPresentOf(run: Pick<MysteryRun, 'map' | 'caseDef'> & object): boolean {
+  const r = run as FinalRun;
+  if (r.slurp !== undefined && r.slurp !== null) return true;
+  const w = worldOf(run);
+  return !!w?.slurp;
+}
+
+/** Why the player may know Slurp's position right now (same rule as Crackstone R4), or null. */
+export type SlurpPoseKind = 'visible' | 'chase' | 'attack' | 'revealed';
+
+/** Slurp as the analytics layer may see him: mode / active / "sees you" are public (HUD); position only per R4. */
+export interface SlurpPublic {
+  def: SlurpDef | null;
+  active: boolean;
+  mode: SlurpMode;
+  pose: { x: number; z: number; yaw: number } | null;
+  poseKind: SlurpPoseKind | null;
+  canSeePlayer: boolean;
+  /** He is lunging (telegraphed windup / attack window: public animation). */
+  attacking: boolean;
+  stunned: boolean;
+  slowed: boolean;
+  distracted: boolean;
+}
+
+/** Slurp's public state, or null when the case / sim has no Slurp. */
+export function slurpOf(run: Pick<MysteryRun, 'map' | 'caseDef' | 't' | 'player'> & object, withReveal = true): SlurpPublic | null {
+  const r = run as FinalRun & { effects?: () => ActiveEffects };
+  const s = r.slurp;
+  if (!s) return null;
+  const def = worldOf(run)?.slurp ?? null;
+  const t = run.t;
+  let kind: SlurpPoseKind | null = null;
+  if (s.active) {
+    if (s.mode === 'CHASE') kind = 'chase';
+    else if (s.mode === 'ATTACK') kind = 'attack';
+    else if (typeof r.slurpVisible === 'function' && r.slurpVisible()) kind = 'visible';
+    else if (withReveal && typeof r.effects === 'function') {
+      const fx = r.effects();
+      if (fx.enemiesRevealed) {
+        const d = Math.hypot(s.x - run.player.x, s.z - run.player.z); // R4: a reveal effect shows enemies within its range
+        if (fx.enemyRevealRangeM <= 0 || d <= fx.enemyRevealRangeM) kind = 'revealed';
+      }
+    }
+  }
+  return {
+    def, active: s.active, mode: s.mode,
+    pose: kind ? { x: s.x, z: s.z, yaw: s.yaw } : null, // R4-gated position read
+    poseKind: kind, canSeePlayer: s.active && s.canSeePlayer, attacking: s.active && s.attacking,
+    stunned: t < s.stunnedUntil, slowed: t < s.slowedUntil, distracted: t < s.distractedUntil,
+  };
+}
+
+/** The player's cabinet state (null when not inside one / the sim has no cabinets). */
+export function cabinetOf(run: Pick<MysteryRun, 'player'>): { spotId: string; phase: 'entering' | 'open' | 'closed' | 'exiting'; t: number } | null {
+  const c = run.player.cabinet;
+  return c ? { spotId: c.spotId, phase: c.phase, t: c.t } : null;
+}
+
+/** Enterable cabinets of the map (HidingSpotDef.kind 'cabinet'). */
+export function cabinetsOf(run: Pick<MysteryRun, 'map'>): HidingSpotDef[] {
+  return run.map.hidingSpots.filter((h) => h.kind === 'cabinet');
 }

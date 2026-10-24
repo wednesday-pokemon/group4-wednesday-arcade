@@ -101,7 +101,7 @@ select is((select count(*)::int from public.mystery_offered_duos where session_i
 select is((select status from public.mystery_station_status where station_id = 'station_a'), 'offered', 'create: station A shows offered');
 select is(pg_temp.mk('10000000-0000-4000-8000-0000000000ff', 'station_a', 'm_act_a_0001', '22222222222222222222222222222222', 'Annie'),
   jsonb_build_object('ok', true, 'replay', true, 'sessionId', '10000000-0000-4000-8000-000000000001',
-    'caseId', (select case_id from public.mystery_sessions where id = '10000000-0000-4000-8000-000000000001'), 'caseVersion', 1),
+    'caseId', (select case_id from public.mystery_sessions where id = '10000000-0000-4000-8000-000000000001'), 'caseVersion', 1, 'rulesVersion', 'mystery-v3.1'),
   'create: same actionId replays the ORIGINAL session and its case (new seed/offer ignored, nothing drawn)');
 select is((select count(*)::int from public.mystery_sessions where station_id = 'station_a'), 1, 'create: replay inserted nothing');
 select is((select seed from public.mystery_sessions where id = '10000000-0000-4000-8000-000000000001'), '11111111111111111111111111111111',

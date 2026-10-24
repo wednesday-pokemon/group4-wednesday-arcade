@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { parseMysteryAppend } from '../../../supabase/functions/_shared/mystery-validation.ts';
 import { crackstoneTargetable } from '../../../src/mystery/abilities.ts';
 import { Bot } from '../../../src/mystery/bot.ts';
+import { encounterSpawnsFor } from '../../../src/mystery/director.ts';
 import { CASES } from '../../../src/mystery/data/cases.ts';
 import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
 import { MysteryRun } from '../../../src/mystery/run.ts';
@@ -29,6 +30,16 @@ const FAR = { x: 9999, z: 9999 };
 
 function freshRun(caseId: CaseId, seed = 'crack-unit', duo: Duo = DUO): MysteryRun {
   return new MysteryRun({ duo, seed, tutorial: false, caseDef: CASES[caseId] });
+}
+
+/** A run with Crackstone ON the map (final: the encounter director brings him in at firstSpawnS; tests spawn him now). */
+function activeRun(caseId: CaseId, seed = 'crack-unit', duo: Duo = DUO): MysteryRun {
+  const run = freshRun(caseId, seed, duo);
+  if (run.crackstoneBrain && !run.crackstoneBrain.active) {
+    const spawn = encounterSpawnsFor(run.map.world!, 'crackstone')[0];
+    if (spawn) run.director.spawnAt(run, 'crackstone', spawn);
+  }
+  return run;
 }
 
 function base(model: CrackstoneRiskModel, t: number, over: Partial<CrackSample> = {}): CrackSample {
@@ -202,15 +213,15 @@ function onEvents(rules: EventRules, items: [number, Parameters<typeof stamp>[0]
 }
 
 describe('Crackstone live messages (UX_ENEMIES §6)', () => {
-  it('chase start is a P5 CRACKSTONE rule cause with distance and stance; deferred and warnings say nothing', () => {
+  it('chase start is a P5 CRACKSTONE rule cause with the stance (UX_FINAL §8 copy); deferred and warnings say nothing', () => {
     const r = new EventRules(CTX, 'walk');
     const seen = onEvents(r, [[1, { type: 'crackstone_sighted', via: 'sight', distanceM: 12 }], [2, { type: 'crackstone_mode', from: 'PATROL', to: 'CHASE', reason: 'saw_player' }]]);
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ code: 'crack_seen', title: TITLES.crackstone, priority: P.alert, basis: 'rule' });
-    expect(seen[0].text).toContain('9 m');
+    expect(seen[0].text).toBe('Crackstone spotted you.');
     expect(seen[0].text.length).toBeLessThanOrEqual(48);
     const rc = new EventRules(CTX, 'crouch');
-    expect(onEvents(rc, [[2, { type: 'crackstone_mode', from: 'PATROL', to: 'CHASE', reason: 'saw_player' }]])[0].text).toMatch(/^Seen crouched/);
+    expect(onEvents(rc, [[2, { type: 'crackstone_mode', from: 'PATROL', to: 'CHASE', reason: 'saw_player' }]])[0].text).toBe('Crackstone spotted you, even crouched.');
     expect(onEvents(new EventRules(CTX), [[2, { type: 'crackstone_mode', from: 'PATROL', to: 'CHASE', reason: 'sensed_player' }]])[0].code).toBe('crack_sensed');
     expect(onEvents(new EventRules(CTX, 'crouch'), [[2, { type: 'crackstone_mode', from: 'SEARCH', to: 'CHASE', reason: 'scan_hit' }]])[0].text).toMatch(/crouching does not hide you/);
     // a CHASE after a missed curse continues the same encounter; deferred / scan + curse warnings: nothing
@@ -306,7 +317,7 @@ describe('Crackstone-aware advice is feasible', () => {
   it('scan warning while exposed → the nearest covered point reachable before the pulse (never "crouch")', () => {
     let staged = 0;
     for (const caseId of CASE_IDS) {
-      const run = freshRun(caseId, `scan-${caseId}`);
+      const run = activeRun(caseId, `scan-${caseId}`);
       if (!stageBehind(run, 6)) continue;
       const c = run.crackstone!;
       c.scan = { phase: 'warning', startedAt: run.t, pulseAt: run.t + 2.2, radiusM: run.crackstoneBrain!.cfg.scanRadiusM };
@@ -335,7 +346,7 @@ describe('Crackstone-aware advice is feasible', () => {
     let staged = 0;
     for (const caseId of CASE_IDS) {
       for (const duo of [DUO, { characterId: 'bianca', pokemonId: 'aegislash' } as Duo]) {
-        const run = freshRun(caseId, `curse-${caseId}`, duo);
+        const run = activeRun(caseId, `curse-${caseId}`, duo);
         if (!stageBehind(run, 5)) continue;
         staged++;
         const c = run.crackstone!;

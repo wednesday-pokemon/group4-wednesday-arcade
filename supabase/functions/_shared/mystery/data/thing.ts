@@ -8,7 +8,12 @@
 // {pokemon} = PokemonPartnerDef.name, {power} = power name, {move} = move name, {n} = a number, {area} = AreaDef.name
 // (≤ 18), {direction} = compass word (≤ 10, e.g. "north-east"), {label} = SiteDef.label (≤ 20).
 // Keys: the character power is pressed with Q, the Pokémon move with R (slot ids stay 'F' / 'Q' in data).
-import type { DnfReason, HydeMode, Verdict } from '../types.ts';
+//
+// Final (2026-10-24, FINAL_CONTRACT §8): Thing = mascot, prologue, FREE prescriptive advice (`prescriptive`, ≤ 52 chars
+// filled, rate-limited by the caller) and status reactions (`slurp`, `cabinet`, `status`, log-style ≤ 34 chars).
+// Principal Weems = OPTIONAL hints only (`WEEMS`, ≤ 90 chars): every press is a scored `hint_requested` (−50).
+// Weems never names a suspect. `DEATH_LINES` / `CABINET_PROMPTS` are UI copy for the game-over card and cabinets.
+import type { CaseId, DnfReason, EnemyId, HydeMode, Verdict } from '../types.ts';
 
 export type ThingPose = 'stand' | 'wave' | 'point' | 'shush' | 'count1' | 'count2' | 'count3' | 'thumbsUp' | 'tap' | 'fist';
 export interface ThingLine { id: string; text: string; pose: ThingPose }
@@ -65,6 +70,23 @@ export interface ThingScript {
     | 'curseHit' | 'curseBlocked' | 'curseDodged' | 'gaveUp' | 'returned' | 'deferred',
     ThingLine
   >;
+  // ---- final (2026-10-24)
+  /**
+   * FREE prescriptive advice (never a `hint_requested`). Advice-style ≤ 52 chars after filling: {area} ≤ 18,
+   * {direction} ≤ 10, {move} = Pokémon move name (≤ 15).
+   */
+  prescriptive: Record<
+    | 'hideHyde' | 'hideSlurp' | 'hideCrackstone' | 'closeCabinet' | 'stayQuiet' | 'exitCabinet' | 'creak'
+    | 'saferPath' | 'saferPathArea' | 'defensive' | 'defensiveMove' | 'searchArea' | 'searchDirection' | 'breakSight'
+    | 'sprintAway' | 'avoidArea' | 'deliver',
+    ThingLine
+  >;
+  /** Slurp status reactions (log-style ≤ 34). */
+  slurp: Record<'appeared' | 'glimpse' | 'seen' | 'sensed' | 'heard' | 'heardCabinet' | 'lunge' | 'hit' | 'blocked' | 'escaped' | 'left', ThingLine>;
+  /** Cabinet reactions (log-style ≤ 34). */
+  cabinet: Record<'hidden' | 'doorShut' | 'loud' | 'witnessed' | 'pulledOut' | 'out', ThingLine>;
+  /** Director / generic status reactions (log-style ≤ 34). */
+  status: Record<'enemyGone' | 'twoHunters' | 'blocked' | 'hpLow', ThingLine>;
 }
 
 export const THING: ThingScript = {
@@ -87,8 +109,8 @@ export const THING: ThingScript = {
     { step: 'power', keys: 'Q', ...line('tut_power', 'tap', 'Q uses {power}. Watch for the LOUD tag.') },
     { step: 'move_q', keys: 'R', ...line('tut_move_q', 'tap', 'R calls {move}. Each has a cooldown.') },
     { step: 'board', keys: 'Tab', ...line('tut_board', 'count3', 'Tab opens your evidence board.') },
-    { step: 'hint', keys: 'V', ...line('tut_hint', 'tap', "V asks me for a hint. I won't name names.") },
-    { step: 'go', keys: '', ...line('tut_go', 'point', 'Sprinting is loud. Tab: evidence. V: ask me. Go.') },
+    { step: 'hint', keys: 'V', ...line('tut_hint', 'tap', 'V asks Principal Weems for a hint. Each costs 50.') },
+    { step: 'go', keys: '', ...line('tut_go', 'point', 'Sprinting is loud. Tab: evidence. V: Weems. Go.') },
   ],
 
   objective: {
@@ -238,7 +260,150 @@ export const THING: ThingScript = {
     returned: line('crackstone_returned', 'tap', 'Crackstone is back on his rounds.'), // 33
     deferred: line('crackstone_deferred', 'tap', 'Crackstone backs off for now.'), // 29
   },
+  // ---- final: FREE prescriptive advice (advice-style ≤ 52 filled) — Thing's, never scored
+  prescriptive: {
+    hideHyde: line('rx_hide_hyde', 'shush', 'Hide. The Hyde is approaching.'), // 30
+    hideSlurp: line('rx_hide_slurp', 'shush', 'Hide. Slurp is shambling closer.'), // 32
+    hideCrackstone: line('rx_hide_crackstone', 'shush', 'Hide. Crackstone is looking this way.'), // 37
+    closeCabinet: line('rx_close_cabinet', 'shush', 'Close the cabinet. Press E.'), // 27
+    stayQuiet: line('rx_stay_quiet', 'shush', 'Stay quiet. It is right outside.'), // 32
+    exitCabinet: line('rx_exit_cabinet', 'tap', 'All clear. E to step out.'), // 25
+    creak: line('rx_creak', 'tap', 'The door creaks. Move out soon.'), // 31
+    saferPath: line('rx_safer_path', 'point', 'Take the safer path.'), // 20
+    saferPathArea: line('rx_safer_path_area', 'point', 'Take the safer path through the {area}.'), // ≤ 51
+    defensive: line('rx_defensive', 'fist', 'Use your Pokémon’s defensive move.'), // 34
+    defensiveMove: line('rx_defensive_move', 'fist', 'Use {move} now — R!'), // ≤ 34
+    searchArea: line('rx_search_area', 'point', 'Search the {area}.'), // ≤ 30
+    searchDirection: line('rx_search_direction', 'point', 'Search the {area} to the {direction}.'), // ≤ 48
+    breakSight: line('rx_break_sight', 'fist', 'Break its line of sight. Get behind a wall.'), // 43
+    sprintAway: line('rx_sprint_away', 'fist', 'Sprint! You are faster than it.'), // 31
+    avoidArea: line('rx_avoid_area', 'point', 'Crackstone watches the {area}. Go round.'), // ≤ 50
+    deliver: line('rx_deliver', 'point', 'Carry the egg to Iago Tower. Stay low.'), // 38
+  },
+  // ---- final: Slurp reactions (log-style ≤ 34). Isaac Night's zombie form; plain words, nothing graphic.
+  slurp: {
+    appeared: line('slurp_appeared', 'shush', 'Slurp is out there. Stay unseen.'), // 32
+    glimpse: line('slurp_glimpse', 'shush', 'Slurp noticed something. Hide!'), // 30
+    seen: line('slurp_seen', 'fist', 'Slurp saw you! Run or hide!'), // 27
+    sensed: line('slurp_sensed', 'fist', 'Too close! Slurp smelled you.'), // 29
+    heard: line('slurp_heard', 'shush', 'Slurp heard that. Freeze.'), // 25
+    heardCabinet: line('slurp_heard_cabinet', 'shush', 'Slurp heard the cabinet door.'), // 29
+    lunge: line('slurp_lunge', 'fist', 'Slurp lunges — get clear!'), // 25
+    hit: line('slurp_hit', 'fist', 'Slurp grabbed you! Get away!'), // 28
+    blocked: line('slurp_blocked', 'thumbsUp', 'Shield held. Slurp let go.'), // 26
+    escaped: line('slurp_escaped', 'thumbsUp', 'You lost Slurp. Stay quiet.'), // 27
+    left: line('slurp_left', 'tap', 'Slurp shuffles off into the dark.'), // 33
+  },
+  // ---- final: cabinet reactions (log-style ≤ 34)
+  cabinet: {
+    hidden: line('cabinet_hidden', 'shush', 'Inside. Now close the door.'), // 27
+    doorShut: line('cabinet_door_shut', 'shush', 'Door shut. Nothing can see you.'), // 31
+    loud: line('cabinet_loud', 'fist', 'Too loud! Something heard that.'), // 31
+    witnessed: line('cabinet_witnessed', 'fist', 'It saw you hide! Get out!'), // 25
+    pulledOut: line('cabinet_pulled_out', 'fist', 'Pulled out! It saw you go in.'), // 29
+    out: line('cabinet_out', 'tap', 'Out again. Keep moving.'), // 23
+  },
+  // ---- final: director / generic status (log-style ≤ 34)
+  status: {
+    enemyGone: line('status_enemy_gone', 'tap', 'It slipped away. For now.'), // 25
+    twoHunters: line('status_two_hunters', 'shush', 'Two hunters out. Tread lightly.'), // 31
+    blocked: line('status_blocked', 'thumbsUp', 'Your Pokémon blocked the attack.'), // 32
+    hpLow: line('status_hp_low', 'fist', 'You are hurt. Hide and recover.'), // 31
+  },
 };
+
+// ----------------------------------------------------------------------------------------------------- Weems
+
+/**
+ * Principal Larissa Weems — the ghostly guide (FINAL_CONTRACT §8). OPTIONAL hints on "Ask Weems" (V): each press is a
+ * `hint_requested {level}` and costs 50 points. Voice: dry, principled, a little amused, from beyond the veil.
+ * Rules: ≤ 90 chars per line (after filling {area} ≤ 18 / {label} ≤ 20 / {direction} ≤ 10); never names or hints at
+ * a suspect by name; L3 guides the reasoning, never states who did it.
+ * - L1 general search area · L2 specific spot or evidence relationship · L3 deduction guidance.
+ * - `templates` are filled from the live posterior (the most likely unchecked area / site) — honest, never the hidden
+ *   layout; `byCase` are the case's fixed lines (index = how many hints of that level were already given, clamped).
+ */
+export interface WeemsScript {
+  name: string;
+  intro: string;
+  cooldown: string;
+  exhausted: string;
+  templates: Record<1 | 2 | 3, string>;
+  byCase: Record<CaseId, Record<1 | 2 | 3, readonly string[]>>;
+}
+
+export const WEEMS: WeemsScript = {
+  name: 'Principal Weems',
+  intro: 'I advise, I do not solve. And every word from me costs you fifty points.', // 73
+  cooldown: 'Patience. Even the departed wait their turn.', // 44
+  exhausted: 'I have said all a principal may. The rest is yours.', // 51
+  templates: {
+    1: 'Nevermore hides its secrets in the {area}. Begin there.', // ≤ 72 filled
+    2: 'The {label}, in the {area}. Look properly this time.', // ≤ 77 filled
+    3: 'Lay your clues side by side. Who is explained, and who is not?', // 63
+  },
+  byCase: {
+    poisoned_archive: {
+      1: [
+        'A poisoner needs a garden and a desk. Try the greenhouse, then the archive.', // 75
+        'Doors keep diaries here. The porter’s lodge keeps them for the doors.', // 70
+      ],
+      2: [
+        'The vial inventory sits with the plants — or in the Poison Garden’s bed.', // 72
+        'Read the door ledger beside the time on that transfer form.', // 59
+      ],
+      3: [
+        'One badge stood at two doors while its owner claims a third room. Follow the badge.', // 84
+        'Whoever signed the egg away also held the poison. Let the clocks agree.', // 71
+      ],
+    },
+    crypt_last_witness: {
+      1: [
+        'The gate fell at the crypt’s north door. Begin where the professor ended.', // 73
+        'Below ground, a sheet remembers every name. Find the tunnel office.', // 67
+      ],
+      2: [
+        'Something was hidden by the cage — or round the tunnel bend. Tools talk.', // 72
+        'Set the sign-in times against the moment the gate fell.', // 55
+      ],
+      3: [
+        'A key, a signature, a satchel. Find the one person all three belong to.', // 71
+        'Test each statement against what was found below. One claim cannot survive it.', // 79
+      ],
+    },
+    midnight_signal: {
+      1: [
+        'Alarms are silenced from a control room. Ours leans on the alley wall.', // 70
+        'Guards keep logs. Try the ravine post or the checkpoint booth.', // 62
+      ],
+      2: [
+        'The override console remembers a card. The patrol log remembers a wall.', // 71
+        'The watchtower recorder knows where the all-clear was truly sent from.', // 70
+      ],
+      3: [
+        'A card, a lamp, a log. Ask which single person they all point to.', // 65
+        'Check each alibi against a record that cannot lie: lamps, cards, star logs.', // 75
+      ],
+    },
+  },
+};
+
+// ----------------------------------------------------------------------------------------------------- final UI copy
+
+/** Death cutscene → game-over card (FINAL_CONTRACT §7). Not graphic; names the monster. */
+export const DEATH_LINES: Readonly<Record<EnemyId, { title: string; line: string }>> = {
+  hyde: { title: 'Defeated by the Hyde', line: 'The Hyde dragged you into the fog.' },
+  crackstone: { title: 'Defeated by Joseph Crackstone', line: 'Crackstone’s curse pulled you into the cold.' },
+  slurp: { title: 'Defeated by Slurp', line: 'Slurp dragged you into the dark.' },
+};
+
+/** Cabinet prompts (FINAL_BRIEF §5, exact wording). */
+export const CABINET_PROMPTS = {
+  hide: 'E — Hide',
+  close: 'E — Close Door',
+  quiet: 'Stay Quiet',
+  exit: 'E — Exit',
+} as const;
 
 /** Fill {placeholders}; unknown placeholders are left untouched so a missing value is visible in tests. */
 export function formatThingLine(template: string, vars: Readonly<Record<string, string | number>>): string {

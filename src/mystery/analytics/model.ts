@@ -43,7 +43,8 @@ export interface RegressionMetrics {
 export interface ModelArtifact {
   schema: typeof MODEL_SCHEMA;
   modelVersion: string;
-  rulesVersion: 'mystery-v3.1';
+  /** The sim rules the episodes were generated with (v3.1 artifacts stay loadable until the v4 retrain ships). */
+  rulesVersion: 'mystery-v3.1' | 'mystery-v4';
   createdAt: string;
   modelType: 'logistic_regression';
   trainedOn: string;
@@ -125,7 +126,7 @@ export function validateArtifact(x: unknown): { ok: true; model: ModelArtifact }
   if (!x || typeof x !== 'object') return { ok: false, reason: 'no model artifact' };
   const o = x as Record<string, unknown>;
   if (o.schema !== MODEL_SCHEMA) return { ok: false, reason: 'unknown model schema' };
-  if (o.rulesVersion !== 'mystery-v3.1') return { ok: false, reason: 'model trained for another rules version' };
+  if (o.rulesVersion !== 'mystery-v4' && o.rulesVersion !== 'mystery-v3.1') return { ok: false, reason: 'model trained for another rules version' };
   if (typeof o.modelVersion !== 'string' || !VERSION_RE.test(o.modelVersion)) return { ok: false, reason: 'bad modelVersion' };
   if (o.modelType !== 'logistic_regression') return { ok: false, reason: 'unsupported model type' };
   if (!validPart(o.detection)) return { ok: false, reason: 'detection model malformed or uses unknown features' };

@@ -2,7 +2,7 @@
 // (egg_site, clue_area, hyde_spawn, hyde_zone, extraction, detection_15s) into mystery_forecasts through the REAL append
 // validator, and its ~2 s heartbeat carries the live numbers Laptop 1 renders (objective, chases, extraction, top egg
 // site, Hyde zone, newest Thing item as a code) — tokens only, never free text.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { StationId } from '../../src/game/index.ts';
 import { createLiveController } from '../../src/app/mystery/liveRun.ts';
 import { liveStationView } from '../../src/app/mystery/liveDashboard.tsx';
@@ -12,6 +12,8 @@ import type { MysteryRun } from '../../src/mystery/run.ts';
 import {
   FakeSupabaseServer, MYSTERY_FINISH_SEED, ManualTimers, driveRun, openMysteryBoard, openMysteryStation, settle, stationCredentials,
 } from './fakeSupabase.ts';
+
+vi.setConfig({ testTimeout: 300_000 }); // final sim: bot runs at 60 Hz (fakeSupabase.ts MYSTERY_TEST_TIMEOUT_MS)
 
 async function kiosk(server: FakeSupabaseServer, stationId: StationId) {
   const page = openMysteryStation(server, stationId);
@@ -85,5 +87,5 @@ describe('overhaul live analytics through Supabase (fake)', () => {
     for (const b of live) if (b.thing) expect(b.thing.code).toMatch(/^[a-z][a-z0-9_]*$/);
     stop();
     k.controller.dispose();
-  }, 120_000);
+  }, 300_000);
 });

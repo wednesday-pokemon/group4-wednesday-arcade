@@ -3,7 +3,7 @@
 // Run:  node node_modules/vite/bin/vite.js --port 5210   then open /tools/mystery-preview.html
 // Query flags: ?manual=1 (no auto RAF; drive with __m.advance)  ?low=1  ?reduced=1  ?shot=1 (hide the bar)  ?real=1
 //              ?case=poisoned_archive|crypt_last_witness|midnight_signal  ?character=wednesday  ?pokemon=gengar  ?w=1280&h=720  ?emblems=1 (Thing pose contact sheet)  ?scenedebug
-//              ?mock=1|0 (staging world: rich candidate sites / examines / lever / hazards / extra walls; default = only while the real world is the one-site stub)  ?layout=second (session layout = each group's 2nd site)
+//              ?compact=1 (staged compact play area: boundary walls, cabinets, Slurp haunt; automatic when the real world has a playArea)  ?mock=1|0 (staging world: rich candidate sites / examines / lever / hazards / extra walls; default = only while the real world is the one-site stub)  ?layout=second (session layout = each group's 2nd site)
 // Console / Playwright API: window.__m
 import * as THREE from 'three';
 import { MysteryScene } from '../src/three/mystery/MysteryScene.ts';
@@ -14,9 +14,9 @@ import { caseById, isCaseId } from '../src/mystery/data/cases.ts';
 import { MysteryRun } from '../src/mystery/run.ts';
 import { Bot } from '../src/mystery/bot.ts';
 import { createHydeRuntime } from '../src/mystery/hyde.ts';
-import { applyLayout, applyMockWorld } from './mystery-preview-mock.ts';
+import { applyLayout, applyMockPlayArea, applyMockWorld } from './mystery-preview-mock.ts';
 import type {
-  ActiveEffects, ClueId, CrackstoneRuntime, Duo, EggRuntime, GameEvent, HydeRuntime, InvestigationState, MapDef, NightshadeId, Objective, PlayerState, PokemonId, RunStatus, StampedEvent,
+  ActiveEffects, ClueId, CrackstoneRuntime, Duo, EggRuntime, EnemyId, GameEvent, HydeRuntime, InvestigationState, MapDef, NightshadeId, Objective, PlayerState, PokemonId, RunStatus, SlurpRuntime, StampedEvent,
 } from '../src/mystery/types.ts';
 
 const q = new URLSearchParams(location.search);
@@ -71,6 +71,15 @@ class FakeRun implements RenderableMysteryRun {
   crackNextScan = 8;
   curseHit = true;
   crackstoneVisual() { return this.crackVisual; }
+  slurpWalk = false;
+  /** scripted Slurp (null = none) */
+  slurp: SlurpRuntime | null = null;
+  /** director-style presence: when set, enemyStatus() reports it (otherwise the renderer falls back to legacy rules) */
+  presence: Partial<Record<EnemyId, boolean>> | null = null;
+  cabDoor = 0;
+  cabPhase: 'entering' | 'open' | 'closed' | 'exiting' | null = null;
+  enemyStatus() { const o: Partial<Record<EnemyId, { active: boolean }>> = {}; if (this.presence) for (const k of Object.keys(this.presence) as EnemyId[]) o[k] = { active: !!this.presence[k] }; return o; }
+  cabinetStatus() { const c = this.player.cabinet; return c ? { spotId: c.spotId, phase: c.phase, door: this.cabDoor } : null; }
   constructor(map: MapDef) {
     this.map = map;
     const s = map.playerStart;
@@ -95,6 +104,15 @@ const map = buildIsland(caseDef);
 const mockQ = q.get('mock');
 if (q.get('real') !== '1' && (mockQ === '1' || (mockQ !== '0' && (map.world?.examines.length ?? 0) === 0))) applyMockWorld(map, caseDef.id, q.get('layout') === 'second' ? 'second' : 'first');
 else if (q.get('layout') === 'second') applyLayout(map, 'second');
+if (q.get('real') !== '1' && !map.world?.playArea && q.get('compact') === '1') applyMockPlayArea(map, caseDef.id);
+// until the sim's caseMap() builds the map from playArea: do what it will (bounds / start / patrol / release points from the designer's playArea)
+if (map.world?.playArea && (map.bounds.minX !== map.world.playArea.bounds.minX || map.bounds.maxZ !== map.world.playArea.bounds.maxZ)) {
+  const pa = map.world.playArea;
+  map.bounds = { ...pa.bounds };
+  map.playerStart = { ...pa.playerStart };
+  if (pa.hydePatrol.length) map.patrol = pa.hydePatrol.map((p) => ({ ...p }));
+  map.safeReleasePoints = pa.safeReleasePoints.map((p) => ({ ...p }));
+}
 const fake = new FakeRun(map);
 fake.egg.x = map.eggSpawn.x; fake.egg.z = map.eggSpawn.z;
 let real: MysteryRun | null = null;
@@ -164,8 +182,14 @@ function stepCrack(dt: number): void {
   }
 }
 
+function createSlurp(x: number, z: number, yaw = 0): SlurpRuntime {
+  return { active: true, mode: 'WANDER', modeT: 0, x, z, yaw, speed: 0, suspicion: 0, canSeePlayer: false, lastKnown: null, target: null, path: [], stunnedUntil: 0, slowedUntil: 0, slowMult: 1, distractedUntil: 0, attacking: false };
+}
+
 function stepFake(dt: number): void {
   fake.t += dt;
+  if (fake.slurp) { fake.slurp.modeT += dt; if (fake.slurpWalk) { fake.slurp.x += -Math.sin(fake.slurp.yaw) * fake.slurp.speed * dt; fake.slurp.z += -Math.cos(fake.slurp.yaw) * fake.slurp.speed * dt; } }
+  { const c = fake.player.cabinet; const tgt = c ? (c.phase === 'closed' ? 0 : 1) : 0; fake.cabDoor += (tgt - fake.cabDoor) * Math.min(1, dt * 7); if (c) c.t += dt; }
   const p = fake.player;
   if (fake.walk) {
     p.x += -Math.sin(p.yaw) * p.speed * dt;
@@ -231,6 +255,59 @@ const api = {
     c.curse = { x, z, radiusM: radius, startedAt: fake.t, landsAt: fake.t + windupS };
     pending.push(stamp({ type: 'curse', phase: 'cast', hpLost: 0, blocked: false }));
   },
+  /** Create / merge the scripted Slurp (null removes it). */
+  setSlurp(o: Partial<SlurpRuntime> | null) {
+    if (o === null) { fake.slurp = null; return; }
+    if (!fake.slurp) fake.slurp = createSlurp(o.x ?? 0, o.z ?? 0, o.yaw ?? 0);
+    Object.assign(fake.slurp, o);
+  },
+  setSlurpWalk(v: boolean) { fake.slurpWalk = v; },
+  /** Put Slurp `dist` m from the player along (yaw + rel), facing the player (or away). */
+  slurpAt(dist: number, rel: number, mode: SlurpRuntime['mode'], opts: { speed?: number; faceAway?: boolean; face?: number; attacking?: boolean } = {}) {
+    const p = fake.player;
+    const a = p.yaw + rel;
+    if (!fake.slurp) fake.slurp = createSlurp(0, 0);
+    const s = fake.slurp;
+    s.active = true;
+    s.x = p.x - Math.sin(a) * dist; s.z = p.z - Math.cos(a) * dist;
+    const toPlayer = Math.atan2(-(p.x - s.x), -(p.z - s.z));
+    s.yaw = opts.face ?? (opts.faceAway ? toPlayer + Math.PI : toPlayer);
+    s.mode = mode;
+    s.speed = opts.speed ?? (mode === 'CHASE' ? 3.4 : mode === 'WANDER' ? 1.0 : mode === 'INVESTIGATE' ? 1.6 : mode === 'LEAVE' ? 1.2 : mode === 'SEARCH' ? 0.8 : 0);
+    s.suspicion = mode === 'WANDER' ? 0 : mode === 'CHASE' ? 1 : 0.6;
+    s.canSeePlayer = mode === 'CHASE';
+    s.lastKnown = mode === 'WANDER' ? null : { x: p.x, z: p.z };
+    s.attacking = !!opts.attacking;
+    s.modeT = 0;
+  },
+  /** Director-style presence for the renderer (null = legacy rules). */
+  setPresence(o: Partial<Record<EnemyId, boolean>> | null) { fake.presence = o; },
+  /** Put the player in a cabinet (spot id) with a phase, or out (null). The door follows the phase like the sim's `door` value. */
+  setCabinet(spotId: string | null, phase: 'entering' | 'open' | 'closed' | 'exiting' = 'open') {
+    if (!spotId) { fake.player.cabinet = null; return; }
+    const sp = map.hidingSpots.find((h) => h.id === spotId);
+    if (sp) { fake.player.x = sp.x; fake.player.z = sp.z; fake.player.yaw = sp.doorYaw ?? fake.player.yaw; }
+    fake.player.cabinet = { spotId, phase, t: 0 };
+    fake.player.hidden = true;
+  },
+  /** Stand `d` m in front of cabinet `id`'s door, facing it. */
+  atCabinet(id: string, d = 1.5) {
+    const sp = map.hidingSpots.find((h) => h.id === id);
+    if (!sp) return;
+    const yaw = sp.doorYaw ?? 0;
+    const p = fake.player;
+    p.cabinet = null; p.hidden = false;
+    p.x = sp.x - Math.sin(yaw) * d; p.z = sp.z - Math.cos(yaw) * d; p.yaw = yaw + Math.PI; p.stance = 'idle'; p.speed = 0; p.crouched = false;
+  },
+  /** Death cutscene: starts it; `m.deathState()` tells when it resolved. Drive time with m.advance(). */
+  startDeath(enemy: EnemyId, reduced = false) {
+    const st = { done: false };
+    (api as unknown as { _death: typeof st })._death = st;
+    void scene.playDeath(enemy, { reducedMotion: reduced, onCue: (c) => { (window as unknown as { __cues?: string[] }).__cues = [...((window as unknown as { __cues?: string[] }).__cues ?? []), `${enemy}:${c}`]; } }).then(() => { st.done = true; });
+  },
+  skipDeath() { scene.skipDeath(); },
+  stopDeath() { scene.stopDeath(); },
+  deathState() { return { done: (api as unknown as { _death?: { done: boolean } })._death?.done ?? null, cues: (window as unknown as { __cues?: string[] }).__cues ?? [] }; },
   setEgg(o: Partial<EggRuntime>) { Object.assign(fake.egg, o); },
   setEffects(o: Partial<ActiveEffects>) { fake.fx = { ...NO_EFFECTS, ...o }; },
   setOpen(id: string, v: boolean) { if (v) fake.open.add(id); else fake.open.delete(id); },

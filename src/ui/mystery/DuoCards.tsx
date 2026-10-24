@@ -276,7 +276,7 @@ export function DuoCards({ cards, stepLabel, tools, onBack, onSelect }: DuoCards
         </div>
         <p className="duo-draft__legend text-2">
           {allSettled
-            ? <>Three duos were drawn for you. <span aria-hidden="true">⧗</span><span className="sr-only">The hourglass number</span> = cooldown in seconds. <kbd>D</kbd> shows full stats. Frames are decoration only.</>
+            ? <>Three duos were drawn for you. <span aria-hidden="true">⧗</span><span className="sr-only">The hourglass number</span> = cooldown in seconds. <Icon name="barChart" className="duo-draft__stats-icon" />Stats compare duos: 1 low · 3 typical · 5 high (<kbd>D</kbd>). Frames are decoration only.</>
             : 'Dealing three duos…'}
         </p>
         {tools}

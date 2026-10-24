@@ -1,86 +1,110 @@
-// Mystery HUD (UX_OVERHAUL §1, 1366×768 boxes, rem-scaled): edges only, the centre 560×320 stays clear except the
-// reticle. Red is reserved for the Hyde; lantern = objective / primary action; violet = clues; ivory = the egg; cyan =
-// prediction. Every state is word + icon + border (greyscale-safe).
-//   top-left   ObjectivePanel (16,16 · 288×84) + ClueCard (16,112 · 400×≤132)
-//   top-centre Compass (451,12 · 464×36) + threats row (y56): HydeStatus pill 416×40 (+ Joseph Crackstone's squared
-//              plaque 232×40 when the case has him; Hyde alone stays centred) + effect chips + ONE telegraph banner
-//              (400×44, y124: curse > scan; toasts wait, the lock hint hides) + transient toast
-//   top-right  Minimap (⌀224) + Odds (224×≤176) + KeyStrip (Tab · V · Esc)
-//   centre     InteractPrompt / ExamineToast (y 512)      bottom-centre captions + ThingStack (x 403–963)
-//   bottom-left Vitals (272×76)                            bottom-right Abilities Q / R (288×112)
+// Mystery HUD v3 (docs/final/UX_FINAL.md §1, 1366×768 boxes, rem-scaled): edges only, the centre 560×320 stays clear.
+// Zoning by purpose: left = investigation (Objective, Ask Weems, ClueCard / WeemsCard slot); top centre = threats
+// (Compass + the Threats strip of three 200 px chips + effect chips + ONE telegraph banner); right = map + odds (minimap,
+// lens bar, Odds v3, KeyStrip); bottom centre = Why + Thing (captions + ThingStack); bottom corners = you (Vitals with the
+// Tally row, abilities Q / R). Weems and Thing never share a slot, a colour or a typeface. Every state is word + icon +
+// border (greyscale-safe). The cabinet hiding view is the first child, under the panels.
 import type { CSSProperties } from 'react';
 import type { NavFeed } from '../../app/mystery/hud/navFeed.ts';
-import { CLUE_ICON, THREAT, type AbilityHud, type Caption, type ExamineToastView, type MysteryHudModel, type ThreatEdgeView, type Toast } from '../../app/mystery/hudModel.ts';
-import type { BannerView, CrackHudView } from '../../app/mystery/hud/crackstone.ts';
+import { CLUE_ICON, type AbilityHud, type Caption, type ExamineToastView, type MysteryHudModel, type ThreatEdgeView, type Toast } from '../../app/mystery/hudModel.ts';
+import type { BannerView } from '../../app/mystery/hud/crackstone.ts';
+import { crackChip, directorChip, hydeChip, type ThreatChipView } from '../../app/mystery/hud/enemies.ts';
+import { TALLY_COPY } from '../../app/mystery/hud/tally.ts';
 import { Icon } from '../Icon.tsx';
 import { ClueCard } from './hud/ClueCard.tsx';
 import { Compass } from './hud/Compass.tsx';
 import { Minimap } from './hud/Minimap.tsx';
 import { OddsPanel } from './hud/OddsPanel.tsx';
 import { ThingStackView } from './hud/ThingStack.tsx';
+import { ThreatsStrip } from './hud/ThreatsStrip.tsx';
+import { LensBar } from './hud/LensBar.tsx';
+import { CabinetBlock, CabinetOverlay } from './hud/CabinetHud.tsx';
+import { AskWeemsButton, WeemsCard } from './hud/Weems.tsx';
+import { HudIcon } from './hud/HudIcon.tsx';
 import { abilityKey, KeyCap, KeyLegend } from './controls.tsx';
 import '../styles/mhud.css';
+import '../styles/mhudFinal.css';
 
 interface MysteryHudProps {
   hud: MysteryHudModel;
   tutorial: boolean;
   pointerLocked: boolean;
-  /** Settings "Show predictions": the Odds panel, the pill's risk segment and the map tints. */
+  /** Settings "Show predictions": the Odds panel, the lens bar and the map tints. */
   showPredictions: boolean;
   /** Compass + minimap feed (pulled ≤ 30 Hz by the canvases, outside React render). */
   nav: () => NavFeed | null;
   /** Onboarding step 2: lantern outline on the noise meter. */
   noiseFocus?: boolean;
+  /** Ask Weems button click (same flow as V). */
+  onAskWeems?: () => void;
 }
 
 const TIER_TEXT = { common: 'Common', rare: 'Rare', legendary: 'Legendary' } as const;
 const NOISE_WORD = { silent: 'Silent', quiet: 'Quiet', audible: 'Audible', loud: 'LOUD' } as const;
 const ARROW: Record<NonNullable<Caption['dir']>, string> = { ahead: '▴', behind: '▾', left: '◂', right: '▸' };
 
-export function fmtClock(s: number): string {
-  const v = Math.max(0, Math.ceil(s));
-  return `${Math.floor(v / 60)}:${String(v % 60).padStart(2, '0')}`;
+export { fmtClock } from '../../app/mystery/hud/enemies.ts';
+
+/** Older models (no `threats`): the strip is derived from the Hyde + Crackstone fields. */
+export function legacyChips(hud: MysteryHudModel): ThreatChipView[] {
+  const out: ThreatChipView[] = [];
+  const hyde = hud.hyde.emerged
+    ? hydeChip(hud.hyde.mode, hud.hyde.suspicion, hud.hyde.effect)
+    : directorChip({ enemy: 'hyde', present: true, active: false, phase: 'inactive', arrivesInS: hud.hyde.emergesInS, everActive: false });
+  if (hyde) out.push(hyde);
+  if (hud.crack) out.push(crackChip(hud.crack.key, hud.crack.meter, hud.crack.effect));
+  return out;
 }
 
-export function MysteryHud({ hud, tutorial, pointerLocked, showPredictions, nav, noiseFocus = false }: MysteryHudProps) {
+export function MysteryHud({ hud, tutorial, pointerLocked, showPredictions, nav, noiseFocus = false, onAskWeems }: MysteryHudProps) {
   const playing = !tutorial && hud.status === 'playing';
   const hydeLive = playing && hud.hyde.emerged;
   const mode = hydeLive ? hud.hyde.mode : 'PATROL';
   const crack = playing ? hud.crack : null;
-  // mist: the Hyde's red while it chases / searches; Crackstone's green while he hunts (R6: never both chasing)
+  const chips = playing ? hud.threats ?? legacyChips(hud) : [];
+  // mist: the Hyde's red while it chases / searches; Crackstone's green / Slurp's orchid while they hunt (≤ 1 engaged)
   const crackMist = !!crack?.hunting && mode !== 'CHASE';
+  const slurpMist = playing && !!hud.slurpHunting && mode !== 'CHASE' && !crackMist;
   const banner = playing ? hud.banner : null;
   const edge = playing ? hud.threatEdge : null;
+  const cab = hud.cabinet ?? null;
+  const inside = !!cab?.inside;
+  const weems = !tutorial ? hud.weems ?? null : null;
+  const lens = playing && showPredictions ? hud.lens ?? null : null;
+  const dying = !!hud.death;
   return (
-    <div className={`mhud${hud.hidden ? ' is-hidden' : ''}${noiseFocus ? ' is-noise-focus' : ''}${tutorial ? ' is-tutorial' : ''}`} data-testid="mystery-hud">
-      <div className="mhud-mist" data-mode={crackMist ? 'none' : hydeLive ? mode : 'none'} data-enemy={crackMist ? 'crackstone' : undefined} aria-hidden="true" />
-      {hud.hidden && <div className="mhud-vignette" aria-hidden="true" />}
-      {hud.catchFlashSeq > 0 && <div key={hud.catchFlashSeq} className="mhud-catch-flash" aria-hidden="true" />}
+    <div
+      className={`mhud${hud.hidden ? ' is-hidden' : ''}${noiseFocus ? ' is-noise-focus' : ''}${tutorial ? ' is-tutorial' : ''}${dying ? ' is-dying' : ''}${inside ? ' is-in-cabinet' : ''}`}
+      data-testid="mystery-hud"
+    >
+      {cab?.door && <CabinetOverlay v={cab} />}
+      <div className="mhud-mist" data-mode={crackMist || slurpMist ? 'none' : hydeLive ? mode : 'none'} data-enemy={crackMist ? 'crackstone' : slurpMist ? 'slurp' : undefined} aria-hidden="true" />
+      {hud.hidden && !inside && <div className="mhud-vignette" aria-hidden="true" />}
+      {hud.catchFlashSeq > 0 && <div key={hud.catchFlashSeq} className="mhud-catch-flash" data-enemy={hud.catchTint ?? undefined} aria-hidden="true" />}
       {banner?.kind === 'curse_hit' && <div key={`curse${banner.id}`} className="mhud-curse-flash" aria-hidden="true" />}
 
       <ObjectivePanel hud={hud} tutorial={tutorial} />
-      {hud.clueCard && <ClueCard c={hud.clueCard} />}
+      {weems && weems.button.state !== 'hidden' && <AskWeemsButton b={weems.button} onAsk={() => onAskWeems?.()} />}
+      {hud.clueCard ? <ClueCard c={hud.clueCard} /> : weems?.card ? <WeemsCard c={weems.card} /> : null}
 
       <Compass feed={nav} />
-      {playing && (
-        <div className={`mhud-threats${crack ? ' has-crack' : ''}`}>
-          <HydeStatus hud={hud} showRisk={showPredictions} />
-          {crack && <CrackStatus c={crack} />}
-        </div>
-      )}
+      {playing && <ThreatsStrip chips={chips} />}
       {edge && <ThreatEdge e={edge} />}
       {banner && <TelegraphBanner b={banner} />}
-      {!pointerLocked && !banner && <p className="mhud-lockhint" data-testid="hud-lockhint">Click to look around</p>}
+      {!pointerLocked && !banner && !inside && !dying && <p className="mhud-lockhint" data-testid="hud-lockhint">Click to look around</p>}
       {hud.toast && !banner && <ToastView t={hud.toast} />}
 
       <div className="mhud-right">
         <Minimap feed={nav} />
+        {lens && <LensBar lens={lens} />}
         {showPredictions && !tutorial && <OddsPanel odds={hud.odds} />}
-        {!tutorial && <KeyLegend variant="strip" hintCooldownS={hud.hintCooldownS} className="mhud-keystrip" data-testid="hud-keystrip" />}
+        {!tutorial && <KeyLegend variant="strip" className="mhud-keystrip" data-testid="hud-keystrip" />}
       </div>
 
-      {hud.examineToast ? <ExamineToast t={hud.examineToast} /> : hud.prompt && <InteractPrompt prompt={hud.prompt} />}
-      {(hud.power.aimed && hud.power.ready) || (hud.move.aimed && hud.move.ready) ? <span className="mhud-reticle" aria-hidden="true" /> : null}
+      {hud.examineToast ? <ExamineToast t={hud.examineToast} />
+        : cab && (cab.chip || cab.prompt) ? <CabinetBlock v={cab} />
+        : hud.prompt && (hud.prompt.kind as string) !== 'cabinet' ? <InteractPrompt prompt={hud.prompt} /> : null}
+      {!inside && ((hud.power.aimed && hud.power.ready) || (hud.move.aimed && hud.move.ready)) ? <span className="mhud-reticle" aria-hidden="true" /> : null}
 
       <div className="mhud-bottom">
         {hud.captions.length > 0 && (
@@ -95,9 +119,9 @@ export function MysteryHud({ hud, tutorial, pointerLocked, showPredictions, nav,
         {!tutorial && <ThingStackView log={hud.stack.log} card={hud.stack.card} />}
       </div>
 
-      <VitalsPanel hud={hud} />
+      <VitalsPanel hud={hud} tutorial={tutorial} />
 
-      <section className="mhud-abilities" aria-label="Abilities">
+      <section className={`mhud-abilities${inside ? ' is-inside' : ''}`} aria-label="Abilities">
         <AbilitySlot a={hud.power} />
         <AbilitySlot a={hud.move} />
       </section>
@@ -141,81 +165,6 @@ function ObjectivePanel({ hud, tutorial }: { hud: MysteryHudModel; tutorial: boo
   );
 }
 
-function HydeStatus({ hud, showRisk }: { hud: MysteryHudModel; showRisk: boolean }) {
-  if (!hud.hyde.emerged) {
-    return (
-      <section className="mhud-pill" data-mode="DORMANT" aria-label="The Hyde" data-testid="hud-hyde">
-        <p className="mhud-pill__state">
-          <Icon name="hourglass" />
-          <span className="mhud-pill__stack">
-            {hud.crack && <span className="mhud-pill__kicker" aria-hidden="true">HYDE</span>}
-            <span className="mhud-pill__word" data-testid="hud-hyde-dormant">{hud.hyde.emergesInS !== null ? `Hyde emerges in ${fmtClock(hud.hyde.emergesInS)}` : 'Hyde dormant'}</span>
-          </span>
-        </p>
-      </section>
-    );
-  }
-  const t = THREAT[hud.hyde.mode];
-  const pct = Math.round(hud.hyde.suspicion * 100);
-  const live = hud.hyde.mode === 'CHASE' ? 'assertive' : 'polite';
-  const risk = showRisk ? hud.risk : null;
-  const band = risk ? (risk.band === 'low' ? 'Low' : risk.band === 'medium' ? 'Medium' : 'High') : null;
-  return (
-    <section className="mhud-pill" data-mode={hud.hyde.mode} aria-label="The Hyde" data-testid="hud-hyde">
-      <p className="mhud-pill__state" aria-live={live}>
-        <Icon name={t.icon} />
-        <span className="mhud-pill__stack">
-          {hud.crack && <span className="mhud-pill__kicker" aria-hidden="true">HYDE</span>}
-          <span className="mhud-pill__word">{t.word}</span>
-        </span>
-      </p>
-      {risk && (
-        <p className={`mhud-pill__risk risk-chip--${risk.source}`} data-testid="risk-chip" data-band={risk.band}>
-          <Icon name="gauge" />
-          <span className="mhud-pill__risk-text">{risk.detectedNow || hud.hyde.mode === 'CHASE' ? 'Risk: High · detected now' : `Risk: ${band} · next 15 s`}</span>
-          <span className="mhud-pill__src" data-testid="risk-chip-label">{risk.label}</span>
-        </p>
-      )}
-      <span className="mhud-pill__suspicion" role="meter" aria-label="Hyde suspicion" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
-        <span style={{ width: `${pct}%` }} />
-      </span>
-      {hud.hyde.effect && (
-        <span className="mhud-pill__effect" data-testid="hud-effect">
-          {hud.hyde.effect.word}{hud.hyde.effect.leftS !== null && <span className="num"> {hud.hyde.effect.leftS.toFixed(1)} s</span>}
-        </span>
-      )}
-    </section>
-  );
-}
-
-/**
- * Joseph Crackstone's status plaque (UX_ENEMIES §1): a SQUARED plaque (the Hyde is a round pill), caps kicker, hat /
- * eye / curse icons, a SEGMENTED suspicion underline, a DOUBLE border while he hunts. Word + icon + border carry every
- * state (greyscale-safe). Assertive only on CHASE / ATTACK.
- */
-function CrackStatus({ c }: { c: CrackHudView }) {
-  const pct = Math.round(c.meter * 100);
-  return (
-    <section className="mhud-pill mhud-crack" data-state={c.key} aria-label="Joseph Crackstone" data-testid="hud-crack">
-      <p className="mhud-pill__state" aria-live={c.hunting ? 'assertive' : 'polite'}>
-        <Icon name={c.icon} />
-        <span className="mhud-pill__stack">
-          <span className="mhud-pill__kicker" aria-hidden="true">CRACKSTONE</span>
-          <span className="mhud-pill__word" data-testid="hud-crack-word">{c.word}</span>
-        </span>
-      </p>
-      <span className="mhud-crack__meter" role="meter" aria-label="Crackstone suspicion" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
-        <span style={{ width: `${pct}%` }} />
-      </span>
-      {c.effect && (
-        <span className="mhud-pill__effect mhud-crack__effect" data-testid="hud-crack-effect">
-          {c.effect.word}{c.effect.leftS !== null && <span className="num"> {c.effect.leftS.toFixed(1)} s</span>}
-        </span>
-      )}
-    </section>
-  );
-}
-
 /**
  * ONE telegraph banner (400×44, y124): scan / curse countdown with exposure-aware copy (exposed: 3px double crack;
  * covered / clear: 1px dashed muted), a 4 px depleting bar (none with reduced motion — the number keeps counting), then
@@ -234,13 +183,16 @@ function TelegraphBanner({ b }: { b: BannerView }) {
   );
 }
 
-/** The ONE chevron on the screen edge (§4 order); the Hyde's plain red / amber chevron, Crackstone's green + icon. */
+/** The ONE chevron on the screen edge (§4 order); the Hyde's plain red / amber chevron, Crackstone's green + icon, Slurp's orchid. */
 function ThreatEdge({ e }: { e: ThreatEdgeView }) {
   const style: CSSProperties = { left: `${e.at.x * 100}%`, top: `${e.at.y * 100}%`, transform: `translate(-50%, -50%) rotate(${e.at.rot}rad)` };
   return (
-    <span className={`mhud-edge${e.strong ? ' is-chase' : ''}${e.enemy === 'crack' ? ' is-crack' : ''}`} style={style} aria-hidden="true" data-testid="hud-threat-edge" data-enemy={e.enemy}>
+    <span
+      className={`mhud-edge${e.strong ? ' is-chase' : ''}${e.enemy === 'crack' ? ' is-crack' : ''}${e.enemy === 'slurp' ? ' is-slurp' : ''}`}
+      style={style} aria-hidden="true" data-testid="hud-threat-edge" data-enemy={e.enemy}
+    >
       <Icon name="chevronUp" />
-      {e.icon && <span className="mhud-edge__icon" style={{ transform: `rotate(${-e.at.rot}rad)` }}><Icon name={e.icon} /></span>}
+      {e.icon && <span className="mhud-edge__icon" style={{ transform: `rotate(${-e.at.rot}rad)` }}><HudIcon name={e.icon} /></span>}
     </span>
   );
 }
@@ -283,12 +235,13 @@ function ExamineToast({ t }: { t: ExamineToastView }) {
   );
 }
 
-function VitalsPanel({ hud }: { hud: MysteryHudModel }) {
+function VitalsPanel({ hud, tutorial }: { hud: MysteryHudModel; tutorial: boolean }) {
   const hpPct = Math.max(0, Math.min(100, (hud.hp / hud.maxHp) * 100));
   const low = hud.hp <= 35;
   const seg = Math.round(hud.noise.level * 10);
   return (
-    <section className="mhud-panel mhud-vitals" aria-label="Your condition">
+    <section className="mhud-panel mhud-vitals" aria-label="Your condition" data-testid="hud-vitals">
+      <Icon name="barChart" className="mhud-vitals__layer" />
       <div className={`mhud-bar mhud-bar--hp${low ? ' is-low' : ''}`}>
         <span className="caps">HP</span>
         <span className="mhud-bar__track"><span className="mhud-bar__fill" style={{ width: `${hpPct}%` }} /></span>
@@ -307,19 +260,43 @@ function VitalsPanel({ hud }: { hud: MysteryHudModel }) {
           {hud.noise.radiusM > 0 && <span className="mhud-noise__radius num"> · {Math.round(hud.noise.radiusM)} m</span>}
         </span>
       </div>
+      {!tutorial && hud.tally && <TallyRow t={hud.tally} />}
       {hud.cursedLeftS !== null && (
         <p className="mhud-cursed" data-testid="hud-cursed">
           <Icon name="curse" />
           <span>CURSED · slowed <span className="num">{hud.cursedLeftS.toFixed(1)} s</span></span>
         </p>
       )}
-      {hud.hidden && (
+      {hud.cabinet?.vitals ? (
+        <p className="mhud-hidden mhud-hidden--cabinet" data-testid="hud-hidden">
+          <HudIcon name="cabinet" />
+          {hud.cabinet.vitals}
+        </p>
+      ) : hud.hidden && (
         <p className={`mhud-hidden${hud.tooClose ? ' is-close' : ''}`} data-testid="hud-hidden">
           <Icon name="eyeClosed" />
           {hud.tooClose ? 'Too close — it may spot you' : 'HIDDEN · it can still hear you'}
         </p>
       )}
     </section>
+  );
+}
+
+/** Vitals row 3 (UX_FINAL §1b): TALLY · Seen n · Hits n · Hints n (rule events); each increment pulses once. */
+function TallyRow({ t }: { t: NonNullable<MysteryHudModel['tally']> }) {
+  const item = (k: 'seen' | 'hits' | 'hints', icon: 'eye' | 'shieldAlert' | 'ghost', label: string, n: number) => (
+    <span key={`${k}${t.bump[k]}`} className={`mhud-tally__item${t.bump[k] > 0 ? ' is-bump' : ''}${n > 0 ? ' is-on' : ''}`} data-testid={`hud-tally-${k}`}>
+      <Icon name={icon} />
+      {label} <span className="num">{n}</span>
+    </span>
+  );
+  return (
+    <p className="mhud-tally" data-testid="hud-tally" aria-label={`Tally: seen ${t.seen}, hits ${t.hits}, hints ${t.hints}`}>
+      <span className="caps mhud-tally__head">{TALLY_COPY.head}</span>
+      {item('seen', 'eye', TALLY_COPY.seen, t.seen)}
+      {item('hits', 'shieldAlert', TALLY_COPY.hits, t.hits)}
+      {item('hints', 'ghost', TALLY_COPY.hints, t.hints)}
+    </p>
   );
 }
 

@@ -51,7 +51,8 @@ import { Bot } from '../../src/mystery/bot.ts';
 import { MysteryRun } from '../../src/mystery/run.ts';
 import { caseById } from '../../src/mystery/data/cases.ts';
 import { CASE_SOLUTIONS } from '../../src/mystery/data/solutions.ts';
-import { CASE_IDS } from '../../src/mystery/types.ts';
+import { CASE_IDS, MYSTERY_RULES_VERSION, type MysteryRulesVersion } from '../../src/mystery/types.ts';
+import { scoreV4 } from '../../src/mystery/scoring.ts';
 import type { Accusation, CaseId, Duo, DuoCard } from '../../src/mystery/types.ts';
 import type { GameBackend } from '../../src/lib/backend.ts';
 import { createSupabase, type LiveConfig } from '../../src/lib/supabase/client.ts';
@@ -262,7 +263,7 @@ type Caller = { userId: string; role: 'station' | 'operator'; stationId: Station
 export interface FakeMysterySession {
   id: string;
   station_id: StationId;
-  rules_version: 'mystery-v3.1';
+  rules_version: MysteryRulesVersion;
   create_action_id: string;
   create_body: unknown;
   seed: string;
@@ -343,6 +344,8 @@ export class FakeSupabaseServer {
   readonly mysteryCaseBags = new Map<StationId, { bag: CaseId[]; last: CaseId | null }>();
   /** Test hook: the next creates get these cases (in order) INSTEAD of a bag draw (the bag is not touched). */
   readonly nextMysteryCases: CaseId[] = [];
+  /** The rules version mystery-create-session writes (the deployed bundle's MYSTERY_RULES_VERSION). */
+  mysteryRulesVersion: MysteryRulesVersion = MYSTERY_RULES_VERSION;
   /** RNG of the bag shuffle (SQL: random()). Seeded per server for reproducible tests. */
   mysteryCaseRandom: () => number = seededRandom(0x5eed);
   readonly origin: string;
@@ -557,6 +560,7 @@ export class FakeSupabaseServer {
       deductionCorrect: r.deduction_correct, cluesFound: r.clues_found, eggTier: r.egg_tier, eggPoints: r.egg_points,
       eggSecurity: Number(r.egg_security), activeTimeS: Number(r.active_time_s), score: r.score === null ? null : Number(r.score),
       catches: r.catches, sightings: r.sightings, hintsUsed: r.hints_used,
+      detections: r.detections ?? null, hits: r.hits ?? null, defeatedBy: r.defeated_by ?? null, scoreBreakdown: r.score_breakdown ?? null,
       duo: { characterId: r.character_id, pokemonId: r.pokemon_id }, nickname: r.nickname, stationId: r.station_id,
       isTest: r.is_test, claimMatches: r.claim_matches, verified: true, finalizedAt: r.finalized_at,
     };
@@ -605,9 +609,12 @@ export class FakeSupabaseServer {
     return this.nextMysterySeeds.shift() ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   }
 
-  /** Finished (non-test) results in mystery_leaderboard order with SQL rank(). */
-  mysteryLeaderboard(): Row[] {
-    const fin = [...this.mysteryResults.values()].filter((r) => r.outcome === 'finished' && !r.is_test);
+  /**
+   * Finished (non-test) results of ONE rules version in leaderboard order with SQL rank(): `mystery_leaderboard` (v3.1)
+   * or `mystery_leaderboard_v4` (v4, migration 20261025000100). Versions never mix.
+   */
+  mysteryLeaderboard(version: MysteryRulesVersion = this.mysteryRulesVersion): Row[] {
+    const fin = [...this.mysteryResults.values()].filter((r) => r.outcome === 'finished' && !r.is_test && r.rules_version === version);
     fin.sort((a, b) => Number(b.score) - Number(a.score) || Number(a.active_time_s) - Number(b.active_time_s)
       || String(a.finalized_at).localeCompare(String(b.finalized_at)) || String(a.session_id).localeCompare(String(b.session_id)));
     let rank = 0;
@@ -627,9 +634,9 @@ export class FakeSupabaseServer {
   }
 
   /** mystery_standings: every finisher (ranked) above every DNF (unranked, longest survival first). */
-  mysteryStandings(): Row[] {
-    const fin = this.mysteryLeaderboard().map((r) => ({ ...r, standing_group: 0 }));
-    const dnf = [...this.mysteryResults.values()].filter((r) => r.outcome === 'dnf' && !r.is_test)
+  mysteryStandings(version: MysteryRulesVersion = this.mysteryRulesVersion): Row[] {
+    const fin = this.mysteryLeaderboard(version).map((r) => ({ ...r, standing_group: 0 }));
+    const dnf = [...this.mysteryResults.values()].filter((r) => r.outcome === 'dnf' && !r.is_test && r.rules_version === version)
       .sort((a, b) => Number(b.active_time_s) - Number(a.active_time_s) || String(a.finalized_at).localeCompare(String(b.finalized_at))
         || String(a.session_id).localeCompare(String(b.session_id)))
       .map((r) => ({ ...withoutSecrets(r), standing_group: 1, rank: null, case_rank: null }));
@@ -664,7 +671,7 @@ export class FakeSupabaseServer {
         const id = crypto.randomUUID();
         const createdAt = this.tick();
         const s: FakeMysterySession = {
-          id, station_id: stationId, rules_version: 'mystery-v3.1', create_action_id: body.actionId, create_body: wire(body), seed,
+          id, station_id: stationId, rules_version: this.mysteryRulesVersion, create_action_id: body.actionId, create_body: wire(body), seed,
           is_test: body.testSeed !== undefined, nickname: body.nickname, case_id: caseId, case_version: versions[caseId], status: 'offered', selected_slot: null, character_id: null,
           pokemon_id: null, selected_at: null, last_seq: -1, last_t: 0, event_count: 0, terminal_type: null, progress: {},
           abandoned_reason: null, created_at: createdAt, created_ms: this.clock, finalized_at: null,
@@ -791,7 +798,7 @@ export class FakeSupabaseServer {
           body: wire({
             sessionId: s.id,
             result: this.mysteryResultView(r),
-            rank: r.outcome === 'finished' && !r.is_test ? (this.mysteryLeaderboard().find((x) => x.session_id === s.id)?.rank ?? null) : null,
+            rank: r.outcome === 'finished' && !r.is_test ? (this.mysteryLeaderboard(r.rules_version as MysteryRulesVersion).find((x) => x.session_id === s.id)?.rank ?? null) : null,
             reveal: caseReveal(resolveCase(r.case_id, undefined), r.outcome as 'finished' | 'dnf'),
           }),
         });
@@ -815,13 +822,13 @@ export class FakeSupabaseServer {
         if (ruleFingerprint(replayed) !== ruleFingerprint(progressFromRow(s.progress))) {
           throw new HttpError('INVALID_TRANSITION', 'Stored events and stored progress disagree');
         }
-        const result = computeResult(replayed, kase, rules.expectedTier, body.clientResult);
+        const result = computeResult(replayed, kase, rules.expectedTier, body.clientResult, s.rules_version);
         // ---- RPC mystery_finalize_session
         if (s.terminal_type === null) this.rpcFail({ ok: false, error: 'RUN_NOT_FINISHED', message: 'no finish or dnf event has been recorded yet', lastSeq: s.last_seq });
         const finalizedAt = this.tick();
         const row: Row = {
           session_id: s.id, station_id: s.station_id, nickname: s.nickname, character_id: s.character_id, pokemon_id: s.pokemon_id,
-          rules_version: 'mystery-v3.1', case_id: s.case_id, case_version: s.case_version, outcome: result.outcome,
+          rules_version: s.rules_version, case_id: s.case_id, case_version: s.case_version, outcome: result.outcome,
           dnf_reason: result.dnfReason, verdict: result.verdict, accused: result.accused, correct: result.correct,
           evidence: [...result.evidence], deduction_correct: result.deductionCorrect,
           clues_found: [...result.cluesFound], clue_count: result.cluesFound.length,
@@ -829,9 +836,20 @@ export class FakeSupabaseServer {
           active_time_s: result.activeTimeS.toFixed(1), score: result.score === null ? null : result.score.toFixed(1),
           catches: result.catches, sightings: result.sightings, hints_used: result.hintsUsed, client_claim: wire(result.clientClaim),
           claim_matches: result.claimMatches, is_test: s.is_test, finalized_at: finalizedAt,
+          // mystery-v4 columns (migration 20261025000100): null on v3.1 rows
+          detections: result.detections, hits: result.hits, defeated_by: result.defeatedBy, score_breakdown: wire(result.scoreBreakdown),
         };
-        // SQL CHECK backstop: score = egg_points × 100 − active_time_s (exact on 1-dp numerics)
-        if (result.outcome === 'finished' && Math.round(Number(row.score) * 10) !== Math.round((result.eggPoints * 100 - Number(row.active_time_s)) * 10)) {
+        if (s.rules_version === 'mystery-v4') {
+          // SQL CHECK backstop (v4): the breakdown is the contract formula of the row's own columns and score = total
+          if (result.outcome === 'finished') {
+            const want = scoreV4({
+              delivered: true, correct: result.correct, cluesFound: result.cluesFound.length, detections: result.detections ?? -1,
+              hintsUsed: result.hintsUsed, hits: result.hits ?? -1, activeTimeS: Number(row.active_time_s),
+            });
+            if (!jsonEqual(want, result.scoreBreakdown) || Number(row.score) !== want.total) throw new HttpError('INTERNAL', 'mystery_results_v4_score_check violated');
+          } else if (row.score !== null || row.score_breakdown !== null) throw new HttpError('INTERNAL', 'mystery_results_v4_dnf_check violated');
+        } else if (result.outcome === 'finished' && Math.round(Number(row.score) * 10) !== Math.round((result.eggPoints * 100 - Number(row.active_time_s)) * 10)) {
+          // SQL CHECK backstop (v3.1): score = egg_points × 100 − active_time_s (exact on 1-dp numerics)
           throw new HttpError('INTERNAL', 'mystery_results_finished_check violated');
         }
         // SQL CHECK backstops of 20261022000100: solved ⇒ correct ∧ deduction ∧ 3 clues; no suspect ⇒ no evidence
@@ -900,11 +918,25 @@ export class FakeSupabaseServer {
           finalized_at: r.finalized_at,
         })) : [];
       case 'mystery_leaderboard':
-        return this.mysteryLeaderboard();
+        return this.mysteryLeaderboard('mystery-v3.1');
       case 'mystery_defeated':
-        return [...this.mysteryResults.values()].filter((r) => r.outcome === 'dnf' && !r.is_test).map(withoutSecrets);
+        return [...this.mysteryResults.values()].filter((r) => r.outcome === 'dnf' && !r.is_test && r.rules_version === 'mystery-v3.1').map(withoutSecrets);
       case 'mystery_standings':
-        return this.mysteryStandings();
+        return this.mysteryStandings('mystery-v3.1');
+      // ---- mystery-v4 views (20261025000100)
+      case 'mystery_leaderboard_v4':
+        return this.mysteryLeaderboard('mystery-v4');
+      case 'mystery_defeated_v4':
+        return [...this.mysteryResults.values()].filter((r) => r.outcome === 'dnf' && !r.is_test && r.rules_version === 'mystery-v4')
+          .sort((a, b) => String(b.finalized_at).localeCompare(String(a.finalized_at)) || String(a.session_id).localeCompare(String(b.session_id)))
+          .map(withoutSecrets);
+      case 'mystery_standings_v4':
+        return this.mysteryStandings('mystery-v4');
+      case 'mystery_top5':
+        return this.mysteryLeaderboard('mystery-v4').slice(0, 5).map((r) => ({
+          rank: r.rank, session_id: r.session_id, nickname: r.nickname, score: r.score, character_id: r.character_id, pokemon_id: r.pokemon_id,
+          case_id: r.case_id, active_time_s: r.active_time_s, finalized_at: r.finalized_at, rules_version: r.rules_version,
+        }));
       case 'mystery_sessions':
         return [...this.mysterySessions.values()].map((s) => ({ ...s }) as unknown as Row).filter(own);
       case 'mystery_offered_duos':
@@ -1358,9 +1390,13 @@ export function openMysteryBoard(server: FakeSupabaseServer, opts: { pollMs?: nu
 /** Server seeds whose first card, played by the seeded Bot, ends 'finished' (stealthy) / 'dnf' (careless). */
 // FINISH_SEED finishes (case solved) with the stealthy bot in EVERY case. The careless DNF is case dependent: push
 // MYSTERY_DNF_CASE onto server.nextMysteryCases together with MYSTERY_DNF_SEED.
-export const MYSTERY_FINISH_SEED = '2'.repeat(32);
-export const MYSTERY_DNF_SEED = '0'.repeat(32);
+// Re-picked for the final sim (director + Slurp + compact maps, 2026-10-24): 'f…' finishes in 114 / 163 / 102 s,
+// careless '6…' is defeated in Case 01 after 45 s.
+export const MYSTERY_FINISH_SEED = 'f'.repeat(32);
+export const MYSTERY_DNF_SEED = '6'.repeat(32);
 export const MYSTERY_DNF_CASE: CaseId = 'poisoned_archive';
+/** Bot runs at 60 Hz with the final sim take ~5–20 s of wall time each: the mystery integration files use this timeout. */
+export const MYSTERY_TEST_TIMEOUT_MS = 300_000;
 
 /** Deterministic timers for the uploader / heartbeat / finalize back-off (advance() fires what is due, in order). */
 export class ManualTimers implements Timers {

@@ -14,6 +14,11 @@ import { parseMysteryAppend } from '../../functions/_shared/mystery-validation.t
 import { DEFAULT_TUNING } from '../../functions/_shared/mystery/config.ts';
 import { scoreFor } from '../../functions/_shared/mystery/scoring.ts';
 
+/** These tests pin the LEGACY mystery-v3.1 rules (v3.1 history stays verifiable/readable); v4 lives in mystery-v4.test.ts. */
+const V31 = 'mystery-v3.1' as const;
+const computeV31 = (...a: [Parameters<typeof computeResult>[0], Parameters<typeof computeResult>[1], Parameters<typeof computeResult>[2], Parameters<typeof computeResult>[3]?]) =>
+  computeResult(a[0], a[1], a[2], a[3], V31);
+
 const SID = '6f1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b';
 const SEED = '0123456789abcdef0123456789abcdef';
 
@@ -40,7 +45,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
 
 const data = requireData();
 const kase = resolveCase('poisoned_archive', data.cases.poisoned_archive.version);
-const ctx: RulesContext = rulesContext(SEED, kase.caseDef, requireEggRules());
+const ctx: RulesContext = rulesContext(SEED, kase.caseDef, requireEggRules(), PLAYER_MAX_HP, V31);
 const clues = kase.caseDef.clues.map((c) => c.id);
 const tier = ctx.expectedTier!;
 const points = ctx.eggPoints[tier];
@@ -169,7 +174,7 @@ describe('curse is a rule event: HP accounting, never a catch', () => {
     const p = verify(raw);
     expect([p.catches, p.curses, p.hpLost, p.sightings, p.egg]).toEqual([1, 2, 60, 0, 'delivered']);
     expect(progressSummary(p)).toMatchObject({ catches: 1, sightings: 0, terminal: 'finish' });
-    const r = computeResult(p, kase, tier);
+    const r = computeV31(p, kase, tier);
     expect(r).toMatchObject({ outcome: 'finished', verdict: 'case_solved', catches: 1, sightings: 0, score: scoreFor(points, 99), claimMatches: true });
   });
 
@@ -185,7 +190,7 @@ describe('curse is a rule event: HP accounting, never a catch', () => {
     push('dnf', t - 18.7, { reason: 'hp_depleted' }); // same step as the last hit, emitted after it
     const p = verify(raw);
     expect([p.catches, p.curses, p.hpLost, p.terminal?.type]).toEqual([1, 3, 100, 'dnf']);
-    const r = computeResult(p, kase, tier);
+    const r = computeV31(p, kase, tier);
     expect(r).toMatchObject({ outcome: 'dnf', dnfReason: 'hp_depleted', score: null, catches: 1, eggPoints: 0, claimMatches: true });
     // also curses alone (no catch), and while carrying the egg (a curse never drops / damages it)
     const solo = builder();
@@ -194,7 +199,7 @@ describe('curse is a rule event: HP accounting, never a catch', () => {
     solo.push('dnf', 55, { reason: 'hp_depleted' });
     const q = verify(solo.raw);
     expect([q.catches, q.curses, q.hpLost, q.egg, q.eggSecurity]).toEqual([0, 4, 100, 'carried', 100]);
-    expect(computeResult(q, kase, tier)).toMatchObject({ outcome: 'dnf', dnfReason: 'hp_depleted', catches: 0 });
+    expect(computeV31(q, kase, tier)).toMatchObject({ outcome: 'dnf', dnfReason: 'hp_depleted', catches: 0 });
   });
 
   it('hp_depleted needs the recorded HP loss to reach max HP (a curse missing from the stream is caught)', () => {
@@ -220,7 +225,7 @@ describe('curse is a rule event: HP accounting, never a catch', () => {
     two.push('catch', 20, { catchNumber: 1, hpLost: 35, eggSecurityLost: 0, blocked: false });
     two.push('catch', 40, { catchNumber: 2, hpLost: 35, eggSecurityLost: 0, blocked: false });
     two.push('dnf', 40, { reason: 'second_catch' });
-    expect(computeResult(verify(two.raw), kase, tier)).toMatchObject({ dnfReason: 'second_catch', catches: 2 });
+    expect(computeV31(verify(two.raw), kase, tier)).toMatchObject({ dnfReason: 'second_catch', catches: 2 });
   });
 
   it('a curse is not a catch: it never satisfies second_catch', () => {

@@ -5,23 +5,24 @@
 //   (src/app/mystery/integration.ts loadCaseSolution), so it never ships in the pre-accusation bundle.
 //   tests/unit/mystery/caseSecrecy.test.ts fails if any browser module imports this file statically.
 //
-// Version 2 (overhaul 2026-10-23): answers, links and innocents are unchanged; the bump follows CaseDef.version
-// (positions are now drawn from candidate sites, TL;DR fields added, two clue texts broadened for multi-site clues).
+// Version 3 (final 2026-10-24): suspects Thornhill / Galpin / Barry in every case (Isaac Night is the Slurp monster,
+// not a suspect). Case 02's culprit is Françoise Galpin (rewritten chain); Cases 01 and 03 keep their culprits and
+// links, with Galpin taking the innocent slot Isaac held. The bump follows CaseDef.version.
 import type { CaseId, CaseSolution } from '../types.ts';
 
 export const CASE_SOLUTIONS: Record<CaseId, CaseSolution> = {
   poisoned_archive: {
     caseId: 'poisoned_archive',
-    version: 2,
+    version: 3,
     culprit: 'thornhill',
     supportingEvidence: ['falsified_transfer', 'botanical_residue', 'access_ledger'],
     links: {
-      botanical_residue: { proves: 'method', clears: ['isaac'] },
+      botanical_residue: { proves: 'method', clears: ['galpin'] },
       falsified_transfer: { proves: 'opportunity', clears: [] },
       access_ledger: { proves: 'alibi', clears: ['barry'] },
     },
     innocents: {
-      isaac: 'Isaac returned the only other greenhouse key at 9:05 pm and never took it again; the drain mud is from his logged work.',
+      galpin: 'Galpin returned the only other greenhouse key at 9:05 pm and never took it again; the chalk dust is from her stone rubbings.',
       barry: 'Barry’s card checked east-wall gates every ten minutes all night; the key ring was his rounds, far from the archive.',
     },
     resolution:
@@ -31,8 +32,8 @@ export const CASE_SOLUTIONS: Record<CaseId, CaseSolution> = {
   },
   crypt_last_witness: {
     caseId: 'crypt_last_witness',
-    version: 2,
-    culprit: 'isaac',
+    version: 3,
+    culprit: 'galpin',
     supportingEvidence: ['sabotaged_gate', 'tunnel_access_record', 'equipment_match'],
     links: {
       sabotaged_gate: { proves: 'method', clears: [] },
@@ -44,23 +45,24 @@ export const CASE_SOLUTIONS: Record<CaseId, CaseSolution> = {
       barry: 'The harbour master logged Barry’s lantern at the pier gate at 11:15 pm, across the island from the crypt.',
     },
     resolution:
-      'Isaac Night slipped into the restricted tunnel at 11:12 pm to take the egg without permission. When Orloff came down ' +
-      'after him, Isaac drew the counterweight pin he alone maintained, and the gate fell on the only witness. His own tool ' +
-      'roll — filings, the brass pin and fresh tunnel clay — broke his claim that he never went below.',
+      'Françoise Galpin used her crypt restoration key to slip into the restricted tunnel at 11:12 pm and carry the egg ' +
+      'below. When Orloff followed her down, she drew the gate’s counterweight pin and sawed the chain, and the gate fell ' +
+      'on the only witness. Her own satchel — the wire saw, the brass pin and fresh tunnel clay — broke her claim that her ' +
+      'kit never left the library.',
   },
   midnight_signal: {
     caseId: 'midnight_signal',
-    version: 2,
+    version: 3,
     culprit: 'barry',
     supportingEvidence: ['falsified_patrol_log', 'alarm_override', 'watchtower_signal'],
     links: {
       alarm_override: { proves: 'method', clears: ['thornhill'] },
-      watchtower_signal: { proves: 'opportunity', clears: ['isaac'] },
+      watchtower_signal: { proves: 'opportunity', clears: ['galpin'] },
       falsified_patrol_log: { proves: 'alibi', clears: [] },
     },
     innocents: {
       thornhill: 'Thornhill’s archive card has no clearance for the override console; the lockdown simply trapped her upstairs.',
-      isaac: 'The greenhouse vent log shows Isaac’s crank turning every five minutes from 11:00 to 11:45 pm.',
+      galpin: 'The observatory log shows Galpin’s star readings every five minutes from 11:00 to 11:45 pm.',
     },
     resolution:
       'Barry Dort disabled the alarms with his own security card at 11:10 pm and broadcast a false lockdown to empty the ' +

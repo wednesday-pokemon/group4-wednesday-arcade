@@ -2,7 +2,7 @@
 // never recommends an unavailable / cooling / irrelevant ability or another character's power, a found clue, an
 // unreachable spot, a suspect or an accusation. Ability advice is verified by actually pressing the key.
 import { describe, expect, it } from 'vitest';
-import { crackstoneTargetable, hydeTargetable } from '../../../src/mystery/abilities.ts';
+import { crackstoneTargetable, enemyTargetable, hydeTargetable, SLURP_NAMES } from '../../../src/mystery/abilities.ts';
 import { Bot } from '../../../src/mystery/bot.ts';
 import { simulateEpisode } from '../../../src/mystery/analytics/episodes.ts';
 import { eggAdvice, evaluateFollow, evaluateOutcome, MAX_REASON, MAX_TEXT, PrescriptiveService, summariseAdvice } from '../../../src/mystery/analytics/prescriptive.ts';
@@ -45,9 +45,12 @@ function checkAdvice(run: MysteryRun, a: Advice): void {
       const kinds = slot.def.effects.map((e) => e.kind);
       if (kinds.every((k) => k === 'stun' || k === 'slow' || k === 'distract')) {
         const cs = run.crackstoneBrain;
+        const sl = run.slurpBrain;
         const ok = o.enemy === 'crackstone'
           ? cs !== null && slot.def.effects.some((e) => crackstoneTargetable(run, cs, e).ok)
-          : slot.def.effects.some((e) => hydeTargetable(run, run.hydeBrain, e).ok);
+          : o.enemy === 'slurp'
+            ? sl !== null && slot.def.effects.some((e) => enemyTargetable(run, { active: sl.active, x: sl.s.x, z: sl.s.z }, SLURP_NAMES, e).ok)
+            : slot.def.effects.some((e) => hydeTargetable(run, run.hydeBrain, e).ok);
         expect(ok, `${o.text} — the sim's own targeting accepts it now`).toBe(true);
       }
     }
@@ -57,7 +60,7 @@ function checkAdvice(run: MysteryRun, a: Advice): void {
       const c = run.map.clues.find((x) => x.clueId === o.clueId)!;
       expect(run.playerNav().reachable(run.player, c, run.tuning.player.interactRangeM + 0.7)).toBe(true);
     }
-    if (o.action === 'hide' && o.enemy !== 'crackstone') {
+    if (o.action === 'hide' && o.enemy !== 'crackstone' && o.enemy !== 'slurp') {
       const t = o.target!;
       expect(run.playerNav().reachable(run.player, t, 2)).toBe(true);
       const dMe = Math.hypot(t.x - run.player.x, t.z - run.player.z);
@@ -68,7 +71,15 @@ function checkAdvice(run: MysteryRun, a: Advice): void {
     if (o.action === 'go_to_tower' || o.action === 'deposit') expect(run.egg.state).toBe('carried');
     if (o.action === 'inspect_clue' || o.action === 'search_room') expect(run.objective()).toBe('find_clues');
     if (o.action === 'stop_sprinting') expect(run.player.stance).toBe('sprint');
-    if (o.action === 'evade') expect(o.enemy === 'crackstone' ? run.crackstone?.mode : run.hyde.mode).toMatch(/^(CHASE|ATTACK)$/);
+    if (o.action === 'evade') expect(o.enemy === 'crackstone' ? run.crackstone?.mode : o.enemy === 'slurp' ? run.slurp?.mode : run.hyde.mode).toMatch(/^(CHASE|ATTACK)$/);
+    // final: Slurp escapes only while his position is public (chasing / attacking); break_sight points out of his sight
+    if (o.enemy === 'slurp' && o.action === 'break_sight') {
+      expect(run.slurp?.mode).toMatch(/^(CHASE|ATTACK)$/);
+      expect(run.world.lineOfSight(run.slurp!.x, run.slurp!.z, o.target!.x, o.target!.z, false)).toBe(false);
+    }
+    // cabinets: never while an enemy sees you (a witnessed hide); inside, only door advice
+    if (o.action === 'hide_cabinet') expect((run.hydeActive && run.hyde.canSeePlayer) || (run.slurp?.active && run.slurp.canSeePlayer)).toBeFalsy();
+    if (run.player.cabinet) expect(['close_cabinet', 'exit_cabinet', 'stay_quiet']).toContain(o.action);
   }
   expect(new Set(all.map((o) => o.action)).size).toBe(all.length);
   expect(a.engine).toBe('rule-based decision engine');
@@ -83,7 +94,8 @@ function checkAdvice(run: MysteryRun, a: Advice): void {
 function checkCrackstoneOption(run: MysteryRun, o: AdviceOption): void {
   const cs = run.crackstoneBrain;
   if (o.enemy !== 'crackstone') {
-    expect(['take_cover', 'leave_curse', 'break_sight']).not.toContain(o.action);
+    expect(['take_cover', 'leave_curse']).not.toContain(o.action);
+    if (o.enemy !== 'slurp') expect(o.action).not.toBe('break_sight');
     return;
   }
   expect(cs).not.toBeNull();
@@ -143,6 +155,8 @@ describe('PrescriptiveService', () => {
           onSample(run, sample) {
             if (Math.round(sample.snapshot.t) % 2 === 1) return; // every other second keeps the test fast
             const a = svc.recommend(run);
+            // the only silent moments: stepping into / out of a cabinet (no input applies there)
+            if (run.player.cabinet && (run.player.cabinet.phase === 'entering' || run.player.cabinet.phase === 'exiting')) return;
             expect(a).not.toBeNull();
             checkAdvice(run, a!);
             actions.add(a!.action);
@@ -214,6 +228,8 @@ describe('PrescriptiveService', () => {
             expect(run.caseDef.id).toBe(caseId);
             if (Math.round(sample.snapshot.t) % 3 !== 0) return;
             const a = svc.recommend(run);
+            // the only silent moments: stepping into / out of a cabinet (no input applies there)
+            if (run.player.cabinet && (run.player.cabinet.phase === 'entering' || run.player.cabinet.phase === 'exiting')) return;
             expect(a).not.toBeNull();
             checkAdvice(run, a!);
             checked++;

@@ -6,6 +6,9 @@
 //     pause stays up with "Click again to resume".
 //  3. Tab opens the read-only board (sim + clock paused) except during CHASE ("Board locked while you're chased"); in
 //     accusation mode the board is a focus trap that nothing closes.
+//  4. Death sequence (UX_FINAL §3): from the `dnf` the sim input is cut, Esc no longer pauses — Enter / Esc / click skip
+//     the cutscene (only keydowns that START after t0), the GAME-OVER card's "See results" (Enter) or its 12 s countdown
+//     continues to the results. Losing pointer lock never pauses during it.
 // Browser defaults (Tab focus, Space/arrow scroll, F fullscreen hotkey…) are suppressed for game keys; M reaches mute.
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject } from 'react';
 import type { Accusation, CaseDef, Duo, RoomId } from '../../mystery/types.ts';
@@ -16,6 +19,8 @@ import { EvidenceBoard } from '../../ui/mystery/EvidenceBoard.tsx';
 import { MysteryHud } from '../../ui/mystery/MysteryHud.tsx';
 import { MysteryPause } from '../../ui/mystery/MysteryPause.tsx';
 import { MysteryTutorial, type TutorialSignals, type TutorialStepId } from '../../ui/mystery/MysteryTutorial.tsx';
+import { DeathOverlay } from '../../ui/mystery/hud/DeathOverlay.tsx';
+import { AnalyticsLegend } from '../../ui/mystery/hud/AnalyticsLegend.tsx';
 import { ThingSigil } from '../../ui/components/ThingSigil.tsx';
 import { markScreenMounted } from '../keyboard.ts';
 import { useSettings } from '../settings.ts';
@@ -63,6 +68,8 @@ export interface PlayViewProps {
 /** A browser Esc that released the lock may also arrive as a keydown: ignore it for this long after a lock loss. */
 const LOCK_ESC_GRACE_MS = 350;
 const DEPOSIT_MOMENT_MS = 1500;
+/** The 4-chip analytics legend shows once for 4 s at the end of onboarding (UX_FINAL §1b). */
+const LEGEND_MS = 4000;
 const TIER_TEXT = { common: 'Common', rare: 'Rare', legendary: 'Legendary' } as const;
 const ROOM_FALLBACK: Record<RoomId, string> = {
   pier: 'Pier', path: 'Path', research_room: 'Research Room', crypt: 'Crypt Entrance', egg_chamber: 'Egg Chamber',
@@ -74,6 +81,8 @@ export default function PlayView(p: PlayViewProps) {
   const [locked, setLocked] = useState(false);
   const [tutStep, setTutStep] = useState<TutorialStepId | null>(null);
   const [depositShown, setDepositShown] = useState(false);
+  const [legendShown, setLegendShown] = useState(false);
+  const legendDone = useRef(false);
   const settings = useSettings();
   const playing = p.screen === 'tutorial' || p.screen === 'play';
   const inputEnabled = playing && p.overlay === 'none';
@@ -103,13 +112,13 @@ export default function PlayView(p: PlayViewProps) {
         return;
       }
       // LOCAL DEMO dashboard record (finished or DNF; a run left via "Leave the case" never gets here).
-      appendRecord(browserStorage(), { record: analytics.sessionRecord(), nickname: p.nickname || 'Guest', stationId: p.stationId, endedAt: new Date().toISOString() });
+      appendRecord(browserStorage(), { record: analytics.sessionRecord(), nickname: p.nickname || 'Guest', stationId: p.stationId, endedAt: new Date().toISOString(), rulesVersion: result.rulesVersion });
       p.dispatch({ type: 'ended', result, analytics: analytics.report() });
     },
   });
 
   // Latest values for the window listeners (registered once).
-  const live = useRef({ inputEnabled, overlay: p.overlay, screen: p.screen, lostLockAt: -Infinity, releasing: false });
+  const live = useRef({ inputEnabled, overlay: p.overlay, screen: p.screen, lostLockAt: -Infinity, releasing: false, dying: false });
   live.current.inputEnabled = inputEnabled;
   live.current.overlay = p.overlay;
   live.current.screen = p.screen;
@@ -124,6 +133,28 @@ export default function PlayView(p: PlayViewProps) {
   useEffect(() => {
     if (p.screen === 'play') loop.endTutorial();
   }, [p.screen, loop.phase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Onboarding ends (tutorial → play, or a tutorial-free start): the analytics legend for 4 s, once per run.
+  const playStarted = loop.phase === 'ready' && p.screen === 'play' && loop.hud?.status === 'playing';
+  useEffect(() => {
+    if (!playStarted || legendDone.current) return;
+    legendDone.current = true;
+    setLegendShown(true);
+    const t = setTimeout(() => setLegendShown(false), LEGEND_MS);
+    return () => clearTimeout(t);
+  }, [playStarted]);
+
+  // Death sequence: release the pointer (the card needs it) without pausing; drop held keys.
+  const dying = !!loop.hud?.death;
+  live.current.dying = dying;
+  useEffect(() => {
+    if (!dying) return;
+    loopRef.current.input()?.clear();
+    if (document.pointerLockElement) {
+      live.current.releasing = true;
+      document.exitPointerLock();
+    }
+  }, [dying]);
 
   // Deposit moment (1.5 s) before the accusation board opens.
   useEffect(() => {
@@ -148,6 +179,20 @@ export default function PlayView(p: PlayViewProps) {
       const s = live.current;
       const onIsland = s.screen === 'tutorial' || s.screen === 'play' || s.screen === 'accusing';
       if (!onIsland || s.screen === 'accusing') return; // accusation: the board's focus trap owns the keyboard
+      if (s.dying || loopRef.current.dying()) {
+        // ruling 4: Enter / Esc skip the cutscene (only keydowns that start after t0); on the card Enter = See results
+        if (e.code === 'Escape' || e.code === 'Enter' || e.code === 'NumpadEnter') {
+          e.preventDefault();
+          e.stopPropagation();
+          const phase = loopRef.current.hud?.death?.phase;
+          if (phase === 'card') {
+            if (e.code !== 'Escape' && !e.repeat) loopRef.current.deathContinue();
+          } else loopRef.current.skipDeath({ startedAt: e.timeStamp, repeat: e.repeat });
+          return;
+        }
+        if (GAME_CODES.has(e.code)) e.preventDefault();
+        return;
+      }
       if (e.code === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
@@ -200,6 +245,7 @@ export default function PlayView(p: PlayViewProps) {
         return;
       }
       s.lostLockAt = performance.now();
+      if (s.dying) return; // ruling 4: never pause during the death sequence
       if (s.overlay === 'none' && (s.screen === 'tutorial' || s.screen === 'play')) p.dispatch({ type: 'pause' });
     };
     const onContext = (e: MouseEvent) => {
@@ -283,7 +329,7 @@ export default function PlayView(p: PlayViewProps) {
   p.debugRef.current = {
     debug: loop.debug,
     advance: loop.advance,
-    extra: () => ({ phase: loop.phase, missing: loop.missing, error: loop.error, pointerLocked: locked, paused, inputEnabled, tutorialStep: tutStep, depositMoment: depositShown }),
+    extra: () => ({ phase: loop.phase, missing: loop.missing, error: loop.error, pointerLocked: locked, paused, inputEnabled, tutorialStep: tutStep, depositMoment: depositShown, legendShown, dying }),
   };
   useEffect(() => () => {
     p.debugRef.current = null;
@@ -301,7 +347,7 @@ export default function PlayView(p: PlayViewProps) {
         className="mys-canvas"
         ref={setContainer}
         onClick={() => {
-          if (live.current.inputEnabled) void requestLock();
+          if (live.current.inputEnabled && !live.current.dying) void requestLock();
         }}
         role="img"
         aria-label={`Raven Island ruins. ${p.card.characterShort} and ${p.card.pokemonName}.`}
@@ -326,8 +372,18 @@ export default function PlayView(p: PlayViewProps) {
             showPredictions={settings.showRisk}
             nav={loop.nav}
             noiseFocus={tutStep === 'silent'}
+            onAskWeems={() => loop.askWeems()}
           />
+          {legendShown && !loop.hud.death && <AnalyticsLegend variant="onboarding" />}
         </div>
+      )}
+
+      {loop.phase === 'ready' && loop.hud?.death && (
+        <DeathOverlay
+          d={loop.hud.death}
+          onSkip={() => loop.skipDeath({ startedAt: performance.now(), click: true })}
+          onContinue={() => loop.deathContinue()}
+        />
       )}
 
       {loop.phase === 'ready' && p.screen === 'tutorial' && (
@@ -359,6 +415,8 @@ export default function PlayView(p: PlayViewProps) {
             mode={p.screen === 'accusing' ? 'accuse' : 'review'}
             mapState={boardMap}
             showPredictions={settings.showRisk}
+            weemsHints={loop.weemsHints()}
+            onAskWeems={p.screen === 'accusing' ? loop.accuseWeems : undefined}
             onClose={() => p.dispatch({ type: 'closeOverlay' })}
             onAccuse={(a: Accusation) => void loop.accuse(a)}
           />

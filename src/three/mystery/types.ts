@@ -2,8 +2,8 @@
 // the preview harness uses a scripted fake that implements the same shape. The renderer never mutates any of it.
 import {
   CRACKSTONE_NO_EFFECTS,
-  type ActiveEffects, type ClueId, type CrackstoneRuntime, type CaseDef, type EggRuntime, type HydeRuntime, type InvestigationState, type MapDef, type Objective,
-  type PlayerState, type RunStatus,
+  type ActiveEffects, type ClueId, type CrackstoneRuntime, type CaseDef, type EggRuntime, type EnemyId, type HydeRuntime, type InvestigationState, type MapDef, type Objective,
+  type PlayerState, type RunStatus, type SlurpRuntime,
 } from '../../mystery/types.ts';
 
 export interface RenderableMysteryRun {
@@ -17,7 +17,7 @@ export interface RenderableMysteryRun {
   readonly t: number;
   readonly caseDef?: CaseDef;
   effects(): ActiveEffects;
-  interactable(): { kind: 'clue' | 'egg' | 'tower' | 'switch' | 'practice' | 'examine' | 'lever'; id: string; label: string; progress: number } | null;
+  interactable(): { kind: 'clue' | 'egg' | 'tower' | 'switch' | 'practice' | 'examine' | 'lever' | 'cabinet' | 'hide'; id: string; label: string; progress: number } | null;
   isWallOpen(id: string): boolean;
   /** overhaul: the player's public investigation state (known / checked sites, traces, examined, passage, Hyde emergence). Optional: feature-detected. */
   investigation?(): InvestigationState;
@@ -33,6 +33,14 @@ export interface RenderableMysteryRun {
   readonly crackstone?: CrackstoneRuntime | null;
   /** how Crackstone is being held (stone look vs spectral pin); null = not held */
   crackstoneVisual?(): 'petrify' | 'pin' | null;
+  /** final: Slurp's public runtime (null / absent = none in this case; `active` false = despawned). Feature-detected. */
+  readonly slurp?: SlurpRuntime | null;
+  /** final: encounter director - is this enemy currently spawned? Optional: when absent the renderer follows `enemy_spawned` / `enemy_despawned` events. */
+  enemyActive?(id: EnemyId): boolean;
+  /** final: the sim's per-enemy view model (MysteryRun.enemyStatus()); `active` = in the world right now. Preferred over enemyActive / events. */
+  enemyStatus?(): Partial<Record<EnemyId, { active: boolean }>>;
+  /** final: the cabinet the player is in (MysteryRun.cabinetStatus()); `door` 0..1 drives the door animation. */
+  cabinetStatus?(): { spotId: string; phase: 'entering' | 'open' | 'closed' | 'exiting'; door: number } | null;
 }
 
 export interface MysterySceneOptions {

@@ -11,7 +11,7 @@ import { buildMapLayers, type MapLayers as DrawLayers, type PublicMapState } fro
 import { fitView, screenToWorld, worldToScreen, type MapView } from './map/mapRender.ts';
 
 /** `crack` = toggle 4 (Crackstone stipple + cursed area), only offered in cases with him. */
-export interface MapLayers { zones: boolean; egg: boolean; clues: boolean; crack?: boolean }
+export interface MapLayers { zones: boolean; egg: boolean; clues: boolean; crack?: boolean; slurp?: boolean }
 
 export interface InvestigationMapProps {
   state: PublicMapState | null;

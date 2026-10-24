@@ -416,7 +416,7 @@ describe('HUD render (static)', () => {
     objective: 'find_clues', objectiveText: 'Find 3 clues.', clues: { found: [], total: 3, order: CASES.poisoned_archive.clues.map((c) => c.id) },
     egg: { state: 'resting', tier: null, points: 0, security: 100, seenLabel: null }, power: ability('F'), move: ability('Q'),
     prompt: null, examineToast: null, clueCard: null, stack: { log: null, card: null }, captions: [], toast: null, catchFlashSeq: 0, hintCooldownS: 0, hintLevel: 0,
-    risk: null, odds: { phase: 'hidden', groups: [], footer: [] }, areaName: null, crack: null, banner: null, cursedLeftS: null, threatEdge: null,
+    risk: null, odds: { phase: 'hidden', rows: [], footer: [] }, areaName: null, crack: null, banner: null, cursedLeftS: null, threatEdge: null,
   };
   const render = (h: MysteryHudModel) => renderToStaticMarkup(createElement(MysteryHud, { hud: h, tutorial: false, pointerLocked: false, showPredictions: true, nav: () => null }));
 

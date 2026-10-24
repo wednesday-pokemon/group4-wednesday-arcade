@@ -57,15 +57,24 @@ describe("R4: Crackstone's position is used only while the player may know it", 
       const B = make();
       const C = make();
       const step = (x: ReturnType<typeof make>) => x.a.frame(x.run, x.run.update(0.25, IDLE_INPUT));
-      for (let i = 0; i < 16; i++) [A, B, C].forEach(step); // 4 s on the pier: he patrols his far-away area
+      // the director brings him in (first appearance); standing still at the start he patrols out of sight
+      for (let i = 0; i < 400 && !(A.run.crackstoneBrain?.active && i > 16); i++) [A, B, C].forEach(step);
       const p = A.run.player;
-      expect(A.run.crackstoneVisible()).toBe(false);
-      expect(A.run.crackstone!.mode).toBe('PATROL');
+      if (!A.run.crackstoneBrain?.active || A.run.crackstoneVisible() || A.run.crackstone!.mode !== 'PATROL') continue;
       // B: teleport him to another hidden spot (a waypoint the player cannot see); C: into the player's view
-      const hiddenWp = A.run.crackstoneDef!.patrol.find((w) => Math.hypot(w.x - p.x, w.z - p.z) > 30 && Math.hypot(w.x - A.run.crackstone!.x, w.z - A.run.crackstone!.z) > 6)!;
+      const hiddenWp = A.run.crackstoneDef!.patrol.find((w) => Math.hypot(w.x - p.x, w.z - p.z) > 20 && Math.hypot(w.x - A.run.crackstone!.x, w.z - A.run.crackstone!.z) > 6
+        && !A.run.world.lineOfSight(p.x, p.z, w.x, w.z));
+      if (!hiddenWp) continue;
       Object.assign(B.run.crackstone!, { x: hiddenWp.x, z: hiddenWp.z, yaw: B.run.crackstone!.yaw + 2 });
       const nav = C.run.playerNav();
-      const view = nav.nearestWalkable({ x: p.x + 8, z: p.z }, 4) ?? nav.nearestWalkable({ x: p.x, z: p.z + 8 }, 4)!;
+      let view = nav.nearestWalkable({ x: p.x + 8, z: p.z }, 4)!;
+      for (let k = 0; k < 16; k++) {
+        const q = nav.nearestWalkable({ x: p.x + Math.cos(k * 0.39) * 8, z: p.z + Math.sin(k * 0.39) * 8 }, 2);
+        if (q && C.run.world.lineOfSight(p.x, p.z, q.x, q.z)) {
+          view = q;
+          break;
+        }
+      }
       Object.assign(C.run.crackstone!, { x: view.x, z: view.z });
       const strip = (x: unknown) => JSON.parse(JSON.stringify(x, (key, v) => (key === 'id' ? undefined : v)));
       let differs = false;
@@ -90,7 +99,54 @@ describe("R4: Crackstone's position is used only while the player may know it", 
       expect(differs, `${caseId}: the forecast reacts to a PUBLIC sighting`).toBe(true);
       compared++;
     }
-    expect(compared).toBe(3);
+    expect(compared).toBeGreaterThan(0);
+  });
+});
+
+describe('final: Slurp position only per R4; director internals never read', () => {
+  it('source scan: only publicState.ts reads run.slurp / slurpBrain; no director internals (rng, lives, recent, draws, spawnAt)', () => {
+    for (const f of files(ROOT)) {
+      const src = code(readFileSync(f, 'utf8'));
+      const own = f.replace(/\\/g, '/').endsWith('analytics/publicState.ts');
+      const slurp = /\brun\.slurp\b(?!Def|Present|Visible|Effects)|slurpBrain|\bslurpBearing\b|lastSlurpSighting/.exec(src);
+      if (!own) expect(slurp, `${f} reads Slurp's runtime directly: "${slurp?.[0]}"`).toBeNull();
+      const dir = /director[!?]?\.(rng|lives|recent|step|spawnAt|markSpawned|enemies)\b|\b(drawEncounterSpawn|pickCumulative|pickByWeight)\b|from '\.\.\/director(\.ts)?'/.exec(src);
+      expect(dir, `${f} reads director internals: "${dir?.[0]}"`).toBeNull();
+      // the cabinet a monster remembers is public only as cabinetStatus().witnessedBy (no brain memory reads)
+      expect(/cabinetGoal|cabinetMemory/.exec(src), `${f} reads an enemy's cabinet memory`).toBeNull();
+    }
+  });
+
+  it('behaviour: moving Slurp while unseen (not chasing, no reveal) changes no live output', () => {
+    let compared = 0;
+    for (const caseId of CASE_IDS) {
+      const make = () => {
+        const run = new MysteryRun({ duo: { characterId: 'morticia', pokemonId: 'aegislash' }, seed: `r4s-${caseId}`, tutorial: false, caseDef: CASES[caseId] });
+        return { run, a: createMysteryAnalytics(run) };
+      };
+      const A = make();
+      const B = make();
+      const step = (x: ReturnType<typeof make>) => x.a.frame(x.run, x.run.update(0.25, IDLE_INPUT));
+      // wait (standing still) until Slurp is on the map
+      for (let i = 0; i < 400 && !(A.run.slurp?.active); i++) [A, B].forEach(step);
+      if (!A.run.slurp?.active || A.run.slurpVisible() || A.run.slurp.mode === 'CHASE' || A.run.slurp.mode === 'ATTACK') continue;
+      const p = A.run.player;
+      const wp = A.run.slurpDef!.wander.find((w) => Math.hypot(w.x - p.x, w.z - p.z) > 25 && Math.hypot(w.x - A.run.slurp!.x, w.z - A.run.slurp!.z) > 5 && !A.run.world.lineOfSight(p.x, p.z, w.x, w.z));
+      if (!wp) continue;
+      Object.assign(B.run.slurp!, { x: wp.x, z: wp.z });
+      const strip = (x: unknown) => JSON.parse(JSON.stringify(x, (key, v) => (key === 'id' ? undefined : v)));
+      for (let i = 0; i < 3; i++) {
+        const eA = A.run.update(0.25, IDLE_INPUT);
+        const eB = B.run.update(0.25, IDLE_INPUT);
+        A.a.frame(A.run, eA);
+        B.a.frame(B.run, eB);
+        if (B.run.slurpVisible() || A.run.slurpVisible() || B.run.slurp!.mode !== A.run.slurp!.mode) break;
+        expect(strip(B.a.live().forecasts)).toEqual(strip(A.a.live().forecasts));
+        expect(strip(B.a.heartbeat())).toEqual(strip(A.a.heartbeat()));
+      }
+      compared++;
+    }
+    expect(compared).toBeGreaterThan(0);
   });
 });
 

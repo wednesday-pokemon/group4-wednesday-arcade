@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_TUNING } from '../../../src/mystery/config.ts';
-import { buildIsland } from '../../../src/mystery/data/island.ts';
+import { defaultMap } from '../../../src/mystery/defaults.ts';
+import { encounterSpawnsFor } from '../../../src/mystery/director.ts';
 import { World } from '../../../src/mystery/geometry.ts';
 import { NavGrid, pathLength } from '../../../src/mystery/nav.ts';
 import { fixtureMap } from './helpers.ts';
 
 const T = DEFAULT_TUNING;
 
-function grids(map = buildIsland(), open: string[] = []) {
+function grids(map = defaultMap(), open: string[] = []) {
   const w = new World(map, T.nav.lowCoverBlocksMovement);
   for (const id of open) w.setWallOpen(id, true);
   return { w, player: new NavGrid(w, T.player.radius, T.nav.cellM), hyde: new NavGrid(w, T.hyde.radius, T.nav.cellM) };
@@ -35,8 +36,8 @@ describe('nav grid on the fixture', () => {
   });
 });
 
-describe('nav reachability on buildIsland()', () => {
-  const map = buildIsland();
+describe('nav reachability on the default case map (compact play area)', () => {
+  const map = defaultMap();
   const closed = grids(map);
   const open = grids(map, [map.powerSwitch!.gateWallId]);
   const start = map.playerStart;
@@ -77,8 +78,10 @@ describe('nav reachability on buildIsland()', () => {
     expect(Math.hypot(end.x - map.tower.x, end.z - map.tower.z)).toBeLessThan(map.tower.radius);
   });
 
-  it('the Hyde never spawns within 25 m of the player start', () => {
-    expect(Math.hypot(map.hydeStart.x - start.x, map.hydeStart.z - start.z)).toBeGreaterThanOrEqual(25);
+  it('no director spawn (any enemy) lies within director.minSpawnM of the player start', () => {
+    for (const e of ['hyde', 'crackstone', 'slurp'] as const) {
+      for (const s of encounterSpawnsFor(map.world!, e)) expect(Math.hypot(s.x - start.x, s.z - start.z), s.id).toBeGreaterThanOrEqual(T.director.minSpawnM);
+    }
   });
 
   it('builds the island grid quickly (cached per map in the sim)', () => {

@@ -10,6 +10,8 @@ import { STAY_SILENT_LINE } from '../../app/mystery/thingLines.ts';
 import { setMotionPref, updateSettings, useSettings, type Settings } from '../../app/settings.ts';
 import { Button } from '../components/Button.tsx';
 import { KeyLegend } from './controls.tsx';
+import { AnalyticsLegend } from './hud/AnalyticsLegend.tsx';
+import '../styles/mhudFinal.css';
 
 interface MysteryPauseProps {
   tutorial: boolean;
@@ -37,6 +39,7 @@ export function MysteryPause({ tutorial, powerName, moveName, onResume, onSkipTu
   return (
     <section className="mpause panel" role="dialog" aria-modal="true" aria-labelledby="mpause-title" data-testid="dialog-pause">
       <div className="mpause__main">
+        <AnalyticsLegend variant="pause" />
         <h2 id="mpause-title" className="mpause__title display">Paused · clock stopped</h2>
         <div className="mpause__actions">
           <Button ref={first} variant="primary" onClick={() => void resume()} data-testid="btn-resume">

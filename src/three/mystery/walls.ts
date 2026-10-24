@@ -285,12 +285,16 @@ export function buildWallsAndCover(map: MapDef, low: boolean, skipWalls: Readonl
   const o = newOut(rand);
   const extraW = new Set((map.world?.extraWalls ?? []).map((w) => w.id));
   const extraC = new Set((map.world?.extraCover ?? []).map((c) => c.id));
+  // compact maps: whatever the old island left standing beyond the play area (both ends of a wall outside it) is not drawn (no ghost halls behind the fence)
+  const bb = map.bounds, far = (x: number, z: number): boolean => !!map.world?.playArea && (x < bb.minX - 1.5 || x > bb.maxX + 1.5 || z < bb.minZ - 1.5 || z > bb.maxZ + 1.5);
   for (const w of map.walls) {
     if (skipWalls.has(w.id)) continue;
+    if (far(w.a.x, w.a.z) && far(w.b.x, w.b.z)) continue;
     if (extraW.has(w.id) && addStyledWall(o, w, theme, rand)) continue;
     addWall(o.lit, w, rand, low);
   }
   for (const c of map.cover) {
+    if (far(c.x, c.z)) continue;
     if (extraC.has(c.id) && addCoverStyled(o, c, theme, rand)) continue;
     addCover(o.lit, c, rand, low);
     if (extraC.has(c.id)) addCoverAccent(o, c, theme, rand);

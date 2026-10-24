@@ -36,9 +36,16 @@
 // Movement = enemyNav.ts NavTraveller on his own nav grid (radius cfg.radius): world.move collision, turn rate, stuck
 // guard — never through walls, never teleports. Deterministic: his only random draws come from his OWN Rng (the run
 // passes `new Rng(seed, 'crackstone')`), so maps without him keep the sim stream (and logs) byte-identical.
+//
+// Final (docs/final/FINAL_CONTRACT.md §4, §6): R6 generalised — he defers whenever ANY other enemy is engaged
+// (ctx.enemyEngaged; the Hyde's CHASE when the context has no such hook). Director lifecycle spawn() / despawn() and the
+// queries engaged / calm / cycleDone / encounterResolved. `enemy_detected {crackstone}` when he starts a CHASE (sight /
+// proximity / scan) or a scan hit sends him to INVESTIGATE. Cabinets: closed = invisible, open = crouch-spot rule;
+// witnesses() / goToCabinet() (only cabinets inside his leash) → on arrival he pulls the player out (ctx.pullOut, a hit).
 import { crackstoneTuningFor, type CrackstoneTuning, type SimTuning } from './config.ts';
 import type { SimContext } from './context.ts';
-import { hidingRevealAt, NavTraveller, pickSearchPoint, planSearchSpots, SEARCH_ARRIVE_M, type SearchSpot } from './enemyNav.ts';
+import { cabinetFound, NavTraveller, pickSearchPoint, planSearchSpots, playerRevealAt, SEARCH_ARRIVE_M, type SearchSpot } from './enemyNav.ts';
+import type { CabinetMemory } from './hyde.ts';
 import { dist, pointInPolygon, turnToward, wrapAngle, yawTo } from './geometry.ts';
 import { navGridFor, type NavGrid } from './nav.ts';
 import type { Rng } from './rng.ts';
@@ -102,6 +109,10 @@ export class CrackstoneBrain {
   /** After a leash give-up he does not restart a chase by sight for a moment (no border thrashing). */
   private noChaseUntil = -Infinity;
   private sweepDir = 1;
+  /** Final: the cabinet he is walking to. */
+  cabinetGoal: CabinetMemory | null = null;
+  private loopSteps = 0;
+  private hunted = false;
 
   constructor(def: CrackstoneDef, tuning: SimTuning, rng: Rng) {
     this.def = def;
@@ -118,11 +129,11 @@ export class CrackstoneBrain {
     return navGridFor(ctx.map, ctx.world, this.cfg.radius, ctx.tuning.nav.cellM, ctx.tuning.nav.lowCoverBlocksMovement);
   }
 
-  /** Start of play (t = 0 of 'playing'): at def.start (snapped to his grid), patrolling, first scan scheduled. */
-  start(ctx: SimContext): void {
-    const s = this.def.start;
+  /** Start of play (t = 0 of 'playing') or a director spawn at `at`: snapped to his grid, patrolling, first scan scheduled. */
+  start(ctx: SimContext, at: { x: number; z: number; yaw: number } = this.def.start): Vec2 {
+    const s = at;
     const snapped = this.nav(ctx).nearestWalkable(s, 6) ?? { x: s.x, z: s.z };
-    Object.assign(this.c, createCrackstoneRuntime(this.def), { x: snapped.x, z: snapped.z });
+    Object.assign(this.c, createCrackstoneRuntime(this.def), { x: snapped.x, z: snapped.z, yaw: s.yaw });
     this.mover.invalidate(this.c);
     this.patrolIndex = this.nearestPatrolIndex();
     const pts = this.def.patrol;
@@ -135,8 +146,84 @@ export class CrackstoneBrain {
     this.scanGraceUntil = -Infinity;
     this.pauseUntil = -Infinity;
     this.glimpsed = false;
+    this.noChaseUntil = -Infinity;
+    this.searchSpots = [];
+    this.searchLook = null;
+    this.cabinetGoal = null;
+    this.loopSteps = 0;
+    this.hunted = false;
     this.scheduleScan(ctx.t);
     this.active = true;
+    return snapped;
+  }
+
+  /** Director spawn (= start at the spawn point). */
+  spawn(ctx: SimContext, at: { x: number; z: number; yaw: number }): Vec2 {
+    return this.start(ctx, at);
+  }
+
+  /** Director despawn: inactive, pending scan / curse dropped (no event), his stun / slow / distract timers dropped. */
+  despawn(_ctx: SimContext): void {
+    const c = this.c;
+    Object.assign(c, {
+      mode: 'PATROL' as CrackstoneMode, modeT: 0, speed: 0, suspicion: 0, canSeePlayer: false, lastKnown: null, target: null, path: [],
+      stunnedUntil: -Infinity, slowedUntil: -Infinity, slowMult: 1, distractedUntil: -Infinity, scan: null, curse: null,
+    });
+    this.lureUntil = -Infinity;
+    this.lurePoint = null;
+    this.cabinetGoal = null;
+    this.active = false;
+  }
+
+  // ------------------------------------------------------------------------------------------------- director queries
+
+  engaged(): boolean {
+    return this.active && (this.c.mode === 'CHASE' || this.c.mode === 'ATTACK');
+  }
+
+  /** Patrolling / returning, nothing pending against the player. */
+  calm(): boolean {
+    const c = this.c;
+    return this.active && (c.mode === 'PATROL' || c.mode === 'RETURN') && !c.curse && c.scan?.phase !== 'warning' && !this.cabinetGoal;
+  }
+
+  cycleDone(): boolean {
+    return this.loopSteps >= Math.max(1, this.def.patrol.length);
+  }
+
+  encounterResolved(): boolean {
+    return this.hunted && this.calm();
+  }
+
+  /** Could he see the player right now (sight, or proximity while not yet hidden)? revealM as HydeBrain.witnesses. */
+  witnesses(ctx: SimContext, revealM: number | null = null): boolean {
+    if (!this.perceives(ctx) || this.isDistracted(ctx.t)) return false;
+    const c = this.c;
+    const p = ctx.player;
+    if (revealM === null && (c.mode === 'CHASE' || c.mode === 'ATTACK') && c.canSeePlayer) return true;
+    const sight = c.mode === 'RETURN' ? this.returnSight : this.cfg.sight;
+    const res = canSee(ctx.world, sight, c, { x: p.x, z: p.z, crouched: false, hiddenRevealM: revealM }, {
+      fog: ctx.inFog(c.x, c.z) || ctx.inFog(p.x, p.z), distracted: false,
+    });
+    if (res.seen) return true;
+    return revealM === null && Math.hypot(p.x - c.x, p.z - c.z) <= this.cfg.proximityM && ctx.world.lineOfSight(c.x, c.z, p.x, p.z, false);
+  }
+
+  /** Walk to a remembered cabinet (only one inside his leash); pull the player out on arrival. False if he refuses. */
+  goToCabinet(ctx: SimContext, mem: CabinetMemory): boolean {
+    if (!this.active || this.fromCentroid(mem.door) > this.def.leashM + 1) return false;
+    const c = this.c;
+    this.cancelCurse(ctx);
+    this.cancelScan(ctx);
+    c.lastKnown = { ...mem.door };
+    if (c.mode === 'INVESTIGATE') {
+      c.path = [];
+      this.mover.planGoal = null;
+      this.investigateSince = ctx.t;
+    } else this.setMode(ctx, 'INVESTIGATE', 'saw_player');
+    this.cabinetGoal = { spotId: mem.spotId, door: { ...mem.door } };
+    c.target = { ...mem.door };
+    return true;
   }
 
   // ------------------------------------------------------------------------------------------------- queries
@@ -169,9 +256,9 @@ export class CrackstoneBrain {
     return this.active && !this.isStunned(t) && !this.isLured(t) && t >= ctx.player.invulnerableUntil;
   }
 
-  /** R6: the Hyde is chasing, so he may not start CHASE / ATTACK / scans. */
+  /** R6 (generalised): another enemy is engaged, so he may not start CHASE / ATTACK / scans. */
   deferred(ctx: SimContext): boolean {
-    return ctx.hyde.mode === 'CHASE';
+    return ctx.enemyEngaged ? ctx.enemyEngaged('crackstone') : ctx.hyde.mode === 'CHASE';
   }
 
   /** Threatening right now (blocks the evidence board): chasing, cursing, or a scan warning pending. */
@@ -222,7 +309,13 @@ export class CrackstoneBrain {
     if (engaged(from) && !engaged(to)) this.scanGraceUntil = ctx.t + this.cfg.scanGraceAfterChaseS;
     if (to === 'INVESTIGATE') this.investigateSince = ctx.t;
     if (reason === 'deferred') this.stats.deferrals++;
+    this.cabinetGoal = null;
     ctx.emit({ type: 'crackstone_mode', from, to, reason });
+    const detected = (to === 'CHASE' && !engaged(from)) || (to === 'INVESTIGATE' && reason === 'scan_hit');
+    if (detected) {
+      this.hunted = true;
+      ctx.emit({ type: 'enemy_detected', enemy: 'crackstone', via: reason === 'scan_hit' ? 'scan' : reason === 'sensed_player' ? 'proximity' : 'sight' });
+    }
   }
 
   private clampToLeash(p: Vec2): Vec2 {
@@ -308,6 +401,7 @@ export class CrackstoneBrain {
     c.speed = 0;
     this.cancelCurse(ctx);
     this.cancelScan(ctx);
+    this.cabinetGoal = null;
     if (c.canSeePlayer) ctx.emit({ type: 'crackstone_lost' });
     c.canSeePlayer = false;
     if (this.isLured(ctx.t)) return; // a decoy is pending: freeze, then go to it
@@ -324,6 +418,7 @@ export class CrackstoneBrain {
     this.c.distractedUntil = Math.max(this.c.distractedUntil, ctx.t + durationS);
     this.cancelCurse(ctx);
     this.cancelScan(ctx);
+    this.cabinetGoal = null;
   }
 
   /** Pull him to a visible decoy within lureRangeM for `durationS` (ignores the player meanwhile). False if too far. */
@@ -389,7 +484,7 @@ export class CrackstoneBrain {
     // ---- perception: sight + proximity
     let seen = false;
     if (this.perceives(ctx)) {
-      const spot = p.hidden ? hidingRevealAt(ctx, p.x, p.z) : null;
+      const spot = playerRevealAt(ctx);
       const sight = c.mode === 'RETURN' ? this.returnSight : cfg.sight;
       const res = canSee(ctx.world, sight, c, { x: p.x, z: p.z, crouched: p.crouched, hiddenRevealM: spot }, {
         fog: ctx.inFog(c.x, c.z) || ctx.inFog(p.x, p.z), distracted,
@@ -432,6 +527,19 @@ export class CrackstoneBrain {
       if (c.mode === 'INVESTIGATE') this.investigateSince = t;
       else this.setMode(ctx, 'INVESTIGATE', 'saw_player');
       c.target = goal;
+    }
+
+    // ---- a player found in a cabinet (seen through the open door, or the one he remembers): dragged out = a hit
+    const found = this.perceives(ctx) ? cabinetFound(ctx, c, this.cabinetGoal, seen) : null;
+    if (found) {
+      this.cabinetGoal = null;
+      this.cancelCurse(ctx);
+      this.cancelScan(ctx);
+      c.lastKnown = null;
+      this.hunted = true;
+      if (!ctx.pullOut?.('crackstone', found)) return;
+      this.startReturn(ctx, 'curse_done');
+      return;
     }
 
     // ---- scan
@@ -494,6 +602,12 @@ export class CrackstoneBrain {
         }
         if (t - this.investigateSince >= cfg.investigateMaxS && !lured) {
           this.startSearch(ctx, goal, 'gave_up');
+          return;
+        }
+        const cab = this.cabinetGoal;
+        if (cab && Math.hypot(cab.door.x - c.x, cab.door.z - c.z) <= ctx.tuning.cabinet.pullOutM) {
+          this.cabinetGoal = null; // the player is no longer inside: search here
+          this.startSearch(ctx, goal, 'reached_target');
           return;
         }
         if (this.travel(ctx, goal, speed, dt, 1.0)) {
@@ -622,6 +736,7 @@ export class CrackstoneBrain {
     if (this.travel(ctx, wp, speed, dt, this.cfg.waypointReachedM)) {
       this.patrolIndex = (this.patrolIndex + 1) % pts.length;
       this.mover.planGoal = null;
+      this.loopSteps++;
       this.pauseUntil = ctx.t + this.cfg.patrolPauseS;
       this.sweepDir = -this.sweepDir;
     }

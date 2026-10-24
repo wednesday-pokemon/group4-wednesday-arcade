@@ -366,3 +366,6 @@ kbd.kcap {
 .mdash-kv--model dd { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mdash-card { overflow: hidden; }
 .mdash-kv--model dd { font-size: 0.75rem; }
+
+/* UX_FINAL §7: a 14 px barChart (descriptive layer) before "Stats compare duos…" on the duo draft. */
+.duo-draft__stats-icon { width: 0.875rem; height: 0.875rem; margin: 0 0.25rem 0 0.15rem; vertical-align: -0.1em; color: var(--c-layer-desc); }

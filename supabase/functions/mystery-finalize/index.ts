@@ -1,4 +1,4 @@
-// POST /functions/v1/mystery-finalize   (station account)   rules mystery-v3.1
+// POST /functions/v1/mystery-finalize   (station account)   rules mystery-v4 (v3.1 sessions keep v3.1 rules)
 // body: { sessionId, clientResult? }   clientResult = the browser's RunResult (audit only, never trusted)
 // The server reloads every rule-relevant stored event, re-validates the whole sequence from scratch, and recomputes
 // outcome, verdict, correct, cited evidence (sanitized), deductionCorrect, egg tier/points, active time and score with
@@ -16,7 +16,9 @@ import {
   loadMysterySession, loadRank, loadResult, loadRuleEvents, resultView, type MysteryResultRow,
 } from '../_shared/mystery-db.ts';
 import { applyBatch, initialProgress, progressFromRow, ruleFingerprint } from '../_shared/mystery-events.ts';
-import { caseReveal, computeResult, requireData, requireEggRules, resolveCase, rulesContext } from '../_shared/mystery-rules.ts';
+import {
+  PLAYER_MAX_HP, caseReveal, computeResult, requireData, requireEggRules, resolveCase, rulesContext, sessionRulesVersion,
+} from '../_shared/mystery-rules.ts';
 import { MAX_FINALIZE_BYTES, parseMysteryFinalize } from '../_shared/mystery-validation.ts';
 
 const MAX_ATTEMPTS = 3;
@@ -33,7 +35,7 @@ serve('mystery-finalize', async (req, ctx) => {
     body: {
       sessionId: row.session_id,
       result: resultView(row),
-      rank: row.outcome === 'finished' && !row.is_test ? await loadRank(admin, row.session_id) : null,
+      rank: row.outcome === 'finished' && !row.is_test ? await loadRank(admin, row.session_id, row.rules_version) : null,
       // only now (the run is finished and stored) may the answer of the session's case leave the server
       reveal: caseReveal(resolveCase(row.case_id, undefined), row.outcome),
     },
@@ -54,14 +56,15 @@ serve('mystery-finalize', async (req, ctx) => {
     const data = requireData();
     const egg = requireEggRules();
     const kase = resolveCase(row.case_id, row.case_version, data);
-    const rules = rulesContext(row.seed, kase.caseDef, egg);
+    const rulesVersion = sessionRulesVersion(row.rules_version); // v3.1 sessions keep the v3.1 formula
+    const rules = rulesContext(row.seed, kase.caseDef, egg, PLAYER_MAX_HP, rulesVersion);
     // Re-validate the stored rule events from scratch (independent of the incremental append-time state).
     const replayed = applyBatch(initialProgress(), await loadRuleEvents(admin, row.id), rules);
     if (ruleFingerprint(replayed) !== ruleFingerprint(progressFromRow(row.progress))) {
       ctx.log('error', 'mystery_progress_mismatch', { sessionId: row.id });
       throw new HttpError('INVALID_TRANSITION', 'Stored events and stored progress disagree');
     }
-    const result = computeResult(replayed, kase, rules.expectedTier, body.clientResult);
+    const result = computeResult(replayed, kase, rules.expectedTier, body.clientResult, rulesVersion);
 
     try {
       const out = await callRpc(admin, 'mystery_finalize_session', {
@@ -73,7 +76,8 @@ serve('mystery-finalize', async (req, ctx) => {
       });
       const stored = out.result as unknown as MysteryResultRow;
       ctx.log(result.claimMatches ? 'info' : 'warn', 'mystery_finalized', {
-        sessionId: row.id, replay: out.replay === true, caseId: stored.case_id, outcome: stored.outcome, score: stored.score,
+        sessionId: row.id, replay: out.replay === true, rulesVersion, caseId: stored.case_id, outcome: stored.outcome, score: stored.score,
+        hints: stored.hints_used, detections: stored.detections, hits: stored.hits, defeatedBy: stored.defeated_by,
         verdict: stored.verdict, deductionCorrect: stored.deduction_correct, claimMatches: result.claimMatches,
       });
       return respond(stored, out.replay === true);

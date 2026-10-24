@@ -11,8 +11,11 @@ describe('MysteryRun API on buildIsland()', () => {
     expect(run.caseDef.id).toBe('poisoned_archive');
     expect(run.card.characterId).toBe('enid');
     expect(run.objective()).toBe('find_clues');
-    expect(run.player.roomId).toBe('pier');
-    expect(Math.hypot(run.hyde.x - run.player.x, run.hyde.z - run.player.z)).toBeGreaterThanOrEqual(25);
+    // compact map: the start is the play area's (no pier walk); every hunter arrives later through the director
+    expect({ x: run.player.x, z: run.player.z }).toEqual({ x: run.map.playerStart.x, z: run.map.playerStart.z });
+    expect(run.player.roomId).toBe(run.roomAt(run.player.x, run.player.z)?.id ?? null);
+    expect(run.hydeActive).toBe(false);
+    expect(run.enemyStatus().hyde).toMatchObject({ present: true, active: false, arrivesInS: run.tuning.hyde.emergeAfterS });
   });
 
   it('tutorial: Hyde inactive, clock reset at endTutorial, events unlogged until then', () => {
@@ -31,8 +34,9 @@ describe('MysteryRun API on buildIsland()', () => {
 
   it('look input: yaw += lookYawDelta (left), pitch += lookPitchDelta, clamped', () => {
     const run = new MysteryRun({ duo: { characterId: 'enid', pokemonId: 'gengar' }, seed: 's1' });
+    const yaw0 = run.player.yaw;
     run.update(1 / 60, input({ lookYawDelta: 0.5, lookPitchDelta: 5 }));
-    expect(run.player.yaw).toBeCloseTo(0.5);
+    expect(run.player.yaw).toBeCloseTo(yaw0 + 0.5);
     expect(run.player.pitch).toBeCloseTo(run.tuning.player.pitchLimit);
   });
 
@@ -65,10 +69,11 @@ describe('MysteryRun API on buildIsland()', () => {
     run.update(0.3, input({ moveZ: 1, crouch: true }));
     expect(run.noiseRadiusM()).toBeLessThan(3);
     expect(run.boardAllowed()).toBe(true);
+    run.hydeBrain.active = true; // (an absent Hyde cannot chase)
     run.hyde.mode = 'CHASE';
     expect(run.boardAllowed()).toBe(false);
     const b = run.hydeBearing();
-    expect(b.distanceM).toBeGreaterThan(25);
+    expect(b.distanceM).toBeGreaterThan(5);
     expect(Math.abs(b.angle)).toBeLessThanOrEqual(Math.PI);
   });
 
@@ -98,10 +103,13 @@ describe('MysteryRun API on buildIsland()', () => {
     const keys = Object.keys(ep.snapshots[0]).sort();
     expect(keys).toEqual(['catches', 'cluesFound', 'crackstoneDistanceM', 'crackstoneMode', 'crackstoneOccluded', 'crackstonePresent',
       'crackstoneSuspicion', 'crackstoneVisible', 'eggSecurity', 'eggState', 'hidden', 'hp', 'hydeDistanceM', 'hydeEmerged', 'hydeMode', 'hydeOccluded',
-      'hydeSuspicion', 'hydeVisible', 'moveReady', 'objective', 'powerReady', 'recentNoise', 'roomId', 'speed', 'stance', 't'].sort());
-    // Case 01 has Joseph Crackstone: present in every snapshot, never 999 m once play runs
+      'hydeSuspicion', 'hydeVisible', 'moveReady', 'objective', 'powerReady', 'recentNoise', 'roomId', 'speed', 'stance', 't',
+      // final: director + Slurp + cabinet
+      'hydeActive', 'crackstoneActive', 'slurpPresent', 'slurpActive', 'slurpMode', 'slurpDistanceM', 'slurpVisible', 'inCabinet'].sort());
+    // Case 01 has Joseph Crackstone: present in every snapshot; legacy worlds start him at t = 0, director worlds later
     for (const s of ep.snapshots) expect(s).toMatchObject({ crackstonePresent: true });
-    expect(ep.snapshots[0].crackstoneDistanceM).toBeLessThan(999);
+    if (!ep.run.map.world?.encounterSpawns?.length) expect(ep.snapshots[0].crackstoneDistanceM).toBeLessThan(999);
+    else expect(ep.snapshots.some((s) => s.crackstoneActive && s.crackstoneDistanceM < 999)).toBe(true);
     // the Hyde is absent until it emerges: snapshots before report it as far away (999 m) and not visible
     const emergedAt = ep.events.find((e) => e.type === 'hyde_emerged')!.t;
     for (const s of ep.snapshots) {

@@ -25,9 +25,12 @@ import { hydeEmergedOf, investigationOf, minSpawnM } from './publicState.ts';
 import { CRACK_MODEL_VERSION } from './crackstoneRisk.ts';
 import { pointInPolygon } from '../geometry.ts';
 import { spawnProbabilities, zoneIndexAt } from './hydeZones.ts';
+import { scoreV4 } from '../scoring.ts';
+import { ENEMY_IDS } from '../types.ts';
+import { weemsHint } from './weems.ts';
 import type {
-  Advice, AdviceRecord, DiagnosticItem, DiagnosticReport, ForecastRecord, ForecastTarget, LiveAnalytics, LiveMessage, ProbabilityEstimate,
-  RiskBand, RiskEstimate, SessionRecord, SessionReport, SupabaseBatch, TelemetrySample,
+  Advice, AdviceRecord, DiagnosticItem, DiagnosticReport, ForecastRecord, ForecastTarget, LiveAnalytics, LiveMessage, LiveStats, ProbabilityEstimate,
+  RiskBand, RiskEstimate, SessionRecord, SessionReport, SupabaseBatch, TelemetrySample, WeemsHint,
 } from './types.ts';
 
 export interface MysteryAnalyticsOptions {
@@ -48,8 +51,10 @@ export interface MysteryAnalyticsOptions {
 export interface FrameOutput {
   /** Latest detection risk (updated at 1 Hz), null before the first sample / during the tutorial. */
   risk: RiskEstimate | null;
-  /** New advice this frame (V pressed → 'hint', or a context trigger), else null. */
+  /** New Thing advice this frame (a context trigger), else null. Thing's advice is free (never a hint). */
   advice: Advice | null;
+  /** Weems' hint for a `hint_requested {level}` of this frame (the sim counted it, −50), else null. */
+  weems: WeemsHint | null;
   sampled: boolean;
 }
 
@@ -99,15 +104,16 @@ export class MysteryAnalytics {
   private run: MysteryRun;
   /** The live layer (forecasts, Thing's Log / WHY / advice messages, hint ladder). */
   readonly engine: LiveEngine;
-  private readonly lastStored = new Map<ForecastTarget, { t: number; top: string; p: number }>();
+  private readonly lastStored = new Map<string, { t: number; top: string; p: number }>();
   private extractionEst: ProbabilityEstimate | null = null;
-  private lastHintCallT = -Infinity;
-  private lastLegacyHintT = -Infinity;
   private readonly roomNames: Map<string, string>;
   /** The case this session plays (from run.caseDef; null only for a run object without a case). */
   readonly caseId: CaseId | null;
   readonly caseVersion: number | null;
   private readonly clueTotal: number;
+  /** Weems hints issued this run (Tab → "Weems' hints"), and those not yet returned by live(). */
+  private readonly weemsLog: WeemsHint[] = [];
+  private weemsQueue: WeemsHint[] = [];
 
   constructor(run: MysteryRun, o: MysteryAnalyticsOptions = {}) {
     this.run = run;
@@ -133,7 +139,7 @@ export class MysteryAnalytics {
   frame(run: MysteryRun, events: readonly StampedEvent[]): FrameOutput {
     this.run = run;
     this.collector.ingest(events);
-    if (run.status === 'tutorial') return { risk: null, advice: null, sampled: false };
+    if (run.status === 'tutorial') return { risk: null, advice: null, weems: null, sampled: false };
     for (const e of events) if (e.type === 'catch') this.lastCatchT = e.t;
     this.engine.onEvents(run, events);
     let sampled = false;
@@ -146,15 +152,17 @@ export class MysteryAnalytics {
       }
     }
     let advice: Advice | null = null;
-    if (events.some((e) => e.type === 'hint_requested')) {
-      // legacy V path (the sim's hint event): the best feasible action now. Not recorded twice when the UI also asked
-      // for a ladder card via hint(level) at the same moment.
-      advice = this.prescriptive.recommend(run, this.engine.zones());
-      if (advice && Math.abs(run.t - this.lastHintCallT) > 1) {
-        this.record(run, advice, 'hint');
-        this.lastLegacyHintT = run.t;
-      }
-    } else if (this.autoAdvice && run.status === 'playing') {
+    let weems: WeemsHint | null = null;
+    for (const e of events) {
+      if (e.type !== 'hint_requested' || e.seq === 0) continue;
+      // Principal Weems (paid, explicit): the sim emitted the counted request; we provide that level's content
+      const level = e.level ?? 1;
+      weems = weemsHint(run, level, this.weemsLog.filter((w) => w.level === level).length);
+      this.weemsLog.push(weems);
+      this.weemsQueue.push(weems);
+      this.collector.addRecommendation({ t: weems.t, action: `weems_l${weems.level}`, advice: weems.text, trigger: 'hint', accepted: null, outcome: null });
+    }
+    if (!weems && this.autoAdvice && run.status === 'playing') {
       const threat = this.contextTrigger(run, events);
       // milestone: right after the pickup the next step (take the egg to Iago Tower) is the first carrying advice
       const pickup = !threat && events.some((e) => e.type === 'egg_pickup');
@@ -169,7 +177,7 @@ export class MysteryAnalytics {
       this.collector.setResult(run.result());
     }
     this.updateFollowUps();
-    return { risk: this.risk, advice, sampled };
+    return { risk: this.risk, advice, weems, sampled };
   }
 
   /** Current risk estimate (HUD chip). */
@@ -183,13 +191,53 @@ export class MysteryAnalytics {
    * Recorded as a recommendation (follow-up tracked) unless the same V press was already recorded from the sim event.
    */
   hint(level: 1 | 2 | 3, o: { requested?: boolean } = {}): LiveMessage | null {
+    // Final: this is THING's free ladder (idle nudges at 40 / 80 / 120 s) — never a hint_requested, never −50
     const run = this.run;
-    const requested = o.requested !== false;
-    const out = this.engine.hint(run, level, requested);
+    const out = this.engine.hint(run, level, o.requested === true);
     if (!out) return null;
-    this.lastHintCallT = run.t;
-    if (!(requested && Math.abs(run.t - this.lastLegacyHintT) <= 1)) this.record(run, out.advice, requested ? 'hint' : 'context');
-    return out.msg;
+    this.record(run, out.advice, 'context');
+    return out.msg.kind === 'advice' ? { ...out.msg, free: true } : out.msg;
+  }
+
+  /**
+   * Principal Weems' content for `level` right now (FINAL_CONTRACT §8): L1 general area · L2 location / evidence link ·
+   * L3 deduction guidance (never a name). Pure preview — the CHARGED hint is the one frame() builds for the sim's
+   * `hint_requested {level}` (returned in FrameOutput.weems and live().weems).
+   */
+  weemsHint(level: 1 | 2 | 3): WeemsHint | null {
+    const run = this.run;
+    if (run.status !== 'playing' && run.status !== 'accusing') return null;
+    return weemsHint(run, level, this.weemsLog.filter((w) => w.level === level).length);
+  }
+
+  /** Every Weems hint of this run, oldest first (Tab → "Weems' hints"). */
+  weemsHints(): readonly WeemsHint[] {
+    return this.weemsLog;
+  }
+
+  /** Live descriptive counters (exact rule-event counts) + the labelled "if you deliver now" score preview. */
+  liveStats(): LiveStats {
+    const run = this.run;
+    const c = this.engine.ruleCounts();
+    const detections = ENEMY_IDS.reduce((a, id) => a + c.detections[id], 0);
+    const hits = ENEMY_IDS.reduce((a, id) => a + c.hits[id], 0);
+    const activeTimeS = Math.round(((run as { deliveredAt?: number | null }).deliveredAt ?? run.t) * 10) / 10;
+    const b = scoreV4({ delivered: true, correct: false, cluesFound: run.cluesFound.length, detections, hintsUsed: c.hintsUsed, hits, activeTimeS });
+    const withAcc = scoreV4({ delivered: true, correct: true, cluesFound: run.cluesFound.length, detections, hintsUsed: c.hintsUsed, hits, activeTimeS });
+    return {
+      t: Math.round(run.t * 1000) / 1000, hintsUsed: c.hintsUsed, detections, detectionsBy: c.detections, hits, hitsBy: c.hits,
+      blockedHits: c.blockedHits, cluesFound: run.cluesFound.length, cluesTotal: run.caseDef.clues.length, activeTimeS,
+      scorePreview: {
+        label: 'Preview · if you deliver now',
+        parts: { delivery: b.delivery, clues: b.clues, noDetection: b.noDetection, noHints: b.noHints, timeBonus: b.timeBonus, hintPenalty: b.hintPenalty, hitPenalty: b.hitPenalty },
+        totalNow: b.total, accusationBonus: withAcc.total - b.total,
+      },
+    };
+  }
+
+  /** Game-over WHY lines (UX_FINAL §3): what ended the run + the last rule cause before it ([] unless DNF). */
+  gameOverWhy(): string[] {
+    return this.engine.gameOverWhy(this.run);
   }
 
   /**
@@ -199,7 +247,12 @@ export class MysteryAnalytics {
    */
   live(): LiveAnalytics {
     const run = this.run;
-    return { t: Math.round(run.t * 1000) / 1000, forecasts: this.engine.forecasts(run), messages: this.engine.drain(), advice: this.engine.currentAdvice(run) };
+    const weems = this.weemsQueue;
+    this.weemsQueue = [];
+    return {
+      t: Math.round(run.t * 1000) / 1000, forecasts: this.engine.forecasts(run), messages: this.engine.drain(), advice: this.engine.currentAdvice(run),
+      weems, stats: this.liveStats(),
+    };
   }
 
   /** Numbers for the Laptop 1 heartbeat (objective, chases, escapes, top egg site, Hyde zone, extraction, last Thing item). */
@@ -256,10 +309,10 @@ export class MysteryAnalytics {
     const t = sample.snapshot.t;
     const f = this.engine.forecasts(run);
     const inv = investigationOf(run);
-    const put = (target: ForecastTarget, top: string, p: number, label: ForecastRecord['modelLabel'], version: string | null, features: ForecastRecord['features'], everyS: number, minDelta: number) => {
-      const last = this.lastStored.get(target);
+    const put = (target: ForecastTarget, top: string, p: number, label: ForecastRecord['modelLabel'], version: string | null, features: ForecastRecord['features'], everyS: number, minDelta: number, key: string = target) => {
+      const last = this.lastStored.get(key);
       if (last && last.top === top && Math.abs(last.p - p) < minDelta && t - last.t < everyS) return;
-      this.lastStored.set(target, { t, top, p });
+      this.lastStored.set(key, { t, top, p });
       this.collector.addForecast({ t, target, value: r4(Math.min(1, Math.max(0, p))), modelLabel: label, modelVersion: version, features });
     };
     if (f.egg && f.egg.sites.length > 0) {
@@ -300,6 +353,21 @@ export class MysteryAnalytics {
         method: 'crack_rule', horizon_s: cf.horizonS, mode: cf.mode ?? null, fact: cf.here.fact, basis: cf.basis ?? null, in_area: inArea,
         cells: cf.cells.length,
       }, this.forecastEveryS, 0.1);
+    }
+    // Final (LOCAL until the server accepts the targets): Slurp's rule-based risk; the director's spawn odds per inactive enemy
+    const sf = f.slurp;
+    if (sf) {
+      put('slurp_risk', `${sf.mode}|${sf.here.fact ?? ''}`, sf.here.p, 'rule_based', 'slurp-rule-1', {
+        method: 'slurp_rule', horizon_s: sf.horizonS, mode: sf.mode, fact: sf.here.fact, cells: sf.cells.length,
+      }, this.forecastEveryS, 0.1);
+    }
+    for (const layer of Object.values(f.threat?.enemies ?? {})) {
+      if (!layer || layer.state !== 'inactive' || !layer.spawns || layer.spawns.length === 0) continue;
+      const top = layer.spawns.reduce((a, b) => (b.p > a.p ? b : a));
+      if (!(top.p > 0)) continue;
+      const features: ForecastRecord['features'] = { method: 'director_rule', enemy: layer.enemy, spawn: top.spawnId, appears_in_s: layer.appearsInS };
+      for (const sp of layer.spawns.slice(0, 12)) features[key40('p_', sp.spawnId)] = r4(sp.p);
+      put('enemy_spawn', top.spawnId, top.p, 'rule_based', 'director-rule-1', features, this.forecastEveryS, 0.05, `enemy_spawn:${layer.enemy}`);
     }
     const ex = this.extractionEst;
     if (ex) {
@@ -391,7 +459,12 @@ export class MysteryAnalytics {
         ? {
           outcome: result.outcome, verdict: result.verdict, activeTimeS: result.activeTimeS, score: result.score, cluesFound: [...result.cluesFound],
           catches: result.catches, caseId: result.caseId, caseVersion: result.caseVersion, correct: result.correct,
-          deductionCorrect: result.deductionCorrect, eggPoints: result.eggPoints,
+          deductionCorrect: result.deductionCorrect, eggPoints: result.eggPoints, rulesVersion: result.rulesVersion,
+          ...(result.hintsUsed !== undefined ? { hintsUsed: result.hintsUsed } : {}),
+          ...(result.detections !== undefined ? { detections: result.detections } : {}),
+          ...(result.hits !== undefined ? { hits: result.hits } : {}),
+          ...(result.defeatedBy !== undefined ? { defeatedBy: result.defeatedBy } : {}),
+          ...(result.scoreBreakdown !== undefined ? { scoreBreakdown: result.scoreBreakdown } : {}),
         }
         : null,
       recommendations: this.collector.recommendations.map((r) => ({ action: r.action, accepted: r.accepted, outcome: r.outcome })),

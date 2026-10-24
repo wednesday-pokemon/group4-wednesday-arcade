@@ -11,7 +11,7 @@
 //
 // API for other screens (frontend B: Pause → Controls, duo cards):
 //   <KeyLegend variant="full" power={powerName} move={moveName} ctrlCrouch={ctrlCrouchEnabled()} />
-//   <KeyLegend variant="strip" hintCooldownS={n} />                // HUD: Tab Evidence · V Hint · Esc Pause
+//   <KeyLegend variant="strip" />                                    // HUD: Tab Evidence · X Map · Esc Pause (UX_FINAL)
 //   <KeyLegend variant="card" power=… move=… highlight={['crouch', 'sprint']} />   // onboarding card
 //   <KeyCap k={abilityKey('F')} />                                   // inline cap (prompts, ability slots, cards)
 //   controlRows(variant, opts)                                       // the resolved rows (pure; tests / custom layouts)
@@ -20,7 +20,7 @@ import { ABILITY_KEY_LABEL } from '../../mystery/types.ts';
 import '../styles/mhud.css';
 
 export type KeyLegendVariant = 'card' | 'full' | 'strip' | 'inline';
-export type ControlId = 'move' | 'look' | 'sprint' | 'crouch' | 'interact' | 'power' | 'ability_move' | 'board' | 'hint' | 'pause' | 'mute';
+export type ControlId = 'move' | 'look' | 'sprint' | 'crouch' | 'interact' | 'power' | 'ability_move' | 'board' | 'lens' | 'hint' | 'pause' | 'mute';
 
 export interface ControlDef {
   id: ControlId;
@@ -46,11 +46,14 @@ export const CONTROLS: readonly ControlDef[] = [
   { id: 'look', keys: ['Mouse', '← → ↑ ↓'], label: 'Look', in: ['card', 'full'] },
   { id: 'sprint', keys: ['Shift'], label: 'Sprint', in: ['card', 'full'], loud: true },
   { id: 'crouch', keys: ['C'], label: 'Crouch', in: ['card', 'full'] },
-  { id: 'interact', keys: ['E'], label: 'Search · use (hold for long actions)', short: 'Search', in: ['card', 'full'] },
+  { id: 'interact', keys: ['E'], label: 'Search · use · hide (hold for long actions)', short: 'Search', in: ['card', 'full'] },
   { id: 'power', keys: [ABILITY_KEY_LABEL.F], label: '{power}', in: ['card', 'full'] },
   { id: 'ability_move', keys: [ABILITY_KEY_LABEL.Q], label: '{move}', in: ['card', 'full'] },
   { id: 'board', keys: ['Tab'], label: 'Evidence + map', short: 'Evidence', in: ['card', 'full', 'strip'] },
-  { id: 'hint', keys: ['V'], label: 'Ask Thing', short: 'Hint', in: ['full', 'strip'] },
+  // UX_FINAL §0: X = minimap danger view (strip + Pause); V = Principal Weems' PAID hint (Pause only — the Ask Weems
+  // button shows its own V cap). Thing's advice is free and has no key.
+  { id: 'lens', keys: ['X'], label: 'Map: switch danger view', short: 'Map', in: ['full', 'strip'] },
+  { id: 'hint', keys: ['V'], label: 'Ask Weems (−50)', short: 'Weems', in: ['full'] },
   { id: 'pause', keys: ['Esc'], label: 'Pause', in: ['full', 'strip'] },
   { id: 'mute', keys: ['M'], label: 'Mute', in: ['full'] },
 ];
@@ -90,13 +93,13 @@ export interface KeyLegendProps extends ControlRowOptions {
   variant: KeyLegendVariant;
   /** `card`: rows of the current onboarding step are lantern, the others dimmed. */
   highlight?: readonly ControlId[];
-  /** `strip`: the V hint cooldown in seconds (0 = ready). */
+  /** Legacy (overhaul strip showed the V cooldown); ignored — the Ask Weems button shows it now. */
   hintCooldownS?: number;
   className?: string;
   'data-testid'?: string;
 }
 
-export function KeyLegend({ variant, highlight, hintCooldownS = 0, className, ...o }: KeyLegendProps) {
+export function KeyLegend({ variant, highlight, hintCooldownS: _legacyCooldown, className, ...o }: KeyLegendProps) {
   const rows = controlRows(variant, o);
   const testId = o['data-testid'] ?? `key-legend-${variant}`;
   if (variant === 'inline') {
@@ -117,9 +120,9 @@ export function KeyLegend({ variant, highlight, hintCooldownS = 0, className, ..
     return (
       <p className={`klegend klegend--strip${className ? ` ${className}` : ''}`} data-testid={testId}>
         {rows.map((r) => (
-          <span key={r.id} className={r.id === 'hint' && hintCooldownS > 0 ? 'klegend__item is-cooling' : 'klegend__item'}>
+          <span key={r.id} className="klegend__item">
             {r.keys.map((k) => <KeyCap key={k} k={k} />)}
-            {r.id === 'hint' && hintCooldownS > 0 ? <span className="num klegend__cd" aria-label={`Hint ready in ${hintCooldownS} seconds`}>{hintCooldownS} s</span> : <span>{r.label}</span>}
+            <span>{r.label}</span>
           </span>
         ))}
       </p>

@@ -11,6 +11,7 @@
 //                 log-loss on the TRAINING sessions only (scripts/mystery-zones.ts); the holdout scores it in evaluate
 // Detection rows exist only after the Hyde emerged (labels.ts / dataset.ts); `hydeVisible` (public) is a feature.
 // Writes src/mystery/analytics/model/mystery-model.json (metrics: null until `mystery:evaluate`) and data/mystery/split.json.
+import { MYSTERY_RULES_VERSION } from '../src/mystery/types.ts';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fitLogistic, fitOls } from '../src/analytics/regression.ts';
@@ -20,6 +21,7 @@ import { BASE_FEATURE_NAMES, ETA_EXTRA, featureVector } from '../src/mystery/ana
 import { DETECTION_HORIZON_S } from '../src/mystery/analytics/labels.ts';
 import { logistic, MODEL_SCHEMA, type LinearPart, type ModelArtifact } from '../src/mystery/analytics/model.ts';
 import { groupSessions, selectZoneParams } from './mystery-zones.ts';
+import { SLURP_FEATURES, slurpFeatureVector, type SlurpInput, type SlurpRiskPart } from '../src/mystery/analytics/slurpModel.ts';
 
 function arg(name: string, def: string): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -55,6 +57,36 @@ function fitPart(rows: Row[], names: string[], label: (r: Row) => number, kind: 
   const coef = kind === 'logistic' ? fitLogistic(X, y, lambda, 40) : fitOls(X, y, 1e-4);
   const r6 = (v: number) => Math.round(v * 1e6) / 1e6;
   return { features: names, mean: mean.map(r6), std: std.map(r6), coef: coef.map(r6) };
+}
+
+/** Rows of the Slurp risk regime: he is on the map, neither hunting nor seeing the player at t, label not censored. */
+export function isSlurpRow(r: Row): boolean {
+  return r.slurpActive === '1' && r.slurpHere !== undefined && r.slurpHere !== '' && r.slurpFound15 !== undefined && r.slurpFound15 !== ''
+    && (r.slurpFact === '' || r.slurpFact === 'hidden');
+}
+
+export function slurpInputOf(r: Row): SlurpInput {
+  return { ruleP: Number(r.slurpHere), mode: r.slurpMode ?? '', stance: r.stance, hidden: r.slurpFact === 'hidden' };
+}
+
+const r4s = (x: number) => Math.round(x * 10000) / 10000;
+
+function fitSlurp(rows: Row[], modelVersion: string, episodes: number): SlurpRiskPart {
+  const raw = rows.map((r) => slurpFeatureVector(slurpInputOf(r)));
+  const k = SLURP_FEATURES.length;
+  const mean = new Array<number>(k).fill(0);
+  const std = new Array<number>(k).fill(0);
+  for (const x of raw) for (let i = 0; i < k; i++) mean[i] += x[i] / raw.length;
+  for (const x of raw) for (let i = 0; i < k; i++) std[i] += (x[i] - mean[i]) ** 2 / raw.length;
+  for (let i = 0; i < k; i++) std[i] = Math.sqrt(std[i]) > 1e-9 ? Math.sqrt(std[i]) : 1;
+  const X = raw.map((x) => [1, ...x.map((v, i) => (v - mean[i]) / std[i])]);
+  const coef = fitLogistic(X, rows.map((r) => Number(r.slurpFound15)), 1e-3, 40);
+  const r6 = (v: number) => Math.round(v * 1e6) / 1e6;
+  return {
+    method: 'logistic_regression', modelVersion: `slurp15-${modelVersion}`.slice(0, 32),
+    trainedOn: `${rows.length} rows of ${episodes} simulated episodes (scripted bots on the real sim); not real players`,
+    horizonS: 15, features: [...SLURP_FEATURES], mean: mean.map(r6), std: std.map(r6), coef: coef.map(r6), metrics: null,
+  };
 }
 
 function main(): void {
@@ -132,7 +164,7 @@ function main(): void {
     schema: MODEL_SCHEMA,
     // the generator generation is part of the version (same seeds, regenerated episodes ⇒ a different model)
     modelVersion: `det15-${ymd}-${manifest.seedPrefix}${/-(\d+)$/.exec(manifest.generator)?.[1] ? `-g${/-(\d+)$/.exec(manifest.generator)![1]}` : ''}`.slice(0, 32),
-    rulesVersion: 'mystery-v3.1',
+    rulesVersion: MYSTERY_RULES_VERSION,
     createdAt: date.toISOString(),
     modelType: 'logistic_regression',
     trainedOn: `${manifest.episodes} simulated episodes (scripted bots on the real sim, all ${manifest.duos} duos${caseIds.length ? `, ${caseIds.length} cases` : ''}); not real players`,
@@ -163,9 +195,13 @@ function main(): void {
     },
     metrics: null,
   };
-  writeFileSync(MODEL_PATH, `${JSON.stringify(artifact, null, 1)}\n`);
+  // ---- final: Slurp "finds you" — logistic calibration of the rule on the training sessions (src/mystery/analytics/slurpModel.ts)
+  const slurpRows = train.filter(isSlurpRow);
+  const slurpRisk = slurpRows.length >= 200 && slurpRows.some((r) => r.slurpFound15 === '1') ? fitSlurp(slurpRows, artifact.modelVersion, manifest.episodes) : null;
+  if (slurpRisk) console.log(`  slurp risk: ${slurpRows.length} train rows, base rate ${r4s(slurpRows.filter((r) => r.slurpFound15 === '1').length / slurpRows.length)}`);
+  writeFileSync(MODEL_PATH, `${JSON.stringify({ ...artifact, ...(slurpRisk ? { slurpRisk } : {}) }, null, 1)}\n`);
   writeFileSync(join(dataDir, 'split.json'), `${JSON.stringify({ key: SPLIT_KEY, testFrac, testSessions: [...test].sort() }, null, 1)}\n`);
   console.log(`  wrote ${MODEL_PATH} (${artifact.modelVersion}) in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 }
 
-main();
+if (process.argv[1] && /mystery-train\.ts$/.test(process.argv[1].replace(/\\/g, '/'))) main();

@@ -38,8 +38,14 @@ import type { SessionLayout } from '../src/mystery/types.ts';
 import { profileFor, PROFILE_FAMILIES } from '../src/mystery/analytics/profiles.ts';
 import { crackstoneReport } from '../src/mystery/analytics/descriptive.ts';
 import { CrackEvalRecorder } from './mystery-crackstone.ts';
+import { encounterSpawnsFor } from '../src/mystery/director.ts';
+import { EncounterLive } from '../src/mystery/analytics/encounterLive.ts';
+import { zoneParamsFrom } from '../src/mystery/analytics/live.ts';
+import { BUNDLED_MODEL } from '../src/mystery/analytics/model/index.ts';
 
-export const GENERATOR_VERSION = 'mystery-gen-4';
+const LIVE_ZONE_PARAMS = zoneParamsFrom(BUNDLED_MODEL);
+
+export const GENERATOR_VERSION = 'mystery-gen-5'; // final: mystery-v4 sim (director, Slurp, cabinets, compact maps)
 
 function arg(name: string, def: string): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -109,9 +115,18 @@ function runShard(index: number, count: number): void {
     const emergedAt: (number | null)[] = [];
     let spawnPost: string[] = [];
     const crack = new CrackEvalRecorder();
+    // final: the live rule-based Slurp risk (EncounterLive, exactly the live code) recorded per sample for §11
+    let enc: EncounterLive | null = null;
+    let seenSeq = 0;
     const ep = simulateEpisode(duo, seed, options, {
       onStep(run) {
         crack.onStep(run);
+        // final (director worlds): the EXACT spawn distribution of the Hyde's first appearance, kept at every 60 Hz step
+        // until it appears (= what the live odds show; the director draws from the same function one step later)
+        if (!run.hydeEmerged && typeof run.encounterDistribution === 'function' && run.director?.dynamic) {
+          const d = run.encounterDistribution('hyde');
+          if (d.length > 0) spawnPost = d.map((x) => r4(x.p));
+        }
       },
       onSample(run) {
         const inv = investigationOf(run);
@@ -122,16 +137,29 @@ function runShard(index: number, count: number): void {
           cells.crackHere = r4(ch.here);
           cells.crackFact = ch.fact;
         }
+        enc ??= new EncounterLive(run, LIVE_ZONE_PARAMS, null); // the bundled artifact's fitted params = what the live game uses
+        for (const e of run.log) if (e.seq > seenSeq) enc.onEvent(e);
+        seenSeq = run.log.length ? run.log[run.log.length - 1].seq : seenSeq;
+        enc.sample(run);
+        const hz = enc.hydeZones(run);
+        if (hz) cells.hydeZoneP = hz.map((x) => r4(x)).join(';');
+        const sf = enc.slurpForecast(run);
+        if (sf) {
+          cells.slurpHere = r4(sf.ruleP ?? sf.here.p); // the RULE value (the model's input), never the model's own output
+          cells.slurpFact = sf.here.fact ?? '';
+        }
         extra.push(cells);
         const world = worldOf(run);
-        if (world && !hydeEmergedOf(run, inv)) spawnPost = spawnProbabilities(world, run.player, minSpawnM(run)).map((x) => r4(x.p));
+        if (world && !hydeEmergedOf(run, inv) && !run.director?.dynamic) spawnPost = spawnProbabilities(world, run.player, minSpawnM(run)).map((x) => r4(x.p));
       },
     }, { caseDef: CASES[j.caseId] });
     if (ep.run.caseDef.id !== j.caseId) throw new Error(`episode ${seed} played ${ep.run.caseDef.id}, expected ${j.caseId}`);
     const r = episodeRows(ep, { duoIndex: j.duoIndex, profile: family }, duoNumbers(ep.collector.meta.factors), extra, emergedAt);
     const emerged = ep.collector.events.find((e) => e.type === 'hyde_emerged');
     const spawnId = emerged && emerged.type === 'hyde_emerged' ? emerged.spawnId : '';
-    const spawnTrue = spawnId ? String(worldOf(ep.run)?.hydeSpawns.findIndex((x) => x.id === spawnId) ?? -1) : '';
+    const w0 = worldOf(ep.run);
+    const spawnList = w0 && ep.run.director?.dynamic ? encounterSpawnsFor(w0, 'hyde') : w0?.hydeSpawns ?? [];
+    const spawnTrue = spawnId ? String(spawnList.findIndex((x) => x.id === spawnId)) : '';
     for (const row of r.rows) rowLines.push(row.join(','));
     const ev = ep.collector.events;
     const res = ep.result;

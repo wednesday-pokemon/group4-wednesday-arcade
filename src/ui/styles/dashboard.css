@@ -227,3 +227,33 @@
   .mdash__head--kpi .mdash__count { display: none; }
   .mdash__head--kpi .badge { padding: 0 0.6rem; }
 }
+
+/* ---- Final wave (UX_FINAL, FINAL_CONTRACT §10): v4 standings + defeat log with the monster; three monster chips on the
+   station card (mode word only; shape + glyph per monster, never colour alone; Slurp = orchid "drooping coffin"). */
+.mdash-standings li.is-first .mdash-rank, .mdash-standings li.is-first .mdash-score { color: var(--c-lantern); }
+.mdash-dnf { display: grid; gap: 0.1rem; }
+.mdash-standings__head { display: flex; justify-content: space-between; gap: 0.5rem; }
+.mdash-standings__n { color: var(--c-text-muted); font-weight: var(--fw-semi); letter-spacing: 0.04em; }
+.mdash-dnf__head { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--c-text-muted); }
+.mdash-dnf__row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.5rem; align-items: center; }
+.mdash-dnf__by { font-size: 0.75rem; }
+.mdash-dnf__by .icon { width: 0.85rem; height: 0.85rem; }
+.mstation__mons { display: inline-flex; align-items: center; gap: 0.25rem; margin-left: auto; min-width: 0; }
+.mstation__mon {
+  display: inline-flex; align-items: center; gap: 0.2rem; max-width: 6rem; padding: 0 0.35rem; font-size: 0.75rem; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--c-border-strong); color: var(--c-text-2);
+}
+.mstation__mon .icon { width: 0.8rem; height: 0.8rem; flex: none; }
+.mstation__mon--hyde { border-radius: var(--r-pill); }
+.mstation__mon--hyde .icon { color: var(--c-hyde-text, #ff8a8a); }
+.mstation__mon--crackstone { border-radius: var(--r-sm); }
+.mstation__mon--crackstone .icon { color: var(--c-crack, #a8e063); }
+.mstation__mon--slurp { border-radius: 3px 3px 9px 9px; }
+.mstation__mon--slurp .icon { color: var(--c-slurp-text, #eeb0f3); }
+.mstation__mon.is-away { border-style: dotted; opacity: 0.7; }
+.mstation__mon.is-hot { font-weight: var(--fw-bold); border-width: 2px; }
+.mstation__mon--hyde.is-hot { border-color: var(--c-hyde); color: var(--c-hyde-text, #ff8a8a); }
+.mstation__mon--crackstone.is-hot { border: 3px double var(--c-crack); color: var(--c-crack-text, #c4ef8a); }
+.mstation__mon--slurp.is-hot { border-color: var(--c-slurp, #d77be0); color: var(--c-slurp-text, #eeb0f3); box-shadow: 0 0 10px rgba(215, 123, 224, 0.4); }
+.mstation__r5:has(.mstation__mons) { gap: 0.4rem; }
+.mstation__r5:has(.mstation__mons) .mstation__hpbar { width: 3rem; }

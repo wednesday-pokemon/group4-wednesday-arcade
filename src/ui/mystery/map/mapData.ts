@@ -9,11 +9,12 @@
 // (src/app/mystery/hud/crackstone.ts crackMapState), and the scan ring only together with that marker.
 import type { LiveForecasts } from '../../../mystery/analytics/types.ts';
 import type {
-  CaseWorldDef, ClueId, EggState, HazardDef, InvestigationState, MapDef, Objective, Stance, Vec2,
+  CaseWorldDef, ClueId, EggState, EnemyId, HazardDef, InvestigationState, MapDef, Objective, Stance, Vec2,
 } from '../../../mystery/types.ts';
 import { searchlightYaw } from '../../../mystery/hazards.ts';
 import type { CrackMapState, CrackMarkerKind } from '../../../app/mystery/hud/crackstone.ts';
 import { oddsCells, pctText, roundPct, type OddsCell } from '../odds.ts';
+import { slurpForecastOf, spawnOddsOf } from '../../../app/mystery/hud/oddsV3.ts';
 
 /** run.map minus the session's hidden truth: the type has no `clues` / `eggSpawn`, so map code cannot read them. */
 export type MapGeometry = Pick<MapDef, 'id' | 'bounds' | 'walls' | 'cover' | 'hidingSpots' | 'rooms' | 'tower' | 'landmarks' | 'powerSwitch'>;
@@ -72,6 +73,17 @@ export interface PublicMapState {
   flashes: readonly { kind: 'passage' | 'reveal'; x: number; z: number; t0: number; wallId?: string }[];
   /** Joseph Crackstone (absent / null = no Crackstone in this case: nothing of him is drawn). */
   crack?: CrackMapState | null;
+  // ---- final (UX_FINAL §1d) — all optional: older callers / fixtures draw the overhaul map
+  /** Slurp: his position ONLY per R4 (visible / chase / attack / revealed); `chase` = he hunts (minimap frame). */
+  slurp?: { marker: { x: number; z: number; yaw: number; kind: 'visible' | 'chase' | 'attack' | 'revealed' } | null; chase: boolean; present: boolean } | null;
+  /** Minimap danger view: the ONE threat layer drawn, and whether that enemy is off the map (spawn pins). */
+  lens?: { enemy: EnemyId; inactive: boolean } | null;
+  /** Principal Weems' L2 mark (lantern + 10 px ghost glyph, 16 s). */
+  weemsMark?: { x: number; z: number; label: string } | null;
+  /** Which enemies of this case are on the map now (inactive ones may show spawn pins). */
+  active?: Partial<Record<EnemyId, boolean>>;
+  /** The sim knows enterable cabinets (glyphs are drawn). */
+  cabinets?: boolean;
 }
 
 export type MapMode = 'mini' | 'full';
@@ -82,9 +94,9 @@ export interface MapLabel {
   text: string;
   /** Lower = more important (objective 0 · egg % 1 · area % 2 · zone % 3 · rooms 4). */
   priority: number;
-  color: 'lantern' | 'violet' | 'ivory' | 'hyde' | 'muted' | 'text' | 'crack';
-  /** Small glyph drawn left of the text (Crackstone's own-cell % label). */
-  glyph?: 'hat';
+  color: 'lantern' | 'violet' | 'ivory' | 'hyde' | 'muted' | 'text' | 'crack' | 'slurp';
+  /** Small glyph drawn left of the text (Crackstone's / Slurp's own-cell % label). */
+  glyph?: 'hat' | 'slurp';
   /** Pixel offset (screen space, after projection) — e.g. "inside the top edge" of an area circle. */
   dy?: number;
   /** Area radius in metres: the label sits inside its top edge. */
@@ -113,6 +125,17 @@ export interface MapLayers {
   hyde: { x: number; z: number; kind: 'visible' | 'chase' | 'last'; alpha: number } | null;
   /** Joseph Crackstone's layers (null without him). */
   crack: CrackLayers | null;
+  // ---- final (UX_FINAL §1d)
+  /** Slurp's layers (null without him): rule-based 4 m cells (or zone odds as a fallback), R4 marker, chase. */
+  slurp: SlurpLayers | null;
+  /** "May appear" spawn pins of monsters not on the map (director distribution, p ≥ 5 %). */
+  pins: { enemy: EnemyId; id: string; name: string; x: number; z: number; p: number; cell: OddsCell }[];
+  /** Enterable cabinets (always drawn: `cabinet` glyph 12 px #9cc3d0). */
+  cabinets: Vec2[];
+  /** Principal Weems' L2 mark (ghost glyph). */
+  weemsMark: { x: number; z: number; label: string } | null;
+  /** Minimap lens (the ONE threat layer). */
+  lens: { enemy: EnemyId; inactive: boolean } | null;
   player: PublicMapState['player'];
   chase: boolean;
   flashes: PublicMapState['flashes'];
@@ -131,6 +154,15 @@ export interface CrackLayers {
   marker: { x: number; z: number; yaw: number; coneDeg: number; kind: CrackMarkerKind | 'last'; alpha: number } | null;
   /** Scan ring (only with a live marker): progress 0..1 of the warning, `pulse` after it fired. */
   scan: { x: number; z: number; radiusM: number; progress: number; pulse: boolean } | null;
+  chase: boolean;
+}
+
+/** Slurp layers: 0° line hatch 10 / 6 / 3 px by band (p < .10 not drawn), α .5 + .4p, fill α ≤ .10. */
+export interface SlurpLayers {
+  risk: { band: 0 | 1 | 2; x: number; z: number; sizeM: number; p: number }[];
+  /** Fallback when the analytics has no cells: his zone odds (threat map, active layer). */
+  zones: { band: 0 | 1 | 2; polygon: Vec2[]; p: number }[];
+  marker: { x: number; z: number; yaw: number; kind: 'visible' | 'chase' | 'attack' | 'revealed' } | null;
   chase: boolean;
 }
 
@@ -363,6 +395,46 @@ export function buildMapLayers(s: PublicMapState, mode: MapMode = 'mini'): MapLa
     }
   }
 
+  // ---- Slurp (UX_FINAL §1d): rule-based cells (or his zone odds), R4 marker; % on the player's own cell
+  let slurp: SlurpLayers | null = null;
+  if (s.slurp) {
+    const sf = slurpForecastOf(f);
+    const risk: SlurpLayers['risk'] = [];
+    for (const c of sf?.cells ?? []) {
+      const band = crackBand(c.p);
+      if (band !== null) risk.push({ band, x: c.x, z: c.z, sizeM: c.sizeM ?? 4, p: c.p });
+    }
+    const zonesS: SlurpLayers['zones'] = [];
+    const layer = f?.threat?.enemies?.slurp;
+    if (!risk.length && layer && layer.state === 'active' && w) {
+      for (const z of layer.zones) {
+        const band = crackBand(z.p);
+        const poly = w.zones.find((x) => x.id === z.zoneId)?.polygon;
+        if (band !== null && poly) zonesS.push({ band, polygon: poly, p: z.p });
+      }
+    }
+    slurp = { risk, zones: zonesS, marker: s.slurp.marker, chase: s.slurp.chase };
+    const here = sf?.here;
+    if (here && typeof here.p === 'number' && !here.fact && here.p >= 0.1) {
+      labels.push({ x: s.player.x, z: s.player.z, text: pctText(roundPct(here.p)), priority: 3, color: 'slurp', glyph: 'slurp', dy: 26, id: 'slurp:here' });
+    }
+  }
+
+  // ---- "may appear" pins for monsters not on the map (the director's exact distribution; legacy Hyde rings stay)
+  const pins: MapLayers['pins'] = [];
+  for (const e of Object.keys(s.active ?? {}) as EnemyId[]) {
+    if (s.active?.[e] !== false) continue;
+    if (e === 'hyde' && spawns.length) continue; // pre-emergence rings already show the Hyde's spawns
+    const sp = spawnOddsOf(f, e);
+    if (!sp) continue;
+    const cells = oddsCells(sp.map((x) => ({ p: x.p })), { distribution: true });
+    sp.forEach((x, i) => {
+      if (x.p < 0.05) return;
+      pins.push({ enemy: e, id: x.spawnId, name: x.name, x: x.x, z: x.z, p: x.p, cell: cells[i]! });
+      labels.push({ x: x.x, z: x.z, text: mode === 'full' ? `${x.name} ${cells[i]!.text}` : cells[i]!.text, priority: 3, color: e === 'hyde' ? 'hyde' : e === 'crackstone' ? 'crack' : 'slurp', dy: -14, id: `pin:${e}:${x.spawnId}` });
+    });
+  }
+
   // ---- objective marker + rooms (Tab)
   if (s.target) labels.push({ x: s.target.x, z: s.target.z, text: s.target.label, priority: 0, color: 'lantern', dy: -18, id: 'objective' });
   if (mode === 'full') {
@@ -386,13 +458,18 @@ export function buildMapLayers(s: PublicMapState, mode: MapMode = 'mini'): MapLa
     eggSites,
     eggPin,
     tower: { x: g.tower.x, z: g.tower.z, radius: g.tower.radius, objective: towerObjective },
-    hiding: g.hidingSpots.map((h) => ({ x: h.x, z: h.z })),
+    hiding: g.hidingSpots.filter((h) => !(s.cabinets && h.kind === 'cabinet')).map((h) => ({ x: h.x, z: h.z })),
     lever: w?.passage && (s.leverSeen || inv.passageOpen) ? { x: w.passage.leverX, z: w.passage.leverZ } : null,
     powerSwitch: s.showSwitch && g.powerSwitch ? { x: g.powerSwitch.x, z: g.powerSwitch.z } : null,
     route: s.route,
     objective: s.target,
     hyde,
     crack,
+    slurp,
+    pins,
+    cabinets: s.cabinets ? g.hidingSpots.filter((h) => h.kind === 'cabinet').map((h) => ({ x: h.x, z: h.z })) : [],
+    weemsMark: s.weemsMark ?? null,
+    lens: s.lens ?? null,
     player: s.player,
     chase: s.hyde?.mode === 'chase',
     flashes: s.flashes,

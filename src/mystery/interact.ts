@@ -15,20 +15,23 @@
 // it). The hold needs `interactHeld` on the input (an extension of MysteryInput — see run.ts).
 //
 // PRIORITY: carrying the egg INSIDE the tower radius → the deposit, always (nothing may steal it). Otherwise, among what is
-// within interactRangeM: clue > egg pickup > lever > examine > gate switch > set the egg down (the practice crate only
-// exists in the tutorial, where it is the only target). Within a kind the nearest wins. (No candidate site, examine or
+// within interactRangeM: clue > egg pickup > lever > examine > hiding cabinet (within cabinet.useM, cabinet.ts; the run
+// handles the 'hide' action) > gate switch > set the egg down (the practice crate only exists in the tutorial, where it
+// is the only target). Within a kind the nearest wins. (No candidate site, examine or
 // lever of any case lies within tower radius + interactRangeM — tests/unit/mystery/review.test.ts.)
 // player.interacting mirrors the running timed action for clue / egg pickup / examine / lever (null otherwise).
+import { cabinetInReach } from './cabinet.ts';
 import type { SimContext } from './context.ts';
 import { deliverEgg, dropEgg, inTower, pickUpEgg } from './egg.ts';
 import type { ClueId, ExamineDef, MapDef, PassageDef, Vec2 } from './types.ts';
 
 export const PRACTICE_ID = 'practice_crate';
 
-export type InteractKind = 'clue' | 'egg' | 'tower' | 'lever' | 'examine' | 'switch' | 'practice';
+export type InteractKind = 'clue' | 'egg' | 'tower' | 'lever' | 'examine' | 'switch' | 'practice' | 'cabinet';
 export interface InteractTarget {
   kind: InteractKind; id: string; label: string; x: number; z: number;
-  action: 'search' | 'pickup' | 'deposit' | 'drop' | 'examine' | 'pull' | 'none';
+  /** 'hide' / 'close' / 'exit' = cabinet actions (handled by the run's CabinetController). */
+  action: 'search' | 'pickup' | 'deposit' | 'drop' | 'examine' | 'pull' | 'none' | 'hide' | 'close' | 'exit';
 }
 
 interface Active { kind: 'clue' | 'egg' | 'deposit' | 'practice' | 'examine' | 'lever'; id: string; progress: number; nextNoiseT: number }
@@ -100,6 +103,9 @@ export class Interaction {
       }
     }
     if (best) return best;
+    // 4b. hiding cabinet
+    const cab = cabinetInReach(ctx);
+    if (cab) return { kind: 'cabinet', id: cab.id, label: 'Hide', x: cab.x, z: cab.z, action: 'hide' };
     // 5. gate switch
     const sw = ctx.map.powerSwitch;
     if (sw && Math.hypot(sw.x - p.x, sw.z - p.z) <= R) {
@@ -191,7 +197,7 @@ export class Interaction {
     // hold-E set-down: only while carrying, nothing else is interactable and no timed action runs
     const tg = this.target(ctx, tutorial);
     this.dropHoldS = T.player.eggDropHoldS;
-    if (held && !this.active && tg?.action === 'drop') {
+    if (held && !this.active && tg?.action === 'drop' && !p.cabinet) {
       this.dropHeld += dt;
       if (this.dropHeld >= T.player.eggDropHoldS) {
         this.dropHeld = 0;

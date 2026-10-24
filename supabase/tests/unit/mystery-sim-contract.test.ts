@@ -10,7 +10,7 @@ import {
   MYSTERY_EVENT_TYPES, RULE_EVENT_TYPES, applyBatch, initialProgress, parseEventBatch, ruleFingerprint, type MysteryProgress,
 } from '../../functions/_shared/mystery-events.ts';
 import {
-  computeOffer, computeResult, requireData, requireEggRules, resolveCase, rulesContext,
+  PLAYER_MAX_HP, computeOffer, computeResult, requireData, requireEggRules, resolveCase, rulesContext,
 } from '../../functions/_shared/mystery-rules.ts';
 import { CASE_IDS } from '../../functions/_shared/mystery/types.ts';
 import { scoreFor } from '../../functions/_shared/mystery/scoring.ts';
@@ -86,7 +86,7 @@ describe('real sim episodes are accepted and re-verified by the server rules', (
 // payload shapes of src/mystery/types.ts; the drift test in mystery-overhaul.test.ts pins them). Covers what the bots above do not emit yet: the four
 // Crackstone telemetry types and `curse` (rule R7) — including a curse-caused hp_depleted DNF — through the same
 // upload (parse + reduce in batches) and finalize (rule-event replay + computeResult) path.
-describe('Crackstone + curse events through the server upload / finalize path', () => {
+describe('Crackstone + curse events through the server upload / finalize path (legacy v3.1 shape)', () => {
   const data = requireData();
   const egg = requireEggRules();
   const seed = seedFor(0, 99);
@@ -124,7 +124,8 @@ describe('Crackstone + curse events through the server upload / finalize path', 
   it('every case: a cursed run finishes verified, and a run that dies to curses is a verified hp_depleted DNF', () => {
     for (const caseId of CASE_IDS) {
       const kase = resolveCase(caseId, data.cases[caseId].version);
-      const ctx = rulesContext(seed, kase.caseDef, egg);
+      // legacy v3.1 stream shape (curse without enemy_hit); the v4 shape is covered by mystery-v4.test.ts
+      const ctx = rulesContext(seed, kase.caseDef, egg, PLAYER_MAX_HP, 'mystery-v3.1');
       const tier = ctx.expectedTier!;
       const curseHp = 25;
       // ---- finished: one hit, one blocked hit, one miss; clues, egg, accusation
@@ -144,7 +145,7 @@ describe('Crackstone + curse events through the server upload / finalize path', 
       fin.push({ type: 'finish', verdict: 'case_solved', score: scoreFor(egg.points[tier], at), t: at, seq: seq++ } as StampedEvent);
       const p = upload(fin, ctx);
       expect([p.curses, p.hpLost, p.catches, p.sightings], caseId).toEqual([2, curseHp, 0, 0]);
-      expect(computeResult(p, kase, tier), caseId).toMatchObject({ outcome: 'finished', verdict: 'case_solved', catches: 0, claimMatches: true });
+      expect(computeResult(p, kase, tier, undefined, 'mystery-v3.1'), caseId).toMatchObject({ outcome: 'finished', verdict: 'case_solved', catches: 0, claimMatches: true });
       // ---- dnf: four landed curses of 25 HP (100 = max HP), the dnf emitted right after the last hit
       const dead: StampedEvent[] = [];
       for (let i = 0; i < 4; i++) encounter(dead, 5 + i * 20, { hpLost: curseHp, blocked: false });
@@ -153,7 +154,7 @@ describe('Crackstone + curse events through the server upload / finalize path', 
       const dnfStream = [...dead.slice(0, cut), { type: 'dnf', reason: 'hp_depleted', t: last.t, seq: last.seq + 1 } as StampedEvent];
       const q = upload(dnfStream, ctx);
       expect([q.curses, q.hpLost, q.catches, q.terminal?.type], caseId).toEqual([4, 4 * curseHp, 0, 'dnf']);
-      expect(computeResult(q, kase, tier, { outcome: 'dnf', dnfReason: 'hp_depleted', score: null, caseId }), caseId)
+      expect(computeResult(q, kase, tier, { outcome: 'dnf', dnfReason: 'hp_depleted', score: null, caseId }, 'mystery-v3.1'), caseId)
         .toMatchObject({ outcome: 'dnf', dnfReason: 'hp_depleted', score: null, catches: 0, claimMatches: true });
     }
   });

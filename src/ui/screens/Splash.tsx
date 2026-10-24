@@ -1,8 +1,10 @@
-// Splash (UX_SPEC §3): left column over scrim, 3D boat idling on the right, single Start CTA.
+// Splash (UX_SPEC §3): left column over scrim, 3D backdrop on the right, single Start CTA. Final wave (UX_FINAL §5): an
+// optional right-column `board` (home leaderboard panel) + a topline `boardButton` (shown < 1100 px instead of the
+// panel). Start keeps the initial focus; Enter starts only when focus is neutral (never hijacks another control).
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { TUTORIAL_STEPS } from '../../game/copy.ts';
 import type { BackendMode } from '../../lib/backend.ts';
-import { useHotkeys, useScreenFocus } from '../../app/keyboard.ts';
+import { focusIsNeutral, useHotkeys, useScreenFocus } from '../../app/keyboard.ts';
 import { Button } from '../components/Button.tsx';
 import { Icon } from '../Icon.tsx';
 
@@ -29,6 +31,10 @@ interface SplashProps {
   stepsLabel?: string;
   /** The "Press F for fullscreen" toast (false in the mystery journey: F is the character power). */
   fullscreenHint?: boolean;
+  /** Final wave: the home leaderboard panel (right column; never takes focus). */
+  board?: ReactNode;
+  /** Final wave: the topline trophy button that opens the full board on narrow screens. */
+  boardButton?: ReactNode;
 }
 
 function useNeedsFullscreenHint(): boolean {
@@ -48,14 +54,15 @@ function useNeedsFullscreenHint(): boolean {
 
 export function Splash({
   stationName, mode, tools, notice, restoring, onStart, steps = TUTORIAL_STEPS, footnote, startLabel, subtitle, tagline, emblem,
-  kicker, stepsLabel, fullscreenHint = true,
+  kicker, stepsLabel, fullscreenHint = true, board, boardButton,
 }: SplashProps) {
   const h1 = useRef<HTMLHeadingElement>(null);
   const start = useRef<HTMLButtonElement>(null);
   const needsFullscreen = useNeedsFullscreenHint();
   useScreenFocus(h1, start);
   useHotkeys((key) => {
-    if (key === 'enter' && document.activeElement !== start.current && !restoring) {
+    // Enter on another control (mute, the leaderboard button, …) belongs to that control.
+    if (key === 'enter' && document.activeElement !== start.current && focusIsNeutral(null) && !restoring) {
       onStart();
       return true;
     }
@@ -65,7 +72,7 @@ export function Splash({
     <main className="screen screen--splash scrim-left" data-testid="screen-splash">
       <header className="topline">
         <span className="caps">{stationName}</span>
-        {tools}
+        {boardButton ? <div className="splash__tools">{boardButton}{tools}</div> : tools}
       </header>
       <div className="splash__col">
         <div className={emblem ? 'splash__brand' : undefined}>
@@ -109,8 +116,9 @@ export function Splash({
           </Button>
           <p className="text-2">{footnote ?? 'Most egg points in the least time wins. About 6 minutes.'}</p>
         </div>
-        {mode === 'local_demo' && <p className="caps splash__demo">Local demo: scores aren’t verified or ranked live</p>}
+        {mode === 'local_demo' && !board && <p className="caps splash__demo">Local demo: scores aren’t verified or ranked live</p>}
       </div>
+      {board}
       {fullscreenHint && needsFullscreen && (
         <div className="toast toast--info splash__toast" role="status">
           <Icon name="maximize" />

@@ -96,7 +96,7 @@ select ok((select reloptions from pg_class where oid = t::regclass) @> array['se
 from unnest(array['public.mystery_leaderboard', 'public.mystery_defeated', 'public.mystery_standings']) t;
 select is(
   (select count(*)::int from unnest(array[
-      'public.mystery_create_session(uuid,text,text,text,text,jsonb,boolean,jsonb,jsonb,text)',
+      'public.mystery_create_session(uuid,text,text,text,text,jsonb,boolean,jsonb,jsonb,text,text)', -- + p_rules_version (20261025000100)
       'public.mystery_select_duo(uuid,text,text,text,jsonb)',
       'public.mystery_append_events(uuid,text,integer,jsonb,jsonb,jsonb,jsonb)',
       'public.mystery_finalize_session(uuid,text,integer,jsonb,jsonb)',

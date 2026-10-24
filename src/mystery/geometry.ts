@@ -8,6 +8,8 @@ export interface Collider {
   ax: number; az: number; bx: number; bz: number; // core segment (a point for cover)
   r: number; // capsule radius (half thickness) or cover radius
   low: boolean; // low cover: blocks sight only for a crouching target, movement only if configured
+  /** Final: a hiding cabinet's body — always blocks movement (and, being low, sight only to a crouching target). */
+  solid?: boolean;
   minX: number; maxX: number; minZ: number; maxZ: number; // AABB of the swept shape
 }
 
@@ -104,8 +106,8 @@ export interface Contact { id: string; nx: number; nz: number; depth: number }
 
 /**
  * The static world for one run: walls + cover, with a set of currently open (removed) gate walls.
- * Movement solids = walls + high cover (+ low cover if `lowCoverBlocksMovement`). Sight blockers = walls + high cover;
- * low cover additionally blocks sight to a crouching target.
+ * Movement solids = walls + high cover (+ low cover if `lowCoverBlocksMovement`) + hiding cabinets (always). Sight
+ * blockers = walls + high cover; low cover (and cabinets) additionally block sight to a crouching target.
  */
 export class World {
   readonly walls: Collider[];
@@ -118,7 +120,13 @@ export class World {
 
   constructor(map: MapDef, lowCoverBlocksMovement = false) {
     this.walls = map.walls.map(wallCollider);
-    this.cover = map.cover.map(coverCollider);
+    // hiding cabinets (FINAL_CONTRACT §6) are solid furniture: a low collider that always blocks movement / nav
+    this.cover = [
+      ...map.cover.map(coverCollider),
+      ...map.hidingSpots.filter((h) => h.kind === 'cabinet').map((h) => ({
+        ...coverCollider({ id: h.id, x: h.x, z: h.z, radius: h.radius, height: 'low', kind: 'crate' }), solid: true,
+      })),
+    ];
     this.bounds = map.bounds;
     this.lowBlocks = lowCoverBlocksMovement;
   }
@@ -143,7 +151,7 @@ export class World {
   solids(): Collider[] {
     const out: Collider[] = [];
     for (const w of this.walls) if (!this.open.has(w.id)) out.push(w);
-    for (const c of this.cover) if (!c.low || this.lowBlocks) out.push(c);
+    for (const c of this.cover) if (!c.low || this.lowBlocks || c.solid) out.push(c);
     return out;
   }
 

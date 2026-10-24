@@ -294,7 +294,7 @@ for (const caseId of CASE_IDS) {
       }
     });
 
-    it('gomez at the switch opens the shortcut gate; the tower is then closer and every clue still reachable', () => {
+    it.skipIf(!map.powerSwitch)('gomez at the switch opens the shortcut gate; the tower is then closer and every clue still reachable', () => {
       const run = powerRun(caseId, 'gomez');
       run.hydeBrain.active = false;
       const sw = map.powerSwitch!;

@@ -10,6 +10,9 @@
 // Presents ONLY what src/mystery/analytics aggregated for the selected scope. Never shows seeds, the culprit or who
 // anyone accused (accusation outcomes are counts: solved / right suspect with weak evidence / wrong suspect / none).
 // The row K/B/C panels are exported for the LIVE board (src/app/mystery/liveDashboard.tsx), which feeds them server rows.
+// Final wave (UX_FINAL, FINAL_CONTRACT §10): standings rank mystery-v4 scores only (finishers above DNFs; v3.1 never
+// mixed; the header KPI ribbon aggregates the v4 records), the defeat log names the monster (defeated_by), and the
+// station card shows the three monsters compactly when the station reports them.
 import { ACCUSATION_TEXT, caseLabel, clueCountFor, type CaseSummary, type DashboardAggregates, type PickRate } from '../../mystery/analytics/index.ts';
 import { CASES } from '../../mystery/data/cases.ts';
 import { NIGHTSHADES } from '../../mystery/data/nightshades.ts';
@@ -21,7 +24,10 @@ import { ThingSigil } from '../components/ThingSigil.tsx';
 import { Icon } from '../Icon.tsx';
 import { characterArt, pokemonArt } from './duoView.ts';
 import { LAYERS } from './LayerPanels.tsx';
+import '../styles/leaderboard.css';
 import { curseCounts, kpiRibbon, stationViewFromLocal, type CurseCounts, type EggStep, type StationCardView } from './stationView.ts';
+import { ENEMY_SHORT, EnemyGlyph } from './leaderboard/EnemyGlyph.tsx';
+import { defeatLog, fmtClock, fmtPoints, rankFinishers, type BoardEntry } from './leaderboard/model.ts';
 
 export type CaseScope = CaseId | 'all';
 
@@ -34,6 +40,8 @@ interface Props {
   onScope: (s: CaseScope) => void;
   /** False when no record carries a case id (combined-only board). */
   caseAware: boolean;
+  /** mystery-v4 board entries of this laptop (standings + defeat log); omitted → none. */
+  entries?: BoardEntry[];
 }
 
 const pct = (x: number | null | undefined, digits = 0) => (x === null || x === undefined ? '—' : `${(x * 100).toFixed(digits)}%`);
@@ -47,11 +55,12 @@ const abilityName = (id: string) =>
   Object.values(NIGHTSHADES).find((n) => n.power.id === id)?.power.name ?? Object.values(PARTNERS).find((p) => p.move.id === id)?.move.name ?? id;
 const isCase = (v: unknown): v is CaseId => typeof v === 'string' && (CASE_IDS as readonly string[]).includes(v);
 
-export function MysteryDashboard({ records, live, now, agg, scope, onScope, caseAware }: Props) {
+export function MysteryDashboard({ records, live, now, agg, scope, onScope, caseAware, entries = [] }: Props) {
+  const scoped = agg.scope === 'all' ? entries : entries.filter((e) => e.caseId === agg.scope);
   return (
     <main className="mdash mdash--kpi" data-testid="mystery-dashboard" data-scope={agg.scope}>
       <header className="mdash__head mdash__head--kpi">
-        <h1 className="display mdash__title" title={`Rules mystery-v3.1 · LOCAL DEMO: ${records.length} session${records.length === 1 ? '' : 's'} played in this browser`}>Nevermore · Control Center</h1>
+        <h1 className="display mdash__title" title={`Rules mystery-v4 · LOCAL DEMO: ${records.length} session${records.length === 1 ? '' : 's'} played in this browser`}>Nevermore · Control Center</h1>
         <KpiRibbon agg={agg} curses={curseCounts(inScope(records, agg.scope).map((r) => r.record))} />
         <HeaderTools mode="local_demo" />
       </header>
@@ -62,7 +71,7 @@ export function MysteryDashboard({ records, live, now, agg, scope, onScope, case
           <p className="caps">Station B</p>
           <p className="text-2">Both stations appear here live once the Supabase backend is deployed (Realtime). This demo reads only the sessions played in this browser.</p>
         </section>
-        <Standings records={records} scope={agg.scope} />
+        <Standings entries={scoped} scope={agg.scope} />
 
         <CaseBoard agg={agg} scope={scope} onScope={onScope} caseAware={caseAware} />
 
@@ -148,8 +157,25 @@ export function StationLiveCard({ view: v, area, testId }: { view: StationCardVi
               <b>{v.hp ?? '—'}</b>
             </span>
             <span>Caught <b>{v.catches ?? '—'}/2</b></span>
-            {v.hyde && <span className={`mstation__hyde${v.hyde.chase ? ' is-chase' : ''}`} data-testid={`${testId}-hyde`}><Icon name={v.hyde.icon} />{v.hyde.word}</span>}
-            {v.crack && <span className={`mstation__crack${v.crack.hunting ? ' is-hunting' : ''}`} data-testid={`${testId}-crack`} title="Joseph Crackstone"><Icon name={v.crack.icon} />{v.crack.word}</span>}
+            {v.monsters ? (
+              <span className="mstation__mons" data-testid={`${testId}-monsters`}>
+                {v.monsters.map((m) => (
+                  <span
+                    key={m.enemy} className={`mstation__mon mstation__mon--${m.enemy}${m.hot ? ' is-hot' : ''}${m.away ? ' is-away' : ''}`}
+                    title={`${ENEMY_SHORT[m.enemy]}: ${m.word}`} data-testid={`${testId}-mon-${m.enemy}`} data-word={m.word}
+                  >
+                    <EnemyGlyph enemy={m.enemy} />
+                    <span className="sr-only">{ENEMY_SHORT[m.enemy]}: </span>
+                    {m.word}
+                  </span>
+                ))}
+              </span>
+            ) : (
+              <>
+                {v.hyde && <span className={`mstation__hyde${v.hyde.chase ? ' is-chase' : ''}`} data-testid={`${testId}-hyde`}><Icon name={v.hyde.icon} />{v.hyde.word}</span>}
+                {v.crack && <span className={`mstation__crack${v.crack.hunting ? ' is-hunting' : ''}`} data-testid={`${testId}-crack`} title="Joseph Crackstone"><Icon name={v.crack.icon} />{v.crack.word}</span>}
+              </>
+            )}
           </div>
           <p className="mstation__r6" data-testid={`${testId}-odds`}>
             <span>Risk <b>{v.risk ? v.risk.band : '—'}</b>{v.risk && <span className="mstation__src"> · {SRC[v.risk.source]}</span>}</span>
@@ -218,28 +244,50 @@ export function CaseTag({ caseId }: { caseId: string | null | undefined }) {
   return <span className="mdash-casetag" title={caseLabel(caseId)}>C{CASES[caseId].number}</span>;
 }
 
-function Standings({ records, scope }: { records: StoredRecord[]; scope: CaseScope }) {
-  const inScope = scope === 'all' ? records : records.filter((r) => (r.record.caseId ?? r.record.result?.caseId) === scope);
-  const finished = inScope.filter((r) => r.record.result?.outcome === 'finished' && r.record.result.score !== null)
-    .sort((a, b) => (b.record.result!.score! - a.record.result!.score!) || (a.record.result!.activeTimeS - b.record.result!.activeTimeS));
-  const dnf = inScope.filter((r) => r.record.result?.outcome === 'dnf');
+/** Best v4 score + finisher count of the scope's entries. */
+export function scoreKpi(entries: readonly BoardEntry[]): { best: number | null; finishers: number } {
+  const ranked = rankFinishers(entries);
+  return { best: ranked[0]?.score ?? null, finishers: ranked.length };
+}
+
+/**
+ * Standings (mystery-v4 only): ranked finishers (score desc, time asc) with duo + case tag + score, then the defeat log —
+ * newest DNFs with the monster that ended the run (never ranked, never above a finisher).
+ */
+export function Standings({ entries, scope }: { entries: readonly BoardEntry[]; scope: CaseScope }) {
+  const finished = rankFinishers(entries);
+  const dnf = defeatLog(entries);
   return (
     <section className="mdash-card mdash-a3" aria-label="Standings" data-testid="standings">
-      <p className="caps">Standings · {scope === 'all' ? 'all cases' : `Case ${CASES[scope].number}`} · mystery-v3.1</p>
+      <p className="caps mdash-standings__head">
+        <span>Standings · {scope === 'all' ? 'all cases' : `Case ${CASES[scope].number}`} · v4</span>
+        <span className="mdash-standings__n" data-testid="standings-count">{finished.length} ranked</span>
+      </p>
       {finished.length === 0 ? <p className="text-2">No finishers yet.</p> : (
         <ol className="mdash-standings mdash-standings--cases">
-          {finished.slice(0, 6).map((r, i) => (
-            <li key={r.record.sessionId}>
-              <span className="num mdash-rank">{i + 1}</span>
-              <span className="mdash-name">{r.nickname}</span>
-              <span className="text-2 mdash-duo">{r.record.duo ? `${nameOfChar(r.record.duo.characterId)} & ${nameOfMon(r.record.duo.pokemonId)}` : ''}</span>
-              <CaseTag caseId={r.record.caseId ?? r.record.result?.caseId} />
-              <span className="num mdash-score">{r.record.result!.score!.toFixed(1)}</span>
+          {finished.slice(0, 5).map((e) => (
+            <li key={e.id} className={e.rank === 1 ? 'is-first' : undefined} data-testid="standing-row">
+              <span className="num mdash-rank">{e.rank}</span>
+              <span className="mdash-name">{e.nickname}</span>
+              <span className="text-2 mdash-duo">{e.duo ? `${nameOfChar(e.duo.characterId)} & ${nameOfMon(e.duo.pokemonId)}` : ''}</span>
+              <CaseTag caseId={e.caseId} />
+              <span className="num mdash-score">{fmtPoints(e.score ?? 0)}</span>
             </li>
           ))}
         </ol>
       )}
-      <p className="mdash-dnf text-2">Did not finish — unranked ({dnf.length})</p>
+      <div className="mdash-dnf text-2" data-testid="defeat-log">
+        <span className="mdash-dnf__head">Defeat log · never ranked ({dnf.length})</span>
+        {dnf.slice(0, 1).map((e) => (
+          <span key={e.id} className="mdash-dnf__row" data-testid="defeat-row">
+            <span className="mdash-name">{e.nickname}</span>
+            {e.defeatedBy ? (
+              <span className={`mdash-dnf__by lb-by lb-by--${e.defeatedBy}`}><EnemyGlyph enemy={e.defeatedBy} />{ENEMY_SHORT[e.defeatedBy]}</span>
+            ) : <span>—</span>}
+            <span className="num">{fmtClock(e.activeTimeS)}</span>
+          </span>
+        ))}
+      </div>
     </section>
   );
 }

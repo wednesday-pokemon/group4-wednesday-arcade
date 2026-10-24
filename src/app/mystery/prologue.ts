@@ -45,7 +45,7 @@ export const PROLOGUE_PANELS: readonly ProloguePanel[] = [
   },
   {
     id: 'suspects', title: 'Three Suspects', pose: 'count3', cue: null, durationS: 5,
-    narration: 'Marilyn Thornhill. Isaac Night. Barry Dort. Their stories cannot all be true.',
+    narration: 'Marilyn Thornhill. Françoise Galpin. Barry Dort. Their stories cannot all be true.',
   },
   {
     id: 'hyde', title: 'Something Listens', pose: 'shush', cue: 'heartbeat', durationS: 5, warning: STAY_SILENT_LINE,
@@ -62,6 +62,8 @@ export function prologuePanels(caseDef: CaseDef): ProloguePanel[] {
   return PROLOGUE_PANELS.map((p) => {
     if (p.id === 'death') return { ...p, title: caseDef.prologue.death.title, narration: caseDef.prologue.death.narration };
     if (p.id === 'egg') return { ...p, title: caseDef.prologue.egg.title, narration: caseDef.prologue.egg.narration };
+    // the case's own suspects (final: Thornhill, Galpin, Barry — Isaac Night is the Slurp monster, not a suspect)
+    if (p.id === 'suspects' && caseDef.suspects.length) return { ...p, narration: `${caseDef.suspects.map((x) => `${x.name}.`).join(' ')} Their stories cannot all be true.` };
     return p;
   });
 }

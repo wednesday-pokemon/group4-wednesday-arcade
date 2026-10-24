@@ -81,7 +81,7 @@ for (const caseId of CASE_IDS) {
       const all = mentionCounts(def, clues);
       expect(all[sol.culprit]).toBe(3);
       for (const s of SUSPECT_IDS.filter((x) => x !== sol.culprit)) expect(all[s]).toBe(1);
-      expect(mentionCounts(def, [])).toEqual({ thornhill: 0, isaac: 0, barry: 0 });
+      expect(mentionCounts(def, [])).toEqual({ thornhill: 0, galpin: 0, barry: 0 });
     });
   });
 }

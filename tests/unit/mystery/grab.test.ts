@@ -79,9 +79,12 @@ describe('grab / catch', () => {
     placeHyde(run, run.player.x, run.player.z - 1.2, SOUTH_FACING);
     run.hyde.mode = 'CHASE';
     const ev = hold(run, 1.5);
-    expect(ev.find((e) => e.type === 'dnf')).toMatchObject({ reason: 'second_catch' });
+    expect(ev.find((e) => e.type === 'dnf')).toMatchObject({ reason: 'second_catch', by: 'hyde' });
     expect(run.status).toBe('dnf');
-    expect(run.result()).toMatchObject({ outcome: 'dnf', dnfReason: 'second_catch', score: null, verdict: 'not_accused' });
+    expect(run.result()).toMatchObject({ outcome: 'dnf', dnfReason: 'second_catch', score: null, verdict: 'not_accused', defeatedBy: 'hyde', hits: 2, scoreBreakdown: null });
+    // every grab is an enemy_hit (rule event), next to its catch
+    expect(run.log.filter((e) => e.type === 'enemy_hit').map((e) => (e as { enemy: string }).enemy)).toEqual(['hyde', 'hyde']);
+    expect(run.death()).toMatchObject({ enemy: 'hyde', durationS: 3.2 });
   });
 
   it('HP 0 → DNF (hp_depleted) even on the first catch', () => {

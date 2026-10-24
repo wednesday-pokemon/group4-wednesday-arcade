@@ -1,13 +1,15 @@
-// Wire shapes of the mystery-v3.1 contract (docs/SUPABASE_SETUP.md §12.3) and pure mappers to the app's domain types.
+// Wire shapes of the mystery contract (docs/SUPABASE_SETUP.md §12.3; mystery-v4 since FINAL_CONTRACT §1 / §10 — v3.1 rows stay
+// readable) and pure mappers to the app's domain types.
 // No supabase-js import: this module is shared by the station adapter, the dashboard feed and the tests.
 import { isStationId } from '../../game/index.ts';
 import type { StationId } from '../../game/index.ts';
 import { eventFromRow } from '../../mystery/analytics/telemetry.ts';
 import { FORECAST_TARGETS, type ForecastTarget, type SessionRecord } from '../../mystery/analytics/types.ts';
 import type {
-  CaseId, ClueId, DnfReason, Duo, DuoCard, DuoOffer, EggState, NightshadeId, RunResult, SuspectId, Verdict,
+  CaseId, ClueId, DnfReason, Duo, DuoCard, DuoOffer, EggState, EnemyId, MysteryRulesVersion, NightshadeId, RunResult, ScoreBreakdown, SuspectId,
+  Verdict,
 } from '../../mystery/types.ts';
-import { CASE_IDS, NIGHTSHADE_IDS, SUSPECT_IDS } from '../../mystery/types.ts';
+import { CASE_IDS, ENEMY_IDS, MYSTERY_RULES_VERSION, NIGHTSHADE_IDS, SUSPECT_IDS } from '../../mystery/types.ts';
 import { isCaseId } from '../../mystery/data/cases.ts';
 import type { PokemonId } from '../../game/types.ts';
 import { BackendError } from '../backend.ts';
@@ -30,7 +32,7 @@ export interface MysteryProgressSummary {
 export interface MysterySessionView {
   sessionId: string;
   stationId: StationId;
-  rulesVersion: 'mystery-v3.1';
+  rulesVersion: MysteryRulesVersion;
   status: MysteryStatus;
   abandonedReason: MysteryAbandonReason | null;
   seed: string;
@@ -55,7 +57,7 @@ export interface MysterySessionView {
  */
 export interface MysteryResultView {
   sessionId: string;
-  rulesVersion: 'mystery-v3.1';
+  rulesVersion: MysteryRulesVersion;
   caseId: CaseId;
   caseVersion: number;
   outcome: 'finished' | 'dnf';
@@ -76,6 +78,13 @@ export interface MysteryResultView {
   catches: number;
   sightings: number;
   hintsUsed: number;
+  /** mystery-v4: server-counted enemy_detected / enemy_hit events (null on v3.1 rows). */
+  detections: number | null;
+  hits: number | null;
+  /** DNF only (v4): the monster that ended the run. */
+  defeatedBy: EnemyId | null;
+  /** mystery-v4 finishers: every score part (null for DNFs / v3.1). */
+  scoreBreakdown: ScoreBreakdown | null;
   duo: Duo;
   nickname: string;
   stationId: StationId;
@@ -202,7 +211,7 @@ export function parseResult(raw: unknown): MysteryResultView {
   if (r.accused !== null && r.accused !== undefined && !isSuspect(r.accused)) bad('result.accused');
   return {
     sessionId: str(r.sessionId, 'result.sessionId'),
-    rulesVersion: 'mystery-v3.1',
+    rulesVersion: rulesVersionOf(r.rulesVersion),
     caseId: caseIdOf(r.caseId, 'result.caseId'),
     caseVersion: caseVersionOf(r.caseVersion, 'result.caseVersion'),
     outcome,
@@ -221,6 +230,10 @@ export function parseResult(raw: unknown): MysteryResultView {
     catches: num(r.catches, 'result.catches'),
     sightings: Number(r.sightings ?? 0),
     hintsUsed: Number(r.hintsUsed ?? 0),
+    detections: countOrNull(r.detections),
+    hits: countOrNull(r.hits),
+    defeatedBy: (ENEMY_IDS as readonly unknown[]).includes(r.defeatedBy) ? r.defeatedBy as EnemyId : null,
+    scoreBreakdown: breakdownOf(r.scoreBreakdown),
     duo: { characterId: duo.characterId, pokemonId: duo.pokemonId as PokemonId },
     nickname: typeof r.nickname === 'string' ? r.nickname : '',
     stationId: r.stationId,
@@ -246,7 +259,7 @@ export function parseSessionView(raw: unknown): MysterySessionView {
   return {
     sessionId: str(s.sessionId, 'session.sessionId'),
     stationId: s.stationId,
-    rulesVersion: 'mystery-v3.1',
+    rulesVersion: rulesVersionOf(s.rulesVersion),
     status: s.status as MysteryStatus,
     abandonedReason: (s.abandonedReason ?? null) as MysteryAbandonReason | null,
     seed,
@@ -327,7 +340,7 @@ export function parseFinalize(raw: unknown): MysteryFinalizeResponse {
  */
 export function serverRunResult(server: MysteryResultView, local: RunResult | null): RunResult {
   return {
-    rulesVersion: 'mystery-v3.1',
+    rulesVersion: server.rulesVersion,
     caseId: server.caseId,
     caseVersion: server.caseVersion,
     outcome: server.outcome,
@@ -346,7 +359,37 @@ export function serverRunResult(server: MysteryResultView, local: RunResult | nu
     catches: server.catches,
     hp: local?.hp ?? 0,
     duo: server.duo,
+    hintsUsed: server.hintsUsed,
+    ...(server.detections !== null ? { detections: server.detections } : {}),
+    ...(server.hits !== null ? { hits: server.hits } : {}),
+    defeatedBy: server.defeatedBy,
+    scoreBreakdown: server.scoreBreakdown,
   };
+}
+
+/** A rules version the app knows ('mystery-v3.1' rows stay readable); anything else = this build's version. */
+export function rulesVersionOf(v: unknown): MysteryRulesVersion {
+  return v === 'mystery-v3.1' || v === 'mystery-v4' ? v : MYSTERY_RULES_VERSION;
+}
+
+function countOrNull(v: unknown): number | null {
+  const n = typeof v === 'string' ? Number(v) : v;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+const BREAKDOWN_KEYS = ['delivery', 'accusation', 'clues', 'noDetection', 'noHints', 'timeBonus', 'hintPenalty', 'hitPenalty', 'total'] as const;
+
+/** A ScoreBreakdown with every part a finite number, else null. */
+export function breakdownOf(v: unknown): ScoreBreakdown | null {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const out = {} as Record<(typeof BREAKDOWN_KEYS)[number], number>;
+  for (const k of BREAKDOWN_KEYS) {
+    const n = Number(o[k]);
+    if (!Number.isFinite(n)) return null;
+    out[k] = n;
+  }
+  return out as ScoreBreakdown;
 }
 
 // ------------------------------------------------------------------------------------------------- public rows
@@ -402,10 +445,17 @@ export interface MysteryStandingRow {
   clue_count: number;
   catches: number;
   finalized_at: string;
+  // ---- mystery-v4 (mystery_standings_v4; absent on rows rebuilt from older payloads)
+  defeated_by?: EnemyId | null;
+  hints_used?: number | null;
+  detections?: number | null;
+  hits?: number | null;
 }
 
+/** The v4 standings view (finishers ranked above DNFs; v3.1 rows never mixed in — FINAL_CONTRACT §10). */
+export const MYSTERY_STANDINGS_VIEW = 'mystery_standings_v4';
 export const MYSTERY_STANDING_COLUMNS =
-  'standing_group,rank,case_rank,session_id,nickname,station_id,case_id,case_version,character_id,pokemon_id,outcome,dnf_reason,score,active_time_s,verdict,correct,deduction_correct,clue_count,catches,finalized_at';
+  'standing_group,rank,case_rank,session_id,nickname,station_id,case_id,case_version,character_id,pokemon_id,outcome,dnf_reason,score,active_time_s,verdict,correct,deduction_correct,clue_count,catches,finalized_at,defeated_by,hints_used,detections,hits';
 
 /**
  * Public columns of `public.mystery_results` the dashboard needs. `accused`, `evidence` and `client_claim` are NOT
@@ -434,10 +484,15 @@ export interface MysteryResultRow {
   hints_used: number;
   is_test: boolean;
   finalized_at: string;
+  // ---- mystery-v4 (migration 20261025000100; null on v3.1 rows)
+  rules_version: MysteryRulesVersion;
+  detections: number | null;
+  hits: number | null;
+  defeated_by: EnemyId | null;
 }
 
 export const MYSTERY_RESULT_COLUMNS =
-  'session_id,station_id,nickname,character_id,pokemon_id,case_id,case_version,outcome,dnf_reason,verdict,correct,deduction_correct,clues_found,egg_tier,egg_points,active_time_s,score,catches,sightings,hints_used,is_test,finalized_at';
+  'session_id,station_id,nickname,character_id,pokemon_id,case_id,case_version,outcome,dnf_reason,verdict,correct,deduction_correct,clues_found,egg_tier,egg_points,active_time_s,score,catches,sightings,hints_used,is_test,finalized_at,rules_version,detections,hits,defeated_by';
 
 const RESULT_KEYS = MYSTERY_RESULT_COLUMNS.split(',') as (keyof MysteryResultRow)[];
 
@@ -455,6 +510,8 @@ export function publicResultRow(raw: unknown): MysteryResultRow | null {
   out.deduction_correct = r.deduction_correct === true;
   out.correct = r.correct === true;
   out.is_test = r.is_test === true;
+  out.rules_version = rulesVersionOf(r.rules_version ?? 'mystery-v3.1');
+  out.defeated_by = (ENEMY_IDS as readonly unknown[]).includes(r.defeated_by) ? r.defeated_by : null;
   return out as unknown as MysteryResultRow;
 }
 
@@ -525,6 +582,7 @@ export function standingFromResult(r: MysteryResultRow): MysteryStandingRow {
     station_id: r.station_id, case_id: r.case_id, case_version: r.case_version, character_id: r.character_id, pokemon_id: r.pokemon_id,
     outcome: r.outcome, dnf_reason: r.dnf_reason, score: r.score, active_time_s: r.active_time_s, verdict: r.verdict, correct: r.correct,
     deduction_correct: r.deduction_correct === true, clue_count: r.clues_found?.length ?? 0, catches: r.catches, finalized_at: r.finalized_at,
+    defeated_by: r.defeated_by ?? null, hints_used: r.hints_used ?? null, detections: r.detections ?? null, hits: r.hits ?? null,
   };
 }
 
@@ -545,6 +603,8 @@ export type HeartbeatPhase = (typeof HEARTBEAT_PHASES)[number];
 const HYDE_MODES = ['PATROL', 'INVESTIGATE_SOUND', 'SEARCH', 'CHASE', 'COOLDOWN'] as const;
 /** Joseph Crackstone's modes (types.ts CrackstoneMode) — enum only on the wire, never his position. */
 const CRACKSTONE_MODES = ['PATROL', 'INVESTIGATE', 'CHASE', 'ATTACK', 'SEARCH', 'RETURN'] as const;
+/** Slurp's modes (types.ts SlurpMode) — enum only on the wire, never his position. */
+const SLURP_MODES = ['WANDER', 'INVESTIGATE', 'CHASE', 'ATTACK', 'SEARCH', 'LEAVE'] as const;
 const EGG_STATES = ['resting', 'carried', 'dropped', 'delivered'] as const;
 const EGG_TIERS = ['common', 'rare', 'legendary'] as const;
 const SYNC_STATES = ['idle', 'live', 'offline', 'unverified', 'closed', 'reset'] as const;
@@ -604,6 +664,24 @@ export interface MysteryHeartbeat {
   crackstoneEscapes?: number | null;
   /** Rule-based P(he sees the visitor's spot within 10 s). */
   crackstoneRisk?: number | null;
+  // ---- final (FINAL_CONTRACT §4–§6, §10; optional on the wire — older stations send none). Enums + counts only.
+  /** Director: each enemy on the map right now (false = away / not spawned yet). */
+  hydeActive?: boolean | null;
+  crackstoneActive?: boolean | null;
+  slurpPresent?: boolean | null;
+  slurpActive?: boolean | null;
+  slurpMode?: (typeof SLURP_MODES)[number] | null;
+  slurpChase?: boolean | null;
+  slurpChases?: number | null;
+  slurpEscapes?: number | null;
+  /** Rule-based P(Slurp finds the visitor within 15 s). */
+  slurpRisk?: number | null;
+  /** Exact rule-event counts (Weems hints, detections, hits) — the tally the score uses. */
+  hintsUsed?: number | null;
+  detections?: number | null;
+  hits?: number | null;
+  /** Inside a hiding cabinet: door 'open' / 'closed'. */
+  cabinet?: 'open' | 'closed' | null;
 }
 
 function oneOf<T extends string>(list: readonly T[], v: unknown): T | null {
@@ -614,6 +692,10 @@ function clamp(v: unknown, lo: number, hi: number, digits = 1): number | null {
   if (typeof v !== 'number' || !Number.isFinite(v)) return null;
   const f = 10 ** digits;
   return Math.round(Math.min(hi, Math.max(lo, v)) * f) / f;
+}
+
+function bool(v: unknown): boolean | null {
+  return typeof v === 'boolean' ? v : null;
 }
 
 function token(v: unknown): string | null {
@@ -677,6 +759,19 @@ export function parseHeartbeat(raw: unknown): MysteryHeartbeat | null {
     crackstoneChases: clamp(h.crackstoneChases, 0, 999, 0),
     crackstoneEscapes: clamp(h.crackstoneEscapes, 0, 999, 0),
     crackstoneRisk: clamp(h.crackstoneRisk, 0, 1, 2),
+    hydeActive: bool(h.hydeActive),
+    crackstoneActive: bool(h.crackstoneActive),
+    slurpPresent: bool(h.slurpPresent),
+    slurpActive: bool(h.slurpActive),
+    slurpMode: oneOf(SLURP_MODES, h.slurpMode),
+    slurpChase: bool(h.slurpChase),
+    slurpChases: clamp(h.slurpChases, 0, 999, 0),
+    slurpEscapes: clamp(h.slurpEscapes, 0, 999, 0),
+    slurpRisk: clamp(h.slurpRisk, 0, 1, 2),
+    hintsUsed: clamp(h.hintsUsed, 0, 999, 0),
+    detections: clamp(h.detections, 0, 999, 0),
+    hits: clamp(h.hits, 0, 999, 0),
+    cabinet: h.cabinet === 'open' || h.cabinet === 'closed' ? h.cabinet : null,
   };
 }
 

@@ -21,12 +21,13 @@ import type { Accusation, CaseDef, ClueId, Duo, InvestigationState, StampedEvent
 import { mapGeometry, type MapTarget, type PublicMapState } from '../../ui/mystery/map/mapData.ts';
 import { headingDeg, relBearingDeg } from '../../ui/mystery/map/mapRender.ts';
 import { announce } from '../announce.tsx';
-import { audio, type ThreatSource } from '../audio.ts';
+import { audio, type Sfx, type ThreatSource } from '../audio.ts';
 import { getSettings, useSettings } from '../settings.ts';
 import { heardBearing } from './hud/compass.ts';
 import { HintLadder, HINT_SHOW_S, ladderPaused } from './hud/hintLadder.ts';
 import { buildNavFeed, mapFeedKey, type NavFeed } from './hud/navFeed.ts';
-import { buildOdds, OddsDeltaTracker, oddsPhase, type OddsView } from './hud/oddsModel.ts';
+import { OddsDeltaTracker } from './hud/oddsModel.ts';
+import { FinalHud, type FinalRunLike, type SceneDeathApi } from './hud/finalHud.ts';
 import { deltaText } from '../../ui/mystery/odds.ts';
 import {
   AlertLimiter, CHASE_WHY, CRACK_HEAD, CrackThreatHold, ESCAPE_WHY, TelegraphTracker, crackHudView, crackMapState, crackMarkerKind, crackPillKey,
@@ -34,11 +35,10 @@ import {
 } from './hud/crackstone.ts';
 import { THING } from '../../mystery/data/thing.ts';
 import { thing as thingLines } from './thingLines.ts';
-import { distToPolygon } from '../../ui/mystery/map/mapData.ts';
 import { hydeEmergedOf, hydeVisibleOf, investigationOf, lineOfSightOf, routeOf } from './hud/publicRun.ts';
 import { stackKindOf, ThingStack, type StackItem } from './hud/thingStack.ts';
 import {
-  buildHud, CaptionLog, captionFor, clueCardContent, directionOf, hudRenderKey, NoiseMeter, noiseBand, objectiveText, RiskHold, ThreatHold, threatEdgePoint,
+  buildHud, CaptionLog, captionFor, clueCardContent, directionOf, effectChip, hudRenderKey, NoiseMeter, noiseBand, objectiveText, RiskHold, ThreatHold, threatEdgePoint,
   type AbilityMeta, type ClueCardView, type ExamineToastView, type HudExtras, type MysteryHudModel, type StackView, type Toast,
 } from './hudModel.ts';
 import { IDLE_INPUT, MysteryInputController, type MysteryFrameInput } from './input.ts';
@@ -67,8 +67,6 @@ const BOARD_LOCK_TOAST_S = 1.2;
 const LIVE_EVERY_S = 0.33;
 /** Station status (localStorage + LIVE hooks) cadence. */
 const STATUS_EVERY_S = 1;
-/** Odds panel render cadence (≤ 1 Hz, UX §7.6). */
-const ODDS_EVERY_S = 1;
 /** Seen-tracker / visibility / shimmer cadence. */
 const SLOW_EVERY_S = 0.25;
 const CLUE_CARD_S = 6;
@@ -129,6 +127,18 @@ export interface MysteryLoopHandle {
   mapState: () => PublicMapState | null;
   /** Latest live analytics sample (forecasts + current advice), null before the first / without the API. */
   liveAnalytics: () => LiveAnalytics | null;
+  /** Ask Weems button (same flow as V): note / paid hint / no-op without a charge. */
+  askWeems: () => void;
+  /** Death sequence: skip the cutscene (keydown timeStamp on the keyboard clock, or a click). */
+  skipDeath: (input: { startedAt: number; repeat?: boolean; click?: boolean }) => boolean;
+  /** Death card "See results". */
+  deathContinue: () => void;
+  /** A death sequence is running (input lock; Esc skips instead of pausing). */
+  dying: () => boolean;
+  /** Principal Weems' hints given this run (Tab -> "Weems' hints (n)"). */
+  weemsHints: () => readonly { level: 1 | 2 | 3; text: string }[];
+  /** Accusation step: "Ask Weems (-50)" (run.requestHint() applies at once there); undefined when the sim has no API. */
+  accuseWeems: (() => void) | undefined;
   debug: () => object | null;
   advance: (ms: number) => void;
 }
@@ -165,6 +175,8 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
     nav: () => NavFeed | null;
     mapState: () => PublicMapState | null;
     live: () => LiveAnalytics | null;
+    final: FinalHud;
+    now: () => number;
   } | null>(null);
   const debugRef = useRef<(() => object) | null>(null);
   const advanceRef = useRef<((ms: number) => void) | null>(null);
@@ -290,9 +302,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       let emerged = hydeEmergedOf(run, inv);
       let hydeVisible = false;
       let nextSlowAt = 0;
-      let nextOddsAt = 0;
       let obsEpoch = 0;
-      let odds: OddsView = { phase: 'hidden', groups: [], footer: [] };
       let clueCard: { v: Omit<ClueCardView, 'leaving'>; shownAt: number; until: number } | null = null;
       let examine: { v: ExamineToastView; until: number; trace: { siteId: string; before: number | undefined; label: string } | null } | null = null;
       let lastEmptyToastAt = -Infinity;
@@ -331,10 +341,37 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       let crackAnnouncedAt: number | null = null;
       let crackIntroAt: number | null = null;
       let heardCrack: { bearing: number; until: number } | null = null;
+      let heardSlurp: { bearing: number; until: number } | null = null;
       let crackEscapes = 0;
       let crackChases = 0;
       let hydeChases = 0;
       let lastEdge: MysteryHudModel['threatEdge'] = null;
+      // ---- final HUD (UX_FINAL): threats strip, Odds v3, lens, tally, cabinet, Weems, death sequence
+      let endCalled = false;
+      let deathDone = false;
+      const endRun = () => {
+        if (endCalled || !reported) return;
+        endCalled = true;
+        opts.current.onEnded(run, analytics);
+      };
+      const final = new FinalHud(run as unknown as FinalRunLike, scene as unknown as SceneDeathApi, analytics, {
+        caption: (text, tone) => captions.push({ text, tone, dir: null }, realT),
+        announce: (text, mode) => announce(text, mode),
+        sound: (name) => audio.play(name as Sfx),
+        why: (id, head, text) => say({ id, kind: 'why', head, text, priority: 5, basis: 'rule' }),
+        catchFlash: () => {
+          catchFlashSeq++;
+        },
+        flashAreas: (target) => {
+          for (const a of world?.areas ?? []) {
+            if (!target || Math.hypot(a.x - target.x, a.z - target.z) <= a.radiusM + 2) flash({ kind: 'reveal', x: a.x, z: a.z, t0: run.t });
+          }
+        },
+        deathContinue: () => {
+          deathDone = true;
+          endRun();
+        },
+      });
 
       const showToast = (t: Omit<Toast, 'id'>, s: number) => {
         toast = { t: { ...t, id: ++toastSeq }, until: realT + s };
@@ -545,11 +582,21 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
             case 'hyde_sighted':
               obsEpoch++;
               break;
+            case 'slurp_mode': {
+              // his groans are directional when he is within earshot (compass outline 3 s, like the Hyde's)
+              const sb = (run as unknown as { slurpBearing?: () => { angle: number; distanceM: number } }).slurpBearing?.();
+              if (sb && sb.distanceM <= 25 && e.to !== 'WANDER') heardSlurp = { bearing: heardBearing(run.player.yaw, sb.angle), until: realT + HEARD_HYDE_S };
+              final.forceOdds();
+              break;
+            }
+            case 'cabinet':
+              final.forceOdds(); // "Hidden" facts follow the door at once
+              break;
             case 'dnf':
+              // the death sequence (FinalHud) takes over: letterbox, cutscene, GAME-OVER card (UX_FINAL §3)
               if (!ending) ending = { outcome: 'dnf', at: realT };
               catchFlashSeq++;
               audio.play('toll');
-              showToast({ tone: 'danger', icon: 'claw', headline: 'Dragged into the fog.', sub: null }, 3);
               break;
             case 'finish':
               if (!ending) ending = { outcome: 'finished', at: realT };
@@ -569,7 +616,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         const cfg = crack.tuning;
         switch (e.type) {
           case 'crackstone_mode': {
-            nextOddsAt = 0; // rebuild the odds row now so a stale "Hunting you" fact clears with the plaque, not a second later
+            final.forceOdds(); // rebuild the odds rows now so a stale "Hunting you" fact clears with the chip, not a second later
             if (e.reason === 'deferred') return; // he yielded to a Hyde chase (R6): say nothing
             if (encounterStart(e)) {
               crackChases++;
@@ -738,6 +785,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
           return;
         }
         for (const m of liveA.messages) {
+          if (/WEEMS/i.test(m.title)) continue; // UX_FINAL §4: Weems' text never enters Thing's stack (her card shows it)
           const cm = crackMessage(m);
           if (cm === 'drop') continue;
           if (/crackstone_area/.test(m.id) && crackAnnouncedAt === null) crackAnnouncedAt = run.t; // label promoted 30 s
@@ -765,6 +813,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         const ob = run.objective();
         if (ob === 'deliver_egg' || ob === 'accuse') return towerTarget;
         if (ob === 'retrieve_egg' && run.egg.state === 'dropped') return { x: run.egg.x, z: run.egg.z, label: 'Dropped egg', kind: 'egg' };
+        if (final.weemsMark && realT < final.weemsMark.until) return { x: final.weemsMark.x, z: final.weemsMark.z, label: final.weemsMark.label, kind: 'site' };
         if (hintShow && realT < hintShow.until && hintShow.target) return hintShow.target;
         if (adviceTarget && realT < adviceTarget.until) return adviceTarget;
         return null;
@@ -800,9 +849,10 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
           // dropped: the player saw it fall; resting: only while a reveal power shows it (power-justified)
           eggMarker: egg.state === 'dropped' ? { x: egg.x, z: egg.z, kind: 'dropped' } : egg.state === 'resting' && fx.revealEgg ? { x: egg.x, z: egg.z, kind: 'revealed' } : null,
           // R4 for both enemies: visible, chasing, or shown by an enemy reveal effect in range
-          hyde: emerged && (hydeVisible || chase || revealedByEffect(fx, Math.hypot(run.hyde.x - run.player.x, run.hyde.z - run.player.z)))
+          hyde: emerged && ((run as { hydeActive?: boolean }).hydeActive ?? true) && (hydeVisible || chase || revealedByEffect(fx, Math.hypot(run.hyde.x - run.player.x, run.hyde.z - run.player.z)))
             ? { x: run.hyde.x, z: run.hyde.z, mode: chase ? 'chase' : 'visible' } : null,
           crack: crack ? crackMapState(crack, fx, run.player, crackAnnouncedAt) : null,
+          ...final.mapExtras(),
           openWalls: [world?.passage?.wallId, run.map.powerSwitch?.gateWallId].filter((id): id is string => !!id && run.isWallOpen(id)),
           seenHazards: seenArr.length === seenHazards.size ? seenArr : (seenArr = [...seenHazards]),
           leverSeen,
@@ -822,6 +872,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         const o = {
           heardHydeBearing: heard && realT < heard.until ? heard.bearing : null,
           heardCrackBearing: heardCrack && realT < heardCrack.until ? heardCrack.bearing : null,
+          heardSlurpBearing: heardSlurp && realT < heardSlurp.until ? heardSlurp.bearing : null,
           showPredictions: st.showRisk, highContrast: st.highContrast, reducedMotion: st.reducedMotion, lowGraphics: st.lowGraphics,
         };
         const key = mapFeedKey(s, o) + (st.lowGraphics ? '|L' : '');
@@ -861,11 +912,6 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         if (toast && realT > toast.until) toast = null;
         if (clueCard && realT > clueCard.until) clueCard = null;
         if (examine && realT > examine.until) examine = null;
-        if (realT >= nextOddsAt) {
-          nextOddsAt = realT + ODDS_EVERY_S;
-          const crackNearM = crack ? distToPolygon(crack.area.polygon, run.player.x, run.player.z) : null;
-          odds = buildOdds(oddsPhase(run.status, run.objective(), liveA?.forecasts ?? null), liveA?.forecasts ?? null, inv, tracker.active, crackNearM);
-        }
         // ---- Crackstone: plaque (0.5 s hold; CHASE / ATTACK bypass), edge candidates (R4-gated), banner, CURSED row
         let crackView: MysteryHudModel['crack'] = null;
         let crackEdge: HudExtras['crackEdge'] = null;
@@ -891,6 +937,22 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         const shownMode = threat.update(run.hyde.mode, realT);
         const r = analytics.currentRisk();
         const risk = riskHold.update(r && run.status === 'playing' ? { p: r.p, band: r.band, source: r.source, label: r.label, detectedNow: r.detectedNow } : null, realT);
+        const st = getSettings();
+        let lastWhyItem: (typeof stack.history)[number] | undefined;
+        for (let k = stack.history.length - 1; k >= 0; k--) {
+          if (stack.history[k]!.kind === 'why') {
+            lastWhyItem = stack.history[k];
+            break;
+          }
+        }
+        const hb = bearing();
+        const fs = final.snapshot({
+          realT, hydeMode: shownMode, hydeEffect: effectChip(run), emerged, hydeVisible, inv, crack, crackView, forecasts: liveA?.forecasts ?? null,
+          deltas: tracker.active, risk: run.status === 'playing' && emerged ? risk : null,
+          hydeHeardNear: !!heard && realT < heard.until && !!hb && hb.distanceM <= 8,
+          reducedMotion: st.reducedMotion, lastWhy: lastWhyItem && realT - lastWhyItem.t < 20 ? lastWhyItem.text : null, hasLive,
+          hasClueCard: !!clueCard, edgePoint: threatEdgePoint,
+        });
         const model = buildHud(run, {
           now: realT, noise: noise.value, shownMode, power, move,
           captions: captions.prune(realT), toast: toast?.t ?? null, catchFlashSeq,
@@ -898,10 +960,12 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
           noiseRadiusM: run.noiseRadiusM?.() ?? 0, bearing: bearing(), hydeScreen: scene.getHydeScreen?.() ?? null,
           risk: run.status === 'playing' && emerged ? risk : null,
           investigation: inv, hydeEmerged: emerged,
-          clueCard: clueCard ? { ...clueCard.v, leaving: clueCard.until - realT <= 0.3 } : null,
+          clueCard: clueCard && !fs.suppressClueCard ? { ...clueCard.v, leaving: clueCard.until - realT <= 0.3 } : null,
           examineToast: examine?.v ?? null,
           stack: { log: stackView(shown.log), card: stackView(shown.card) },
-          odds,
+          odds: fs.odds,
+          threats: fs.threats, lens: fs.lens, tally: fs.tally, cabinet: fs.cabinet, weems: fs.weems, death: fs.death,
+          slurpEdge: fs.slurpEdge, slurpHunting: fs.slurpHunting, catchTint: fs.catchTint,
           standStill: input.isHeld('KeyE') && run.player.speed > 0.5,
           areaName: feedCache?.feed.areaName ?? null,
           crack: crackView,
@@ -919,23 +983,11 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
 
       const live = () => run.status === 'tutorial' || run.status === 'playing';
 
-      const requestHint = () => {
-        // During a threat V gives the best feasible action now (P4); otherwise it climbs the ladder. Either way the
-        // 10 s V cooldown starts (ladder.press), so repeated presses cannot stack advice cards.
-        const threatAdvice = threatNow() && (hasLive ? !!liveA?.advice : !!lastAdvice);
-        const r = ladder.press(realT, threatAdvice);
-        if (!r) return;
-        if (r.kind === 'level') {
-          showHint(r.level, true);
-          return;
-        }
-        // a scan / curse companion card never enters the stack (the banner owns it)
-        if (hasLive && liveA?.advice && crackMessage(liveA.advice) !== 'drop' && !/take_cover|leave_curse/.test(liveA.advice.id) && !(tele.banner && /scan|curse/i.test(liveA.advice.id))) say({ ...fromMsg(liveA.advice, false, 4), id: `${liveA.advice.id}_v${realT}` });
-        else if (lastAdvice) sayAdvice(lastAdvice, 4, false);
-      };
-
       const nextInput = (dt: number): MysteryFrameInput => {
         const fromKeys = input.consume(dt);
+        const lensN = input.takeLens();
+        if (lensN > 0 && run.status === 'playing') final.cycleLens(lensN);
+        if (final.dying) return IDLE_INPUT; // death sequence: the sim's input is cut at t0
         if (bot && run.status === 'playing') {
           // Autopilot (tests): decisions at the bot's rate, held inputs in between, look deltas only on decision frames.
           if (botStep % botEvery === 0) {
@@ -946,13 +998,18 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
           botStep++;
           return { ...botHeld, lookYawDelta: 0, lookPitchDelta: 0, interact: false, power: false, move: false, hint: false };
         }
-        if (!opts.current.inputEnabled) return IDLE_INPUT;
-        let frameInput = fromKeys;
-        if (frameInput.hint) {
-          // V: one ladder step per 10 s (UX §5); the sim still logs hint_requested for telemetry.
-          if (run.status !== 'playing' || ladder.cooldownLeftS(realT) > 0) frameInput = { ...frameInput, hint: false };
-          else requestHint();
+        if (!opts.current.inputEnabled) {
+          final.takeHint();
+          return IDLE_INPUT;
         }
+        let frameInput = fromKeys;
+        // V = Ask Weems (UX_FINAL §4): only an ACCEPTED press reaches the sim as hint: true (one hint_requested, -50);
+        // the first-use note, cooldown, "Not while hunted" and "No more hints here" are no-ops without a charge.
+        if (frameInput.hint) {
+          frameInput = { ...frameInput, hint: false };
+          if (run.status === 'playing') final.askWeems(realT);
+        }
+        if (final.takeHint()) frameInput = { ...frameInput, hint: true };
         return frameInput;
       };
 
@@ -977,6 +1034,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
           }
         }
         handle(events, out.advice);
+        final.onEvents(events, realT, hasLive ? liveA : null, (out as { weems?: { text: string; target?: { x: number; z: number; label: string } | null } | null }).weems ?? null);
         watchStatus();
         if (crack) {
           tele = telegraph.update(crack, events, run.effects(), run.t, realT);
@@ -1040,7 +1098,8 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
           writeLive(browserStorage(), status);
           liveRef.current?.status(status);
           liveRef.current?.runEnded(run, analytics); // flush the finish / dnf, then finalize in the background
-          opts.current.onEnded(run, analytics);
+          // a DNF with a death sequence waits for its card ("See results" / 12 s); the outcome is already recorded
+          if (ending.outcome === 'finished' || !final.dying || deathDone) endRun();
         }
         return events;
       };
@@ -1095,6 +1154,8 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         nav: navFeed,
         mapState,
         live: () => liveA,
+        final,
+        now: () => realT,
       };
 
       let raf = 0;
@@ -1193,12 +1254,8 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
             compassHeading: Math.round(headingDeg(pl.yaw)),
             compassMarkers: feed?.markers.map((m) => ({ kind: m.kind, lantern: m.lantern, name: m.name ?? null, pct: m.pct ?? null })) ?? [],
             areaName: feed?.areaName ?? null,
-            odds: odds.groups.map((g) => ({
-              group: g.id, title: g.title ?? g.tag, source: g.source,
-              rows: g.rows.map((row) => ({ name: row.name, text: row.cell.text, band: row.cell.band, delta: row.delta?.text ?? null })),
-            })),
-            oddsPhase: odds.phase,
-            oddsFooter: odds.footer,
+            // final HUD (UX_FINAL): threat chips, odds rows, lens, tally, cabinet, Weems, death phase - public state only
+            final: final.debug(),
             thing: {
               card: shownCard && { kind: shownCard.kind, head: shownCard.head, text: shownCard.text, why: shownCard.why ?? null },
               log: stack.log?.item.text ?? null,
@@ -1297,6 +1354,27 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
     nav: () => api.current?.nav() ?? null,
     mapState: () => api.current?.mapState() ?? null,
     liveAnalytics: () => api.current?.live() ?? null,
+    askWeems: () => {
+      const a = api.current;
+      if (a) a.final.askWeems(a.now());
+    },
+    skipDeath: (input) => {
+      const a = api.current;
+      return a ? a.final.skipDeath(a.now(), input) : false;
+    },
+    deathContinue: () => api.current?.final.deathContinue(),
+    dying: () => !!api.current?.final.dying,
+    weemsHints: () => api.current?.final.hintsGiven() ?? [],
+    accuseWeems: typeof (runRef.current as { requestHint?: unknown } | null)?.requestHint === 'function'
+      ? () => {
+        const run = runRef.current as (MysteryRunLike & { requestHint?: () => StampedEvent[] }) | null;
+        if (!run || run.status !== 'accusing' || typeof run.requestHint !== 'function') return;
+        const events = run.requestHint();
+        const out = analyticsRef.current?.frame(run as unknown as MysteryRun, events);
+        api.current?.handle(events, out?.advice ?? null);
+        api.current?.final.onEvents(events, api.current.now(), null, (out as { weems?: { text: string; target?: { x: number; z: number; label: string } | null } | null } | undefined)?.weems ?? null);
+      }
+      : undefined,
     debug: () => debugRef.current?.() ?? (phase === 'missing' ? { missing, integration: integrationStatus() } : null),
     advance: (ms) => advanceRef.current?.(ms),
   };

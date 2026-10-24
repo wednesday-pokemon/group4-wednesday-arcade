@@ -31,7 +31,19 @@ export const ROW_COLUMNS = [
   'det15', 'extraction', 'eta',
   'eggPost', 'eggTrue', 'cluePost', 'clueTrue',
   'crackHere', 'crackFact', 'crackSeen10',
+  // final (mystery-gen-5): Slurp on the map, the live RULE-BASED forecasts.slurp.here at t (evaluation only) and its label
+  'slurpActive', 'slurpMode', 'slurpHere', 'slurpFact', 'slurpFound15',
+  // final: the LIVE Hyde zone odds at t (director-managed filter, ';'-joined in world zone order; evaluation only)
+  'hydeZoneP',
 ] as const;
+
+/** Horizon of the Slurp evaluation label (= forecasts.slurp.horizonS). */
+export const SLURP_LABEL_HORIZON_S = 15;
+
+/** Ascending times Slurp found the player: his hunt starts (enemy_detected) and his hits (enemy_hit). */
+export function slurpFoundTimes(events: readonly StampedEvent[]): number[] {
+  return events.filter((e) => (e.type === 'enemy_detected' || e.type === 'enemy_hit') && e.enemy === 'slurp').map((e) => e.t);
+}
 
 /** Horizon of the Crackstone evaluation label (the rule-based forecast's horizon). */
 export const CRACK_LABEL_HORIZON_S = 10;
@@ -67,6 +79,7 @@ export function episodeRows(ep: SimEpisode, meta: { duoIndex: number; profile: s
   const endT = ep.collector.latestT();
   const extraction = ep.timedOut || !ep.result ? '' : ep.result.outcome === 'finished' ? '1' : '0';
   const crackSeen = crackSightingTimes(events);
+  const slurpFound = slurpFoundTimes(events);
   const rows: string[][] = [];
   let detectionRows = 0;
   let positives = 0;
@@ -75,7 +88,8 @@ export function episodeRows(ep: SimEpisode, meta: { duoIndex: number; profile: s
     const prev = i > 0 ? samples[i - 1].snapshot : null;
     let det15 = '';
     const censored = ep.timedOut && s.t + DETECTION_HORIZON_S > endT;
-    const emerged = s.hydeEmerged !== false;
+    // final: the director may take the Hyde off the map (hydeActive false) — no detection row while it is away
+    const emerged = s.hydeEmerged !== false && s.hydeActive !== false;
     if (s.hydeMode !== 'CHASE' && !censored && emerged) {
       const y = anyWithin(det, s.t);
       det15 = y ? '1' : '0';
@@ -85,6 +99,9 @@ export function episodeRows(ep: SimEpisode, meta: { duoIndex: number; profile: s
     // Crackstone label (evaluation only): sighted within (t, t + 10 s]; right-censored near the end of the log
     let crackSeen10 = '';
     if (s.crackstonePresent && s.t + CRACK_LABEL_HORIZON_S <= endT) crackSeen10 = anyWithin(crackSeen, s.t, CRACK_LABEL_HORIZON_S) ? '1' : '0';
+    // Slurp label (evaluation only): he found the player within (t, t + 15 s] while on the map at t; right-censored
+    const slurpOn = s.slurpActive === true;
+    const slurpFound15 = slurpOn && s.t + SLURP_LABEL_HORIZON_S <= endT ? (anyWithin(slurpFound, s.t, SLURP_LABEL_HORIZON_S) ? '1' : '0') : '';
     let eta = '';
     if (s.objective !== 'accuse' && s.objective !== 'done') {
       const next = progress.find((x) => x > s.t);
@@ -104,7 +121,7 @@ export function episodeRows(ep: SimEpisode, meta: { duoIndex: number; profile: s
       crackstonePresent: b(s.crackstonePresent === true), crackstoneMode: s.crackstonePresent ? s.crackstoneMode : '',
       crackstoneDistanceM: s.crackstonePresent ? n(s.crackstoneDistanceM) : '', crackstoneOccluded: s.crackstonePresent ? b(s.crackstoneOccluded) : '',
       crackstoneVisible: s.crackstonePresent ? b(s.crackstoneVisible) : '', crackstoneSuspicion: s.crackstonePresent ? n(s.crackstoneSuspicion) : '',
-      crackSeen10,
+      crackSeen10, slurpActive: b(slurpOn), slurpMode: slurpOn ? s.slurpMode ?? '' : '', slurpFound15,
       det15, extraction, eta,
       ...(extra[i] ?? {}),
     };

@@ -60,3 +60,11 @@ export function bundledPredictiveService(): PredictiveService {
 export function dashboard(records: readonly SessionRecord[], options: DashboardOptions | readonly string[] = {}): DashboardAggregates {
   return dashboardAggregates(records, bundledPredictiveService(), options);
 }
+// ---- final (FINAL_CONTRACT §4–§10): encounter odds / threat map, Slurp risk, Weems, local leaderboard ranking
+export { LABEL_NOISE_RULE, LABEL_SIGHT_RULES, LABEL_SPAWN_RULES, LABEL_WANDER_RULES, LABEL_ZONE_FILTER, spawnOddsByArea } from './encounter.ts';
+export { weemsHint, weemsLadder, namesSuspect, WEEMS_TITLE, WEEMS_MAX } from './weems.ts';
+export { rankLocalRecords, localDefeatLog, localRankOf, rankEntries, compareEntries, type LeaderboardEntry, type DefeatEntry, type LocalRecordLike } from './leaderboard.ts';
+export { slurpRiskFrom, type SlurpRiskPart } from './slurpModel.ts';
+export { cabinetDoorPhase } from './prescriptive.ts';
+export { isWeemsAction } from './dashboard.ts';
+export { ENEMY_TITLE, LIFECYCLE_LOG, WHO as ENEMY_WHO, isSlurpThreat } from './liveMessages.ts';

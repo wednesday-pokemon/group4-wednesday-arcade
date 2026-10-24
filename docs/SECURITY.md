@@ -1,4 +1,4 @@
-# Security design — live/verified mode (rules v2.5 and mystery-v3.1, see §7)
+# Security design — live/verified mode (rules v2.5, mystery-v3.1 and mystery-v4, see §7 / §7.9)
 
 Scope: Supabase backend in `supabase/**` (schema, RLS, RPCs, Edge Functions) and the client contract it
 exposes. LOCAL DEMO mode is explicitly **unverified** and never writes to the leaderboard.
@@ -288,6 +288,30 @@ position is never stored server-side; `crackstone_sighted.distanceM` / scan radi
 |---|---|---|---|---|
 | M-21 | **Forged / inconsistent curse HP** (a curse that "costs" HP while blocked, HP on a cast / miss, a curse after the deposit, a fake `hp_depleted` DNF) | Low | `curse` is a strict RULE event: phase enum, `hpLost` finite 0..100, 0 unless `phase = hit` and not `blocked`; no hit after the deposit or the terminal event; it is never a catch (`second_catch` still needs two `catch` events). A dnf `hp_depleted` is accepted only when catch + curse HP loss ≥ max HP (heals only raise that bar). HP loss is part of `ruleFingerprint`, so finalize re-validates it from the stored rows. A DNF has no score, so forging one gains nothing; under-reporting HP loss is the accepted fabricated-stream risk (§7.4). | `mystery-crackstone.test.ts`, `mystery-sim-contract.test.ts` (Crackstone stream), `008` |
 | M-22 | **Sim/validator drift or deploy skew for the new types** (a Crackstone client against the overhaul server → `422 EVENT_REJECTED: type` → runs unverified) | Medium (operational) | Drift guards extended: Crackstone unions + every GameEvent member's payload keys vs the server schema, TS lists vs the latest CHECK / rule-index definitions. Runbook: DB → all six functions in one command → frontend, hard-reload laptops. | `mystery-overhaul.test.ts`; `docs/SUPABASE_SETUP.md` §12.8 |
+
+### 7.9 Final wave review (2026-10-24: rules mystery-v4, Galpin, director / Slurp / cabinet events, home top 5)
+
+Scope: migration `20261025000100_mystery_v4.sql`, `_shared/mystery-{events,rules,validation,db}.ts`, the five mystery
+functions. Setup + deploy order + rollback: `docs/SUPABASE_SETUP.md` §12.9.
+
+**New public exposure (the only one).** Four `security_invoker` views readable by `anon` and `authenticated`:
+`mystery_top5` (home page: `rank, session_id, nickname, score, character_id, pokemon_id, case_id, active_time_s,
+finalized_at, rules_version`), `mystery_leaderboard_v4`, `mystery_defeated_v4`, `mystery_standings_v4` (the same public
+columns as their v3.1 counterparts plus `hints_used`, `detections`, `hits`, `score_breakdown`, `defeated_by`), and column
+`SELECT` on `mystery_results.{detections, hits, defeated_by, score_breakdown}`. All of it is derived from server-finalized
+rows only (a row exists only after `mystery-finalize` recomputed it), filters `is_test` (and the `mystery_results` RLS
+policy hides test rows from `anon` / stations anyway), and contains no seed, accused suspect, cited evidence, client
+claim, `claim_matches`, event, progress or answer key — pinned by pgTAP `009` (column list of every v4 view, column
+privileges, invoker mode, no write privilege) and `mystery-v4.test.ts` (view definitions). The nickname and the
+monster that defeated a player are already public on the dashboard. No new Realtime table: the home panel listens to the
+already-published `mystery_results` INSERTs (client-readable columns only) and refetches `mystery_top5`.
+
+| ID | Threat | Severity | Mitigation / status | Verified by |
+|---|---|---|---|---|
+| M-23 | **Score inflation via the new counts** (hiding hints / detections / hits, or claiming the no-hint / no-detection bonus) | Medium | The score is never taken from the client: `computeResult` recomputes it with the shared `scoreV4` from the validated RULE events (`hint_requested`, `enemy_detected`, `enemy_hit` are strict and replayed at finalize from the stored rows; they are in `ruleFingerprint`), the accusation from the server's own answer key, the time from `egg_delivered`. `mystery_results_v4_score_check` re-derives every part from the row's own columns, so even a buggy writer cannot store an inconsistent breakdown. A client that simply never sends a hint / detection / hit event is the accepted fabricated-stream risk of §7.4 (the browser runs the sim); consistency checks shrink it: every Hyde `catch` and landed `curse` needs its `enemy_hit` by the terminal event, `dnf.by` must name the last hitter, a blocked hit costs 0 HP, no hit after the deposit. | `mystery-v4.test.ts`, `009`, round trip |
+| M-24 | **Version mixing** (a v3.1 score on the v4 board, or a v3.1 session scored with v4 rules) | Low | The formula is chosen by the SESSION's stored `rules_version`, never by the deployment or the body; `mystery_finalize_session` refuses a result computed for another version (`INVALID_TRANSITION`); every board filters one version. | `009` (v3.1 / v4 boards), round trip (per-version standings parity) |
+| M-25 | **Deploy skew** (v4 client against v2 functions → `422`, or new functions before the migration → create fails) | Medium (operational) | Runbook §12.9: reset stations → `db push` → all functions in one command → frontend + hard reload; the RPC defaults `p_rules_version` to v3.1 so the old bundle keeps working during the window. | `009` ("create without p_rules_version"), §12.9 |
+
 
 ## 7.5 Mystery station heartbeat (added 2026-10-21, live client)
 Each kiosk broadcasts an ephemeral Realtime heartbeat every 2 s on the public topic `raven-mystery-live` so Laptop 1 can show

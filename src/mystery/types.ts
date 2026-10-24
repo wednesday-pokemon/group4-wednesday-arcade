@@ -5,8 +5,9 @@
 // forward = (−sin yaw, −cos yaw); positive yaw turns left (counter-clockwise seen from above).
 import type { EggTier, PokemonId, StationId } from '../game/types.ts';
 
-export type MysteryRulesVersion = 'mystery-v3.1';
-export const MYSTERY_RULES_VERSION: MysteryRulesVersion = 'mystery-v3.1';
+/** 'mystery-v4' = final scoring (docs/final/FINAL_CONTRACT.md Scoring); 'mystery-v3.1' rows stay readable but never mix. */
+export type MysteryRulesVersion = 'mystery-v3.1' | 'mystery-v4';
+export const MYSTERY_RULES_VERSION: MysteryRulesVersion = 'mystery-v4';
 
 export interface Vec2 { x: number; z: number }
 
@@ -124,7 +125,13 @@ export interface WallDef { id: string; a: Vec2; b: Vec2; thickness: number; heig
 /** Round obstacle. `low` cover blocks sight only for a crouching player; `high` blocks sight and movement like a wall. */
 export interface CoverDef { id: string; x: number; z: number; radius: number; height: 'low' | 'high'; kind: 'crate' | 'tomb' | 'statue' | 'tree' | 'barrel' | 'pillar' | 'bush' }
 /** Crouch inside → unseen unless the Hyde is within `revealM` (it still hears noise). */
-export interface HidingSpotDef { id: string; x: number; z: number; radius: number; revealM: number; kind: 'alcove' | 'wardrobe' | 'hedge' | 'sarcophagus' }
+export interface HidingSpotDef {
+  id: string; x: number; z: number; radius: number; revealM: number;
+  /** 'cabinet' (final): an enterable cabinet / locker / wardrobe with a door (FINAL_CONTRACT Cabinets); others are crouch-in spots. */
+  kind: 'alcove' | 'wardrobe' | 'hedge' | 'sarcophagus' | 'cabinet';
+  /** Cabinets: the direction the door faces (contract yaw); the player exits to x,z + forward(doorYaw) * exitM. */
+  doorYaw?: number;
+}
 export interface RoomDef { id: RoomId; name: string; polygon: Vec2[]; fog?: boolean; wet?: boolean }
 /** The clues of all three cases (each case uses exactly three of them). */
 export type ClueId =
@@ -262,7 +269,35 @@ export interface CaseWorldDef {
   hazards: HazardDef[];
   /** The case's second enemy (sight-based); null / absent = no Crackstone on this map. */
   crackstone?: CrackstoneDef | null;
+  // ---- final (docs/final/FINAL_CONTRACT.md)
+  /** Compact play area for this case (smaller map): when present the case map uses these instead of the island's. */
+  playArea?: PlayAreaDef;
+  /** Isaac Night in his Slurp form (third enemy); null / absent = none. */
+  slurp?: SlurpDef | null;
+  /** Encounter-director spawn points for every enemy (weighted per enemy); see FINAL_CONTRACT Director. */
+  encounterSpawns?: EncounterSpawnDef[];
 }
+
+/** The compact, fenced play area of one case. Boundary walls are case extraWalls. */
+export interface PlayAreaDef {
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  playerStart: { x: number; z: number; yaw: number };
+  /** Hyde patrol loop inside the play area (replaces MapDef.patrol). */
+  hydePatrol: Vec2[];
+  safeReleasePoints: Vec2[];
+  /** Tutorial practice crate position (replaces the pier crate). */
+  practicePoint: Vec2;
+}
+
+export type EnemyId = 'hyde' | 'crackstone' | 'slurp';
+export const ENEMY_IDS: readonly EnemyId[] = ['hyde', 'crackstone', 'slurp'];
+export const ENEMY_NAMES: Readonly<Record<EnemyId, string>> = { hyde: 'the Hyde', crackstone: 'Joseph Crackstone', slurp: 'Slurp' };
+
+/** A place an enemy may (re)appear. Weights are relative within one enemy's spawns. */
+export interface EncounterSpawnDef { id: string; enemy: EnemyId; name: string; zoneId: string; x: number; z: number; yaw: number; weight: number }
+
+/** Slurp's haunt: wander waypoints (he picks the next one with the seeded sim RNG) and a leash. */
+export interface SlurpDef { areaName: string; wander: Vec2[]; leashM: number }
 
 /** HIDDEN per-session draw (seeded PRF keys 'site:<clueId>', 'site:egg', 'trace:<sourceId>', 'hyde:spawn'). */
 export interface SessionLayout { clueSites: Partial<Record<ClueId, string>>; eggSiteId: string }
@@ -300,8 +335,9 @@ export const ABILITY_KEY_LABEL: Readonly<Record<'F' | 'Q', string>> = { F: 'Q', 
 
 // ----------------------------------------------------------------------------------------------------- case
 
-export type SuspectId = 'thornhill' | 'isaac' | 'barry';
-export const SUSPECT_IDS: readonly SuspectId[] = ['thornhill', 'isaac', 'barry'];
+/** Final: Isaac Night is no longer a suspect (he is the Slurp enemy); Case 02's culprit is Francoise Galpin. */
+export type SuspectId = 'thornhill' | 'galpin' | 'barry';
+export const SUSPECT_IDS: readonly SuspectId[] = ['thornhill', 'galpin', 'barry'];
 /** `alibiOrContext` = the suspect's own statement in THIS case (a claim, never a verdict). */
 export interface SuspectDef { id: SuspectId; name: string; role: string; alibiOrContext: string }
 
@@ -399,6 +435,8 @@ export interface PlayerState {
   hidden: boolean; // inside a hiding spot while crouched
   roomId: RoomId | null;
   interacting: { target: 'clue' | 'egg' | 'examine' | 'lever'; id: string; progress: number } | null;
+  /** Final: inside a hiding cabinet (null otherwise). 'open' = inside with the door open; 'closed' = door shut. */
+  cabinet?: { spotId: string; phase: 'entering' | 'open' | 'closed' | 'exiting'; t: number } | null;
 }
 
 export type EggState = 'resting' | 'carried' | 'dropped' | 'delivered';
@@ -437,6 +475,22 @@ export interface CrackstoneRuntime {
   scan: { phase: 'warning' | 'pulse'; startedAt: number; pulseAt: number; radiusM: number } | null;
   /** PUBLIC telegraph: curse circle on the ground; lands at `landsAt` on a player still inside it (with LOS). */
   curse: { x: number; z: number; radiusM: number; startedAt: number; landsAt: number } | null;
+}
+
+/** Slurp (Isaac Night's zombie form): sight + proximity stalker (FINAL_CONTRACT Slurp). */
+export type SlurpMode = 'WANDER' | 'INVESTIGATE' | 'CHASE' | 'ATTACK' | 'SEARCH' | 'LEAVE';
+export interface SlurpRuntime {
+  active: boolean; // false = despawned / not yet spawned
+  mode: SlurpMode;
+  modeT: number;
+  x: number; z: number; yaw: number; speed: number;
+  suspicion: number;
+  canSeePlayer: boolean;
+  lastKnown: Vec2 | null;
+  target: Vec2 | null;
+  path: Vec2[];
+  stunnedUntil: number; slowedUntil: number; slowMult: number; distractedUntil: number;
+  attacking: boolean; // short lunge / grab window
 }
 
 export type RunStatus = 'tutorial' | 'playing' | 'accusing' | 'finished' | 'dnf';
@@ -510,7 +564,7 @@ export type GameEvent =
   | { type: 'egg_delivered'; tier: EggTier; points: number; security: number }
   | { type: 'ability_used'; key: 'F' | 'Q'; abilityId: string; kinds: AbilityEffectKind[]; success: boolean; detail: string }
   | { type: 'ability_denied'; key: 'F' | 'Q'; reason: 'cooldown' | 'no_target' }
-  | { type: 'hint_requested' }
+  | { type: 'hint_requested'; level?: 1 | 2 | 3 } // final: an explicit Ask-Weems hint (scored -50); level = Weems' ladder step
   // ---- overhaul (telemetry only; not rule events)
   | { type: 'hyde_emerged'; spawnId: string; x: number; z: number }
   | { type: 'site_checked'; site: 'clue' | 'egg'; siteId: string; found: boolean }
@@ -524,9 +578,18 @@ export type GameEvent =
   | { type: 'crackstone_lost' }
   | { type: 'crackstone_scan'; phase: 'warning' | 'pulse'; radiusM: number; hit: boolean }
   | { type: 'curse'; phase: 'cast' | 'hit' | 'miss'; hpLost: number; blocked: boolean }
+  // ---- final (FINAL_CONTRACT): encounter director, Slurp, cabinets, scoring evidence
+  | { type: 'enemy_spawned'; enemy: EnemyId; spawnId: string; x: number; z: number }
+  | { type: 'enemy_despawned'; enemy: EnemyId; reason: 'far' | 'cycle_done' | 'encounter_resolved' }
+  /** RULE event (scoring): an enemy started hunting the player (any detection removes the no-detection bonus). */
+  | { type: 'enemy_detected'; enemy: EnemyId; via: 'sight' | 'sound' | 'proximity' | 'scan' | 'witnessed_hide' }
+  /** RULE event (scoring): the player took a monster hit (Hyde grab, curse hit, Slurp attack); blocked hits still count. */
+  | { type: 'enemy_hit'; enemy: EnemyId; hpLost: number; blocked: boolean }
+  | { type: 'slurp_mode'; from: SlurpMode; to: SlurpMode; reason: 'saw_player' | 'sensed_player' | 'heard_noise' | 'lost_sight' | 'search_timeout' | 'reached_target' | 'attack_done' | 'stunned' | 'lured' | 'leash' | 'gave_up' | 'deferred' }
+  | { type: 'cabinet'; spotId: string; action: 'enter' | 'close' | 'open' | 'exit' | 'pulled_out'; loud: boolean }
   | { type: 'accusation'; suspectId: SuspectId | null; correct: boolean; cluesFound: number; evidence: string[]; deductionCorrect: boolean }
   | { type: 'finish'; verdict: Verdict; score: number }
-  | { type: 'dnf'; reason: DnfReason };
+  | { type: 'dnf'; reason: DnfReason; by?: EnemyId | null };
 
 /** Every event carries the active sim time and a per-run monotonic sequence number (Supabase uses (session, seq)). */
 export type StampedEvent = GameEvent & { t: number; seq: number };
@@ -563,6 +626,15 @@ export interface StateSnapshot {
   crackstoneOccluded: boolean;
   crackstoneVisible: boolean;
   crackstoneSuspicion: number;
+  /** Final (optional until filled): director + Slurp + cabinet state. */
+  hydeActive?: boolean;
+  crackstoneActive?: boolean;
+  slurpPresent?: boolean;
+  slurpActive?: boolean;
+  slurpMode?: SlurpMode;
+  slurpDistanceM?: number;
+  slurpVisible?: boolean;
+  inCabinet?: 'open' | 'closed' | null;
 }
 
 /** StateSnapshot fields when there is no Crackstone (fixtures, older dataset rows). 999 = HYDE_ABSENT_DISTANCE_M. */
@@ -604,6 +676,26 @@ export interface RunResult {
   catches: number;
   hp: number;
   duo: Duo;
+  /** Final scoring evidence (mystery-v4): counted from rule events; the server recomputes all of them. */
+  hintsUsed?: number;
+  detections?: number;
+  hits?: number;
+  /** Which monster defeated the player (DNF only). */
+  defeatedBy?: EnemyId | null;
+  scoreBreakdown?: ScoreBreakdown | null;
+}
+
+/** mystery-v4 score components (finishers only). total = max(0, sum of the signed parts). */
+export interface ScoreBreakdown {
+  delivery: number; // +1000
+  accusation: number; // +300 correct culprit
+  clues: number; // +100 x required clues found (max 300)
+  noDetection: number; // +150 when detections = 0
+  noHints: number; // +150 when hintsUsed = 0
+  timeBonus: number; // max(0, 300 - floor(activeTimeS))
+  hintPenalty: number; // -50 x hintsUsed (<= 0)
+  hitPenalty: number; // -75 x hits (<= 0)
+  total: number;
 }
 
 export interface StationContext { stationId: StationId | null; sessionId: string; offer: DuoOffer }

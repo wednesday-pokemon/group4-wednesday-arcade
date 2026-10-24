@@ -27,7 +27,7 @@ export function createPlayer(map: MapDef, tuning: SimTuning): PlayerState {
     x: map.playerStart.x, z: map.playerStart.z, yaw: map.playerStart.yaw, pitch: 0,
     speed: 0, stance: 'idle', crouched: false,
     hp: tuning.player.maxHp, maxHp: tuning.player.maxHp, catches: 0,
-    invulnerableUntil: -Infinity, hidden: false, roomId: null, interacting: null,
+    invulnerableUntil: -Infinity, hidden: false, roomId: null, interacting: null, cabinet: null,
   };
 }
 
@@ -35,8 +35,9 @@ export function createPlayerMemory(): PlayerMemory {
   return { vx: 0, vz: 0, stepTimer: 0.25, lastImpactT: -Infinity, noises: [], floorId: null };
 }
 
+/** The crouch-in hiding spot containing (x, z) (cabinets are entered with E instead — cabinet.ts). */
 export function hidingSpotAt(map: MapDef, x: number, z: number): HidingSpotDef | null {
-  for (const s of map.hidingSpots) if (Math.hypot(s.x - x, s.z - z) <= s.radius) return s;
+  for (const s of map.hidingSpots) if (s.kind !== 'cabinet' && Math.hypot(s.x - x, s.z - z) <= s.radius) return s;
   return null;
 }
 

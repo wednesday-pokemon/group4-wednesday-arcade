@@ -1,12 +1,13 @@
-// Results (UX_MYSTERY §6): left column VerdictHeader · ScoreBreakdown · DuoBadge · board note · CTA; right column the four
-// game-wide analytics LayerPanels from src/mystery/analytics (never placeholder numbers); below, "What really happened"
-// (the case resolution + why each innocent is excluded). Mystery accuracy is a separate verdict, never part of the score.
+// Results (UX_MYSTERY §6 + UX_FINAL §6): left column VerdictHeader · v4 score box (2×4 breakdown + total + rank chip;
+// DNF → "Defeated by {Name}" + DEFEAT LOG box) · DuoBadge · CTA; right column the four game-wide analytics LayerPanels
+// from src/mystery/analytics (never placeholder numbers); below, "What really happened" (the case resolution + why each
+// innocent is excluded). mystery-v4: the right culprit is part of the score (+300).
 // The answer key (CaseSolution) arrives as a PROP: the app loads it only after the accusation was committed — this
 // module never imports data/solutions.ts. IdleReturn: after 45 s idle, a 20 s countdown back to Home (any key stays).
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ResultsAnalytics } from '../../mystery/analytics/index.ts';
 import { solutionMatches } from '../../mystery/caseLogic.ts';
-import type { CaseDef, CaseSolution, RunResult, SuspectId } from '../../mystery/types.ts';
+import { ENEMY_NAMES, type CaseDef, type CaseSolution, type RunResult, type SuspectId } from '../../mystery/types.ts';
 import { focusIsNeutral, useHotkeys, useScreenFocus } from '../../app/keyboard.ts';
 import { thing as thingScript } from '../../app/mystery/thingLines.ts';
 import { Button } from '../components/Button.tsx';
@@ -14,6 +15,9 @@ import { Icon } from '../Icon.tsx';
 import { ROLE_ICON, ROLE_LABEL, type DuoCardView } from './duoView.ts';
 import { LayerPanels } from './LayerPanels.tsx';
 import { ThingNarrator } from './ThingNarrator.tsx';
+import { ENEMY_FLAVOUR, EnemyMedallion } from './leaderboard/EnemyGlyph.tsx';
+import { dnfBoxView, scoreBoxView, type RankChipView, type ScoreRowView } from './leaderboard/scoreView.ts';
+import '../styles/leaderboard.css';
 
 interface MysteryResultsProps {
   result: RunResult;
@@ -26,10 +30,11 @@ interface MysteryResultsProps {
   /** The case's answer key, loaded after the accusation; null while loading / unavailable. */
   solution: CaseSolution | null;
   tools: ReactNode;
+  /** Finishers: LIVE "#3 tonight" / LOCAL "#2 on this laptop" / "Verifying…" / "Not ranked" (null → "Not ranked"). */
+  rankChip?: RankChipView | null;
   onPlayAgain: () => void;
 }
 
-const TIER_TEXT = { common: 'Common', rare: 'Rare', legendary: 'Legendary' } as const;
 const IDLE_S = 45;
 const RETURN_S = 20;
 
@@ -44,6 +49,10 @@ export function verdictView(r: RunResult, caseDef: CaseDef, solution: CaseSoluti
   const n = r.cluesFound.length;
   const total = caseDef.clues.length;
   const name = (id: string | null) => (id ? caseDef.suspects.find((s) => s.id === id)?.name ?? id : null);
+  if (r.outcome === 'dnf' && r.defeatedBy) {
+    // mystery-v4 (UX_FINAL §6): the monster that ended the run is the title; the flavour line is the sub.
+    return { title: `Defeated by ${ENEMY_NAMES[r.defeatedBy]}`, tone: 'dnf', sub: ENEMY_FLAVOUR[r.defeatedBy], extra: null };
+  }
   if (r.outcome === 'dnf') {
     return {
       title: 'Dragged into the fog', tone: 'dnf',
@@ -97,7 +106,7 @@ export function fmtScore(v: number): string {
   return v < 0 ? `−${s}` : s;
 }
 
-export function MysteryResults({ result: r, analytics, nickname, card, caseDef, solution, tools, onPlayAgain }: MysteryResultsProps) {
+export function MysteryResults({ result: r, analytics, nickname, card, caseDef, solution, tools, rankChip = null, onPlayAgain }: MysteryResultsProps) {
   const h1 = useRef<HTMLHeadingElement>(null);
   const again = useRef<HTMLButtonElement>(null);
   useScreenFocus(h1, again);
@@ -110,7 +119,9 @@ export function MysteryResults({ result: r, analytics, nickname, card, caseDef, 
   const returning = useIdleReturn(onPlayAgain);
   const v = verdictView(r, caseDef, solution);
   const truth = caseTruthView(caseDef, solution);
-  const finished = r.outcome === 'finished' && r.score !== null;
+  const box = scoreBoxView(r);
+  const dnf = r.outcome === 'dnf' ? dnfBoxView(r, analytics, caseDef.clues.length) : null;
+  const enemy = r.outcome === 'dnf' ? r.defeatedBy ?? null : null;
   const thing = r.outcome === 'dnf' ? thingScript.dnf(r.dnfReason ?? 'second_catch') : thingScript.result(r.verdict);
 
   return (
@@ -122,34 +133,17 @@ export function MysteryResults({ result: r, analytics, nickname, card, caseDef, 
 
       <div className="mys-results__grid">
         <section className="mys-results__left">
-          <div className={`mys-verdict mys-verdict--${v.tone}${v.title.length > 16 ? ' mys-verdict--long' : ''}`}>
-            <p className="caps">Verdict · Case {caseDef.number} · {caseDef.title}</p>
+          <div className={`mys-verdict mys-verdict--${v.tone}${enemy ? ' mys-verdict--enemy' : ''}${v.title.length > 16 ? ' mys-verdict--long' : ''}`} data-enemy={enemy ?? undefined}>
+            <p className="caps">{enemy ? 'Run over' : 'Verdict'} · Case {caseDef.number} · {caseDef.title}</p>
             <h1 id="verdict-title" ref={h1} tabIndex={-1} className="mys-verdict__title display" data-testid="verdict-title">
-              <Icon name={v.tone === 'dnf' ? 'claw' : v.tone === 'solved' ? 'shieldCheck' : 'egg'} />
-              {v.title}
+              {enemy ? <EnemyMedallion enemy={enemy} /> : <Icon name={v.tone === 'dnf' ? 'claw' : v.tone === 'solved' ? 'shieldCheck' : 'egg'} />}
+              {enemy ? <span>Defeated by <span className={`mys-verdict__enemy--${enemy}`}>{ENEMY_NAMES[enemy]}</span></span> : v.title}
             </h1>
             <p className="mys-verdict__sub" data-testid="verdict-sub">{v.sub}</p>
             {v.extra && <p className="mys-verdict__extra text-2">{v.extra}</p>}
           </div>
 
-          {finished ? (
-            <div className="mys-score" data-testid="score-breakdown">
-              <dl>
-                <div><dt>Egg points</dt><dd className="num">{r.eggPoints} × 100 = {r.eggPoints * 100}</dd></div>
-                <div><dt>Active time</dt><dd className="num">{'−'} {r.activeTimeS.toFixed(1)} s</dd></div>
-                <div className="mys-score__total"><dt>Score</dt><dd className="num" data-testid="score-total">{fmtScore(r.score!)}</dd></div>
-              </dl>
-              <p className="mys-score__note">
-                Mystery: {r.verdict === 'case_solved' ? 'Solved' : 'Unsolved'} — tracked separately, not part of the score.
-                {r.score! < 0 && ' Negative scores still rank above every DNF.'}
-              </p>
-              <p className="mys-score__facts text-2">
-                <Icon name="egg" /> {TIER_TEXT[r.eggTier]} egg · security {Math.round(r.eggSecurity)} · caught {r.catches}/2
-              </p>
-            </div>
-          ) : (
-            <p className="mys-score mys-score--dnf" data-testid="score-breakdown">No score. Active time {r.activeTimeS.toFixed(1)} s.</p>
-          )}
+          {box ? <ScoreBox box={box} chip={rankChip ?? { kind: 'none', text: 'Not ranked' }} /> : dnf ? <DefeatBox d={dnf} /> : null}
 
           <div className="mys-duo">
             <img src={card.characterArt} alt="" width={48} height={48} />
@@ -160,14 +154,12 @@ export function MysteryResults({ result: r, analytics, nickname, card, caseDef, 
             </span>
           </div>
 
-          <p className="mys-board-note text-2"><Icon name="trophy" /> Today’s board (mystery-v3.1) appears when this station is connected to the leaderboard service.</p>
-
           <div className="mys-results__cta">
             <Button ref={again} variant="primary" size="lg" kbd="Enter" onClick={onPlayAgain} data-testid="btn-play-again">New investigation</Button>
           </div>
         </section>
 
-        <LayerPanels report={analytics} />
+        <LayerPanels report={analytics} result={r} />
       </div>
 
       <footer className="mys-results__foot">
@@ -198,6 +190,65 @@ export function MysteryResults({ result: r, analytics, nickname, card, caseDef, 
         <p className="idle-return" role="status" data-testid="idle-return">Returning home in {returning} s — press any key to stay</p>
       )}
     </main>
+  );
+}
+
+/** The v4 score box: header SCORE + rank chip + total; 2 columns × 4 rows of signed parts (UX_FINAL §6). */
+function ScoreBox({ box, chip }: { box: NonNullable<ReturnType<typeof scoreBoxView>>; chip: RankChipView }) {
+  return (
+    <section className="mys-score4" data-testid="score-breakdown" aria-label={`Score ${box.totalText}`}>
+      <div className="mys-score4__head">
+        <span className="mys-score4__label">SCORE</span>
+        <span className={`rank-chip rank-chip--${chip.kind}`} data-testid="rank-chip" data-kind={chip.kind}>
+          {chip.kind === 'live' || chip.kind === 'local' ? <Icon name="trophy" /> : chip.kind === 'pending' ? <Icon name="wifi" /> : null}
+          {chip.text}
+        </span>
+        <span className="mys-score4__total num" data-testid="score-total">{box.totalText}</span>
+      </div>
+      {box.rows ? (
+        <dl className="mys-score4__grid" data-testid="score-rows">
+          <div className="mys-score4__col">{box.rows.left.map((row) => <ScoreRow key={row.key} row={row} />)}</div>
+          <div className="mys-score4__col">{box.rows.right.map((row) => <ScoreRow key={row.key} row={row} />)}</div>
+        </dl>
+      ) : (
+        <p className="mys-score4__note">Score breakdown unavailable for this run.</p>
+      )}
+      {box.clamped && <p className="mys-score4__note" data-testid="score-clamped">Penalties went below zero, so the score stops at 0.</p>}
+    </section>
+  );
+}
+
+function ScoreRow({ row }: { row: ScoreRowView }) {
+  return (
+    <div className={`mys-score4__row is-${row.tone}`} data-testid={`score-row-${row.key}`}>
+      <dt>{row.label}</dt>
+      <dd className="num">
+        {row.value}
+        {row.reason && <span className="mys-score4__why"> ({row.reason})</span>}
+      </dd>
+    </div>
+  );
+}
+
+/** DNF variant: DEFEAT LOG · "No score · not ranked" · Lasted / Clues / Egg / tally · WHY · "Saved to tonight's defeat log." */
+function DefeatBox({ d }: { d: ReturnType<typeof dnfBoxView> }) {
+  return (
+    <section className="mys-score4 mys-score4--dnf" data-testid="score-breakdown" data-variant="dnf">
+      <div className="mys-score4__head">
+        <span className="mys-score4__label">DEFEAT LOG</span>
+        <span className="rank-chip rank-chip--dnf" data-testid="rank-chip" data-kind="dnf">No score · not ranked</span>
+      </div>
+      <ul className="mys-dnf__list" data-testid="dnf-facts">
+        <li><Icon name="timer" />{d.lasted}</li>
+        <li><Icon name="search" />{d.clues}</li>
+        {d.egg && <li><Icon name="egg" />{d.egg}</li>}
+        <li><Icon name="eye" />{d.tally}</li>
+      </ul>
+      {d.why && (
+        <p className="mys-why" data-testid="dnf-why"><span className="mys-why__k"><Icon name="link" />WHY</span><span>{d.why}</span></p>
+      )}
+      <p className="mys-dnf__saved">Saved to tonight’s defeat log.</p>
+    </section>
   );
 }
 

@@ -2,7 +2,7 @@
 // standard state, events and 1 Hz snapshots for whatever duo is playing. Nothing in this folder branches on a character
 // or Pokémon id — duo differences enter only through the numbers in PlayMods / DuoStats / AbilityDef.effects.
 import type {
-  AbilityDef, AbilityEffectKind, CaseId, CrackstoneMode, Duo, DuoStats, HydeMode, NoiseSource, Objective, PlayMods, RunResult, Stance,
+  AbilityDef, AbilityEffectKind, CaseId, CrackstoneMode, Duo, DuoStats, EnemyId, HydeMode, NoiseSource, Objective, PlayMods, RunResult, SlurpMode, Stance,
   StampedEvent, StateSnapshot, Vec2, Verdict,
 } from '../types.ts';
 
@@ -51,7 +51,14 @@ export interface TelemetrySample {
  * analytics): egg_site (top egg-site posterior), clue_area (top clue-area probability), hyde_spawn (top spawn
  * probability before emergence), hyde_zone (top zone probability of the zone filter after emergence).
  */
-export type ForecastTarget = 'detection_15s' | 'extraction' | 'eta_s' | 'egg_site' | 'clue_area' | 'hyde_spawn' | 'hyde_zone' | 'crackstone_risk';
+export type ForecastTarget = 'detection_15s' | 'extraction' | 'eta_s' | 'egg_site' | 'clue_area' | 'hyde_spawn' | 'hyde_zone' | 'crackstone_risk'
+  | 'slurp_risk' | 'enemy_spawn';
+/**
+ * Final (FINAL_CONTRACT §9), kept LOCALLY until the server accepts them (mystery_forecasts_target_check): `slurp_risk` =
+ * forecasts.slurp.here.p (rule-based P(Slurp finds you within 15 s)); `enemy_spawn` = the top spawn of an INACTIVE
+ * enemy's director distribution (features.enemy, features.spawn, p_<spawnId>; rule_based, exact).
+ */
+export const LOCAL_ONLY_FORECAST_TARGETS: readonly ForecastTarget[] = ['slurp_risk', 'enemy_spawn'];
 /**
  * Enemy contract: `crackstone_risk` = the RULE-BASED P(Joseph Crackstone can see / scan the player at their spot within
  * the next 10 s) (forecasts.crackstone.here.p; modelLabel rule_based; server: migration 20261024000100).
@@ -255,7 +262,11 @@ export type AdviceAction =
   | 'take_cover' // scan warning while exposed: the nearest covered point reachable before the pulse
   | 'leave_curse' // curse circle while exposed: step out before it lands
   | 'break_sight' // he sees / hunts you: get behind a wall (walls + high cover; crouching is not enough)
-  | 'avoid_area'; // his rule-based risk at your spot is high (or he chases you): leave his sight lines / leash disc
+  | 'avoid_area' // his rule-based risk at your spot is high (or he chases you): leave his sight lines / leash disc
+  // ---- final: hiding cabinets (FINAL_CONTRACT §6; Thing's free advice)
+  | 'hide_cabinet' // an enemy approaches: walk to the nearest free cabinet (target = its door) and press E
+  | 'close_cabinet' // inside with the door open: E closes it (a shut door hides you from every enemy)
+  | 'exit_cabinet'; // inside and clear (or you were seen hiding): E steps out
 
 export interface AdviceOption {
   action: AdviceAction;
@@ -272,7 +283,7 @@ export interface AdviceOption {
   /** For inspect_clue / search_room: which uncollected clue. */
   clueId: string | null;
   /** Which enemy the advice is about (absent = the Hyde / general). The live card's title is CRACKSTONE for 'crackstone'. */
-  enemy?: 'hyde' | 'crackstone';
+  enemy?: EnemyId;
 }
 
 export interface Advice extends AdviceOption {
@@ -309,7 +320,8 @@ export interface SessionRecord {
   offered?: Duo[];
   events: readonly StampedEvent[];
   result?: (Pick<RunResult, 'outcome' | 'verdict' | 'activeTimeS' | 'score' | 'cluesFound' | 'catches'>
-    & Partial<Pick<RunResult, 'caseId' | 'caseVersion' | 'correct' | 'deductionCorrect' | 'eggPoints'>>) | null;
+    & Partial<Pick<RunResult, 'caseId' | 'caseVersion' | 'correct' | 'deductionCorrect' | 'eggPoints' | 'rulesVersion' | 'hintsUsed' | 'detections'
+      | 'hits' | 'defeatedBy' | 'scoreBreakdown'>>) | null;
   recommendations?: Pick<RecommendationRecord, 'action' | 'accepted' | 'outcome'>[];
   forecasts?: Pick<ForecastRecord, 't' | 'target' | 'value' | 'modelLabel'>[];
 }
@@ -334,6 +346,133 @@ export interface LiveForecasts {
    * to his leash disc; `here` = the player's own cell. Null when the case has no Crackstone. Orchestrator-pinned shape.
    */
   crackstone?: CrackstoneForecast | null;
+  // ---- final (FINAL_CONTRACT §9; additive, optional — older consumers ignore them)
+  /**
+   * Compact THREAT MAP: encounter probability by zone for every enemy of the case + the max over the ACTIVE ones.
+   * Inactive enemies: the director's exact spawn rule ("may appear here next"); active Hyde: zone filter; active
+   * Crackstone: sight-risk cells per zone; active Slurp: wander-rule filter. Null when the world has no zones.
+   */
+  threat?: ThreatMap | null;
+  /** Hyde detection risk from noise (rule): P(the Hyde is within your footsteps' hearing radius). Null while inactive. */
+  noise?: NoiseRisk | null;
+  /** RULE-BASED Slurp risk while he is on the map (null when absent / away; see threat.enemies.slurp for "Next: …"). */
+  slurp?: SlurpForecast | null;
+}
+
+/** UX_FINAL Asks: P(Slurp finds you within 15 s) per 4 m cell and at your spot. Never ML; never his hidden position. */
+export interface SlurpForecast {
+  /** Per 4 m cell: the RULE (stand-still P that he finds a player there within 15 s) — always "Rule-based estimate". */
+  cells: { x: number; z: number; sizeM: number; p: number }[];
+  here: { p: number; fact: 'hunting' | 'seen' | 'hidden' | null };
+  horizonS: number;
+  /** Label of `here`: "ML estimate" when the bundled slurpRisk model is valid (trained on simulated episodes), else the rule. */
+  label: 'Rule-based estimate' | 'ML estimate';
+  /** The raw rule value at your spot (the model's main input), for transparency (always set by the live engine). */
+  ruleP?: number;
+  /** Label of `cells` (always set by the live engine). */
+  cellsLabel?: 'Rule-based estimate';
+  /** His public mode (HUD chip). */
+  mode: SlurpMode;
+}
+
+export type ThreatMeaning = 'appear' | 'location' | 'sight';
+export type ThreatBasis = 'spawn_rules' | 'zone_filter' | 'sight_rules' | 'wander_rules';
+
+export interface EnemyThreatLayer {
+  enemy: EnemyId;
+  name: string;
+  /** 'inactive' = not on the map now (zones = where it may APPEAR next); 'active' = in play. */
+  state: 'inactive' | 'active';
+  basis: ThreatBasis;
+  /** Honest label: "Rule-based estimate · spawn rules" / "Bayesian estimate · zone filter" / "… sight rules" / "… wander rules". */
+  label: string;
+  /** What `p` means: 'appear' = P(it appears in this zone next) · 'location' = P(it is in this zone now) · 'sight' = P(it can see a spot here within 10 s). */
+  meaning: ThreatMeaning;
+  /** Same order as world.zones. */
+  zones: { zoneId: string; p: number }[];
+  /** Public HUD mode while active, else null. */
+  mode: string | null;
+  /** Inactive only: earliest seconds until it may (re)appear (director schedule), null = unknown / now. */
+  appearsInS: number | null;
+  /** Inactive only: the per-spawn odds (minimap pins). */
+  spawns?: SpawnProb[];
+  /** Inactive only: the same odds grouped by AREA name, best first (Odds row "Next: {area} %"). */
+  areas?: { name: string; areaId: string | null; x: number; z: number; p: number }[];
+  /**
+   * At the player: Hyde = P(in your zone); Crackstone = P(he sees your spot within 10 s); Slurp = P(he is within his sight
+   * range of you) (1 while he chases / sees you); inactive = P(it appears in your zone next). Null when unknown.
+   */
+  here: number | null;
+}
+
+export interface ThreatZone {
+  zoneId: string;
+  name: string;
+  polygon: Vec2[];
+  /** Per enemy p in this zone (only enemies with a layer; see the layer's `meaning`). */
+  p: Partial<Record<EnemyId, number>>;
+  /** Max over ACTIVE enemies (the threat now); inactive "may appear" odds are never mixed into it. */
+  max: number;
+  /** The active enemy with that max (null when no active enemy has p > 0 here). */
+  top: EnemyId | null;
+}
+
+export interface ThreatMap {
+  zones: ThreatZone[];
+  enemies: Partial<Record<EnemyId, EnemyThreatLayer>>;
+  ownZoneId: string | null;
+  /** Max over active enemies at the player (each layer's `here`). */
+  here: { max: number; top: EnemyId | null };
+  label: string;
+}
+
+export interface NoiseRisk {
+  /** Hearing radius of your footsteps in the current stance (m, un-occluded; 0 standing still). */
+  radiusM: number;
+  /** P(the Hyde is within that radius): zone odds × the share of each zone inside the radius (walls ignored). */
+  p: number;
+  /** 'visible' = you see it, so p is a fact (1 / 0 by distance). */
+  fact: 'visible' | null;
+  label: 'Rule-based estimate · zone odds × hearing radius';
+}
+
+/** Principal Weems' optional hint (FINAL_CONTRACT §8): paid (−50), explicit, never the culprit. */
+export interface WeemsHint {
+  id: string;
+  kind: 'weems';
+  title: 'PRINCIPAL WEEMS';
+  level: 1 | 2 | 3;
+  text: string;
+  /** What the hint is based on (e.g. "Bayesian estimate" for a location, "Case file" for a deduction line). */
+  basis: 'case_line' | 'bayes' | 'deduction';
+  t: number;
+  target?: { x: number; z: number; label: string } | null;
+}
+
+/** Live descriptive counters (FINAL_BRIEF §10 Descriptive) — exact counts from the RULE events of this run. */
+export interface LiveStats {
+  t: number;
+  hintsUsed: number;
+  detections: number;
+  detectionsBy: Record<EnemyId, number>;
+  hits: number;
+  hitsBy: Record<EnemyId, number>;
+  blockedHits: number;
+  cluesFound: number;
+  cluesTotal: number;
+  activeTimeS: number;
+  /**
+   * "If you deliver now" preview of the mystery-v4 score: delivery + clues + bonuses − penalties with the accusation part
+   * shown separately (it depends on the one-shot accusation). Label: "Preview · if you deliver now".
+   */
+  scorePreview: {
+    label: 'Preview · if you deliver now';
+    parts: { delivery: number; clues: number; noDetection: number; noHints: number; timeBonus: number; hintPenalty: number; hitPenalty: number };
+    /** Total WITHOUT the accusation bonus. */
+    totalNow: number;
+    /** + accusation (correct culprit). */
+    accusationBonus: number;
+  };
 }
 export interface CrackstoneForecast {
   cells: { x: number; z: number; sizeM: number; p: number }[];
@@ -358,7 +497,17 @@ export interface LiveMessage {
   basis?: 'rule' | 'pattern'; // diagnostic: direct game-rule cause vs labelled correlation
   t: number; priority: number;
   target?: { x: number; z: number; label: string } | null; // compass/minimap marker for advice / hints
+  /** Final: Thing's advice is FREE (never a hint, never −50) — the HUD shows the "free" chip. */
+  free?: true;
+  /** Final: which enemy an alert / advice is about (headword colour). */
+  enemy?: EnemyId;
 }
-export interface LiveAnalytics { t: number; forecasts: LiveForecasts; messages: LiveMessage[]; advice: LiveMessage | null }
+export interface LiveAnalytics {
+  t: number; forecasts: LiveForecasts; messages: LiveMessage[]; advice: LiveMessage | null;
+  /** Final: Weems hints issued since the last live() call (one per `hint_requested`), oldest first. */
+  weems?: WeemsHint[];
+  /** Final: live descriptive counters (rule events) + the labelled "if you deliver now" score preview. */
+  stats?: LiveStats;
+}
 
 export type { Objective, Stance };

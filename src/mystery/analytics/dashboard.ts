@@ -83,6 +83,11 @@ export function liveForecastCheck(records: readonly SessionRecord[]): LiveForeca
   };
 }
 
+/** A recommendation row that records a Principal Weems hint (weems_l1 / l2 / l3). */
+export function isWeemsAction(action: string): boolean {
+  return /^weems_l[123]$/.test(action);
+}
+
 export function aggregatePrescriptive(records: readonly SessionRecord[]): PrescriptiveAggregate {
   const by = new Map<string, PrescriptiveAggregate['byAction'][number]>();
   let given = 0;
@@ -94,6 +99,7 @@ export function aggregatePrescriptive(records: readonly SessionRecord[]): Prescr
   let nu = 0;
   for (const r of records) {
     for (const rec of r.recommendations ?? []) {
+      if (isWeemsAction(rec.action)) continue; // Principal Weems' paid hints are not Thing's (prescriptive) advice
       given++;
       const a = by.get(rec.action) ?? { action: rec.action, given: 0, followed: 0, followedPct: null, undetectedAfterFollowed: 0, followedObserved: 0, undetectedAfterNotFollowed: 0, notFollowedObserved: 0 };
       a.given++;

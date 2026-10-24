@@ -35,6 +35,8 @@ import { addTo, emptyAcc, scoreOf, summariseCrack, type CrackEpisodeEval, type C
 import { CRACK_BELIEF, CRACK_CELL_M, CRACK_HORIZON_S, CRACK_MODEL_VERSION, CRACK_STEP_S } from '../src/mystery/analytics/crackstoneRisk.ts';
 import { caseWorld } from '../src/mystery/data/caseWorlds.ts';
 import { pointInPolygon } from '../src/mystery/geometry.ts';
+import { slurpRiskFrom, slurpRiskP, type SlurpRiskPart } from '../src/mystery/analytics/slurpModel.ts';
+import { slurpInputOf } from './mystery-train.ts';
 import { isCaseId as isCase } from '../src/mystery/data/cases.ts';
 
 /** Data-driven wording of the §7 reading (no claim the numbers do not support). */
@@ -95,6 +97,61 @@ function crackHereEval(train: Row[], test: Row[]): CrackHere | null {
   return {
     rows: te.length, sessions: new Set(te.map((r) => r.session)).size, model: scoreOf(m),
     constant: { rate: r4(rate), brier: r4(cb / te.length) }, area: { inRate: r4(inRate), outRate: r4(outRate), brier: r4(ab / te.length) },
+  };
+}
+
+/** Player-level check of forecasts.slurp.here (final, rule-based): p at the player's spot vs Slurp finding them in 15 s. */
+interface SlurpHere {
+  rows: number; sessions: number; positives: number; model: Score; constant: { rate: number; brier: number };
+  bins: { lo: number; hi: number; n: number; meanP: number; rate: number }[];
+  /** The bundled logistic slurpRisk model on the same rows (what the HUD shows as "ML estimate"), when present. */
+  ml: { model: Score; bins: { lo: number; hi: number; n: number; meanP: number; rate: number }[] } | null;
+}
+
+function binsOf(ps: number[], ys: number[]) {
+  const edges = [0, 0.05, 0.1, 0.2, 0.4, 1.0001];
+  const bins = edges.slice(0, -1).map((lo, i) => ({ lo, hi: Math.min(1, edges[i + 1]), n: 0, sp: 0, sy: 0 }));
+  ps.forEach((p, i) => {
+    const b = bins.find((x) => p >= x.lo && p < x.hi) ?? bins[bins.length - 1];
+    b.n++;
+    b.sp += p;
+    b.sy += ys[i];
+  });
+  return bins.filter((b) => b.n > 0).map((b) => ({ lo: b.lo, hi: b.hi, n: b.n, meanP: r4(b.sp / b.n), rate: r4(b.sy / b.n) }));
+}
+
+function slurpHereEval(train: Row[], test: Row[], part: SlurpRiskPart | null = null): SlurpHere | null {
+  // forecast regime: Slurp on the map, not hunting / seeing the player at t; label = enemy_detected / enemy_hit {slurp} in (t, t + 15]
+  const use = (r: Row) => r.slurpActive === '1' && r.slurpHere !== undefined && r.slurpHere !== '' && r.slurpFound15 !== '' && (r.slurpFact === '' || r.slurpFact === 'hidden');
+  const tr = train.filter(use);
+  const te = test.filter(use);
+  if (te.length === 0) return null;
+  const rate = tr.length ? tr.filter((r) => r.slurpFound15 === '1').length / tr.length : 0;
+  const m = emptyAcc();
+  let cb = 0;
+  const edges = [0, 0.05, 0.1, 0.2, 0.4, 1.0001];
+  const bins = edges.slice(0, -1).map((lo, i) => ({ lo, hi: Math.min(1, edges[i + 1]), n: 0, sp: 0, sy: 0 }));
+  for (const r of te) {
+    const y = Number(r.slurpFound15);
+    const p = Number(r.slurpHere);
+    addTo(m, p, y);
+    cb += (rate - y) ** 2;
+    const b = bins.find((x) => p >= x.lo && p < x.hi) ?? bins[bins.length - 1];
+    b.n++;
+    b.sp += p;
+    b.sy += y;
+  }
+  return {
+    rows: te.length, sessions: new Set(te.map((r) => r.session)).size, positives: te.filter((r) => r.slurpFound15 === '1').length, model: scoreOf(m),
+    constant: { rate: r4(rate), brier: r4(cb / te.length) },
+    bins: bins.filter((b) => b.n > 0).map((b) => ({ lo: b.lo, hi: b.hi, n: b.n, meanP: r4(b.sp / b.n), rate: r4(b.sy / b.n) })),
+    ml: part ? (() => {
+      const acc = emptyAcc();
+      const ps = te.map((r) => slurpRiskP(part, slurpInputOf(r)));
+      const ys = te.map((r) => Number(r.slurpFound15));
+      ps.forEach((p, i) => addTo(acc, p, ys[i]));
+      return { model: scoreOf(acc), bins: binsOf(ps, ys) };
+    })() : null,
   };
 }
 
@@ -250,6 +307,8 @@ function main(): void {
     ? summariseCrack(crackAll.filter((e) => testSet.has(e.session)), crackAll.filter((e) => !testSet.has(e.session)))
     : null;
   const crackHere = crackHereEval(train, test);
+  const slurpPart = slurpRiskFrom(model);
+  const slurpHere = slurpHereEval(train, test, slurpPart);
 
   // ---- optional: the held-out metrics of the PREVIOUS data's evaluation.json (re-evaluation table)
   type EvalJson = {
@@ -269,12 +328,15 @@ function main(): void {
     method: 'rule_based', label: 'Rule-based estimate', modelVersion: CRACK_MODEL_VERSION, horizonS: CRACK_HORIZON_S, cellM: CRACK_CELL_M, stepS: CRACK_STEP_S,
     belief: CRACK_BELIEF, metrics: { evaluatedAt, cells: crackCells, here: crackHere },
   } : undefined;
-  writeFileSync(MODEL_PATH, `${JSON.stringify({ ...model, ...(zoneFilter ? { zoneFilter } : {}), ...(crackstoneRisk ? { crackstoneRisk } : {}), metrics }, null, 1)}\n`);
+  const slurpRisk = slurpPart && slurpHere?.ml ? {
+    ...slurpPart, metrics: { brier: slurpHere.ml.model.brier, ruleBrier: slurpHere.model.brier, constantBrier: slurpHere.constant.brier, rows: slurpHere.rows, sessions: slurpHere.sessions },
+  } : slurpPart;
+  writeFileSync(MODEL_PATH, `${JSON.stringify({ ...model, ...(zoneFilter ? { zoneFilter } : {}), ...(crackstoneRisk ? { crackstoneRisk } : {}), ...(slurpRisk ? { slurpRisk } : {}), metrics }, null, 1)}\n`);
   writeFileSync(join(dataDir, 'evaluation.json'), `${JSON.stringify({
     evaluatedAt, modelVersion: model.modelVersion, detection, detectionTrain: trainMetrics, ruleBasedOnHoldout: rule, extraction, eta,
     byCase: byCaseEval,
     previous,
-    liveEstimates: { zones: zoneEval, spawn: spawnCheck, eggPosterior: eggCheck, cluePosterior: clueCheck, crackstone: { cells: crackCells, here: crackHere } },
+    liveEstimates: { zones: zoneEval, spawn: spawnCheck, eggPosterior: eggCheck, cluePosterior: clueCheck, crackstone: { cells: crackCells, here: crackHere }, slurp: { here: slurpHere } },
     slices: { byCase: byCaseSlice, byCharacter, byPokemon, byProfile, byFootstepNoise: byNoise, byHydeControl: byControl, byHydeMode: byMode },
   }, null, 1)}\n`);
 
@@ -363,11 +425,15 @@ ${relTable(zoneEval.all)}` : 'Not evaluated (no zone filter in the artifact).'}
 ### 6.2 Hyde spawn odds (before emergence) — the sim's exact rule
 
 ${spawnCheck ? `${table(['estimate (holdout, at emergence)', 'episodes', 'sessions', 'Brier', 'log-loss', 'top-1'], [
-    ['spawn rule from the last pre-emergence sample', ...ps(spawnCheck.posterior)],
+    ['spawn distribution at the last step before the spawn', ...ps(spawnCheck.posterior)],
     ['raw spawn weights (ignores the distance rule)', ...ps(spawnCheck.prior)],
   ])}
 
-The rule is the sim's own draw rule, so p(true spawn) > 0 unless the player crossed the ${DEFAULT_TUNING.hyde.minSpawnM} m boundary in the last second.` : 'No emergence spawns in the holdout (pre-overhaul data).'}
+Final (mystery-gen-5, director worlds): the distribution is the director's own \`encounterSpawnDistribution\` recorded at
+the 60 Hz step before the Hyde's first appearance — the function the director draws from (one step later, with the
+player's pose of that step; the same distribution the live "Next: {area}" odds show). It is a distribution over 3–4
+spawns, so Brier / log-loss measure its spread, not an error; p(true spawn) is 0 only if the player moved a spawn out of
+eligibility in that last step. Older data: the emergence rule (≥ ${DEFAULT_TUNING.hyde.minSpawnM} m) from the last 1 Hz sample.` : 'No emergence spawns in the holdout (pre-overhaul data).'}
 
 ### 6.3 Egg-site and clue-site posteriors — exact Bayes (\`src/mystery/analytics/bayes.ts\`)
 
@@ -641,10 +707,10 @@ ${sliceTable(byMode)}
   and learn; their detection rates and the relationship between features and detection can differ substantially.
   The metrics above validate the model **on simulated data only**. Live forecasts are stored separately
   (\`mystery_forecasts\`) and compared with live outcomes on Laptop 1 as an observational check.
-- Three cases share one island and one Hyde patrol; they differ in where the clues and the egg lie (and room names).
-  The per-case rows show the model is usable for each layout; a NEW case (or moved clues / egg) needs regenerated
+- Each case plays in its own compact play area (own Hyde patrol, spawns, cabinets) cut from the shared island. The
+  per-case rows show the model is usable for each layout; a NEW case (or moved clues / egg / spawns) needs regenerated
   data and retraining. Case content changes bump \`CaseDef.version\`, which the data rows record.
-- The label depends on the current sim tuning (\`mystery-v3.1\`); any tuning change requires
+- The label depends on the current sim tuning (\`${model.rulesVersion}\`); any tuning change requires
   \`npm run mystery:generate && npm run mystery:train && npm run mystery:evaluate\`.
 - Rows within an episode are correlated (1 Hz samples of the same run); the session-grouped split prevents leakage
   between train and test, but row counts overstate the effective sample size.
@@ -654,6 +720,50 @@ ${sliceTable(byMode)}
   instantly${crackManifest ? ` (${crackManifest.cursesHit} of ${crackManifest.cursesCast} curses landed on a bot)` : ''}, so real visitors will meet more curses and scan hits.
 - The HUD shows the probability with a band and the label "ML estimate"; if the artifact is missing or invalid it shows
   "Rule-based risk estimate" (formula in \`src/mystery/analytics/predictive.ts\`) and never claims to be trained.
+
+## 11. Final wave — encounter odds of all three enemies, Weems, Thing (rules, not models)
+
+Live outputs added for the final rules (\`mystery-v4\`: encounter director, Slurp, hiding cabinets). None of them is ML;
+every one carries its exact source label in the HUD (\`LiveForecasts.threat / slurp / noise\`, \`src/mystery/analytics/encounter*.ts\`).
+
+| Output | Math | Label |
+|---|---|---|
+| Inactive enemy — "Next: {area} %", lens pins | The director's EXACT spawn distribution (\`director.ts encounterSpawnDistribution\` via \`run.encounterDistribution(enemy)\`): eligible = ≥ minSpawnM from the player, not in LOS within playerSeesHydeM, outside the ±60° / 35 m view cone; w′ = w × 1.5 (zone holds the PUBLIC objective point) × 0.3 (used in the last recentSpawnS); P = w′ / Σ w′ (all 0 while none is eligible). Grouped by zone and by case area. | Rule-based estimate · spawn rules |
+| Active Hyde — zone odds | The zone filter of §6.1 (patrol CTMC + β observation), restarted from the spawn distribution at EVERY (re)spawn, stopped at a despawn. | Bayesian estimate · zone filter |
+| Active Crackstone — zone odds | §7's sight-risk cells, zone p = max cell p in the zone; \`here\` = 0 / fact 'hidden' while the cabinet door is shut. | Rule-based estimate · sight rules |
+| Active Slurp — zone odds, 4 m cells, \`here\` | Wander chain: occupancy = time share of straight legs between all ordered pairs of SlurpDef.wander (+ mean pause), reset to it at rate 1/τ (τ = mean leg + pause); observations as the Hyde's (seen → collapse, CHASE / ATTACK near the player, INVESTIGATE / SEARCH within 20 m, unseen → β = 0.5 in your zone). P(he finds you within 15 s) = 1 − Π over looks at +0/5/10/15 s of (1 − Σ_z q_z · (near_z + cone · (far_z − near_z))) with near = share of the zone within proximityM, far = within sight range, cone = coneDeg / 360 (all around while he INVESTIGATEs / SEARCHes; walls ignored); hidden (crouch spot / open door) → proximity only; door shut → 0 'hidden'; CHASE / ATTACK / witnessed → 1 'hunting'. Zone odds + cells: this rule. The Odds row "Finds you" (\`here\`): a logistic regression on logit(rule at your projected path) + his mode + your stance + hidden, trained on simulated episodes (§11.1); the raw rule if the artifact lacks it. | zones / cells: Rule-based estimate · wander rules; here: ML estimate |
+| Threat map max | Per zone, the max over the ACTIVE enemies' p ("may appear" odds of inactive enemies are never mixed in). | (per-layer labels) |
+| Hyde hears you | P(Hyde within your footsteps' hearing radius) = Σ_z p_z · (share of zone z inside the radius) from the zone odds; fact 1 / 0 while you see it. Walls ignored. | Rule-based estimate · zone odds × hearing radius |
+| Weems (paid, explicit) | L1 = designer template with the most probable area (clue-area posterior §6.3, ties by distance) · L2 = the most probable candidate site there, or the case's evidence-relationship line · L3 = the case's deduction line. Never a suspect's name (guarded), ≤ 90 chars. | — (hint) |
+| Thing (free) | The rule-based decision engine (§6.4) + cabinets (hide before an enemy arrives — never while one can see you; close; stay quiet; step out when clear / at once when witnessed), Slurp escapes, "your Pokémon's defensive move" (block kinds), the safer path routed around the threat map's max. | rule-based decision engine |
+
+### 11.1 Slurp risk at the player's spot (held-out sessions)
+
+${slurpHere ? `Rows where Slurp was on the map and neither hunting nor seeing the bot at t (fact '' or 'hidden'); label = \`enemy_detected\` / \`enemy_hit\` {slurp} within (t, t + 15 s].
+
+${table(['metric', 'value'], [
+    ['rows / sessions', `${slurpHere.rows} / ${slurpHere.sessions}`],
+    ['positives', String(slurpHere.positives)],
+    ['Brier — raw rule / constant rate', `${slurpHere.model.brier.toFixed(4)} / ${slurpHere.constant.brier.toFixed(4)} (rate ${slurpHere.constant.rate.toFixed(4)})`],
+    ['log loss — raw rule', slurpHere.model.logLoss.toFixed(4)],
+    ...(slurpHere.ml ? [
+      ['Brier — ML (logistic on the rule + mode + stance)', slurpHere.ml.model.brier.toFixed(4)],
+      ['log loss — ML', slurpHere.ml.model.logLoss.toFixed(4)],
+    ] : []),
+  ])}
+
+Raw rule (stand-still geometry; the map's 4 m cells show it, labelled "Rule-based estimate"):
+
+${table(['p bin', 'rows', 'mean p', 'observed rate'], slurpHere.bins.map((b) => [`${b.lo.toFixed(2)}–${b.hi.toFixed(2)}`, b.n, b.meanP.toFixed(3), b.rate.toFixed(3)]))}
+${slurpHere.ml ? `
+ML estimate (\`slurpRisk\` in the artifact — what the Odds row "Finds you" shows; fitted on the TRAINING sessions only):
+
+${table(['p bin', 'rows', 'mean p', 'observed rate'], slurpHere.ml.bins.map((b) => [`${b.lo.toFixed(2)}–${b.hi.toFixed(2)}`, b.n, b.meanP.toFixed(3), b.rate.toFixed(3)]))}
+
+${slurpHere.ml.model.brier < slurpHere.constant.brier
+    ? `The ML estimate beats the constant base rate on held-out sessions (Brier ${slurpHere.ml.model.brier.toFixed(4)} vs ${slurpHere.constant.brier.toFixed(4)}); the raw rule alone scores ${slurpHere.model.brier.toFixed(4)} — it under-predicts moving bots — so the HUD shows the calibrated value labelled "ML estimate" and the map cells keep the rule ("Rule-based estimate").`
+    : 'Even the ML estimate does NOT beat the constant base rate here; it is still labelled honestly, but treat it as weak.'}` : ''}`
+: 'No Slurp rows in this data (generated before mystery-gen-5).'}
 
 ## 10. Reproduce
 

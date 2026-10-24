@@ -43,10 +43,16 @@
 //   reveal_clues   without the scent visual it also reveals every enemy within rangeM (0 = anywhere) for durationS
 //                  (effects().enemiesRevealed / enemyRevealRangeM; the detail text is unchanged).
 //   block_grab     the next grab OR curse deals no damage (consumed by whichever lands first).
+//
+// Three enemies (docs/final/FINAL_CONTRACT.md §5): Slurp joins the EnemyHandle list after Crackstone, with the same
+// effect-kind rules (stun / slow / distract targeting, diminishing per enemy, lure within slurp.lureRangeM of the decoy,
+// premonition → slurpEffects().premonitionPath, reveal shows him too, block_grab also blocks his attack). Inactive
+// (not spawned / despawned) enemies are never targets. Details name him "Slurp".
 import type { SimContext } from './context.ts';
 import type { CrackstoneBrain } from './crackstone.ts';
 import { forward, wrapAngle, yawTo } from './geometry.ts';
 import type { HydeBrain } from './hyde.ts';
+import type { SlurpBrain } from './slurp.ts';
 import type { AbilityDef, AbilityEffect, AbilityEffectKind, AbilityStatus, Vec2 } from './types.ts';
 
 export interface AbilitySlot {
@@ -81,6 +87,7 @@ type Targeting = Pick<AbilityEffect, 'rangeM' | 'needsLineOfSight' | 'coneDeg'>;
 export interface EnemyNames { label: string; the: string; inactive: string }
 export const HYDE_NAMES: EnemyNames = { label: 'Hyde', the: 'the Hyde', inactive: 'the Hyde is not hunting yet' };
 export const CRACKSTONE_NAMES: EnemyNames = { label: 'Crackstone', the: 'Crackstone', inactive: 'Crackstone is not here yet' };
+export const SLURP_NAMES: EnemyNames = { label: 'Slurp', the: 'Slurp', inactive: 'Slurp is not here' };
 
 /** Is an enemy (active flag + position) a valid target for a targeted effect (range, line of sight, facing cone)? */
 export function enemyTargetable(ctx: SimContext, enemy: { active: boolean; x: number; z: number }, names: EnemyNames, e: Targeting): { ok: boolean; why: string } {
@@ -118,6 +125,7 @@ interface EnemyHandle {
   slow(ctx: SimContext, d: number, mult: number): void;
   distract(ctx: SimContext, d: number): void;
   setVisual(ctx: SimContext, visual: 'petrify' | 'pin', until: number): void;
+  setPremonition(ctx: SimContext, until: number): void;
 }
 
 /** "Hyde stunned 3.0 s" / "Hyde and Crackstone stunned 3.0 s" / "Hyde stunned 1.5 s (diminished), Crackstone stunned 3.0 s". */
@@ -127,7 +135,11 @@ function joinHits(hits: { label: string; part: string }[]): string {
 }
 
 export class AbilityInterpreter {
-  constructor(private readonly hyde: HydeBrain, private readonly crackstone: CrackstoneBrain | null = null) {}
+  constructor(
+    private readonly hyde: HydeBrain,
+    private readonly crackstone: CrackstoneBrain | null = null,
+    private readonly slurp: SlurpBrain | null = null,
+  ) {}
 
   /** The enemies on this map, Hyde first. */
   private enemies(): EnemyHandle[] {
@@ -139,6 +151,9 @@ export class AbilityInterpreter {
         ctx.fx.hydeVisual = v;
         ctx.fx.hydeVisualUntil = Math.max(ctx.fx.hydeVisualUntil, until);
       },
+      setPremonition: (ctx, until) => {
+        ctx.fx.premonitionUntil = Math.max(ctx.fx.premonitionUntil, until);
+      },
     }];
     const cs = this.crackstone;
     if (cs) {
@@ -148,6 +163,23 @@ export class AbilityInterpreter {
         setVisual: (ctx, v, until) => {
           ctx.fx.crackstoneVisual = v;
           ctx.fx.crackstoneVisualUntil = Math.max(ctx.fx.crackstoneVisualUntil, until);
+        },
+        setPremonition: (ctx, until) => {
+          ctx.fx.crackstonePremonitionUntil = Math.max(ctx.fx.crackstonePremonitionUntil, until);
+        },
+      });
+    }
+    const sl = this.slurp;
+    if (sl) {
+      out.push({
+        names: SLURP_NAMES, active: sl.active, x: sl.s.x, z: sl.s.z, lastStunEnd: sl.lastStunEnd, slowMult: () => sl.s.slowMult,
+        stun: (ctx, d) => sl.stun(ctx, d), slow: (ctx, d, m) => sl.slow(ctx, d, m), distract: (ctx, d) => sl.distract(ctx, d),
+        setVisual: (ctx, v, until) => {
+          ctx.fx.slurpVisual = v;
+          ctx.fx.slurpVisualUntil = Math.max(ctx.fx.slurpVisualUntil, until);
+        },
+        setPremonition: (ctx, until) => {
+          ctx.fx.slurpPremonitionUntil = Math.max(ctx.fx.slurpPremonitionUntil, until);
         },
       });
     }
@@ -277,8 +309,7 @@ export class AbilityInterpreter {
             whys.push(`${en.names.label} too far to foresee (${d.toFixed(1)} m > ${e.rangeM} m)`);
             continue;
           }
-          if (en.names === HYDE_NAMES) fx.premonitionUntil = Math.max(fx.premonitionUntil, t + dur);
-          else fx.crackstonePremonitionUntil = Math.max(fx.crackstonePremonitionUntil, t + dur);
+          en.setPremonition(ctx, t + dur);
           seen.push(en.names.label);
         }
         if (seen.length === 0) return { applied: false, detail: whys.join('; ') };
@@ -293,7 +324,8 @@ export class AbilityInterpreter {
       }
       case 'lure': {
         const cs = this.crackstone;
-        if (!this.hyde.active && !cs?.active) return { applied: false, detail: 'the Hyde is not hunting yet' };
+        const sl = this.slurp;
+        if (!this.hyde.active && !cs?.active && !sl?.active) return { applied: false, detail: 'the Hyde is not hunting yet' };
         const point = this.aimPoint(ctx, e.rangeM);
         const lured: string[] = [];
         const whys: string[] = [];
@@ -305,6 +337,12 @@ export class AbilityInterpreter {
           if (!cs.active) whys.push(CRACKSTONE_NAMES.inactive);
           else if (cs.lure(ctx, point, dur)) lured.push(CRACKSTONE_NAMES.label);
           else whys.push(`Crackstone too far from the decoy (${dc.toFixed(1)} m > ${cs.cfg.lureRangeM} m)`);
+        }
+        if (sl) {
+          const ds = Math.hypot(point.x - sl.s.x, point.z - sl.s.z);
+          if (!sl.active) whys.push(SLURP_NAMES.inactive);
+          else if (sl.lure(ctx, point, dur)) lured.push(SLURP_NAMES.label);
+          else whys.push(`Slurp too far from the decoy (${ds.toFixed(1)} m > ${sl.cfg.lureRangeM} m)`);
         }
         if (lured.length === 0) return { applied: false, detail: whys.join('; ') };
         fx.lurePoint = point;
@@ -332,6 +370,7 @@ export class AbilityInterpreter {
       }
       case 'block_grab': {
         fx.blockGrabUntil = Math.max(fx.blockGrabUntil, t + dur);
+        if (this.slurp) return { applied: true, detail: `next monster hit blocked for ${dur} s (a grab's catch still counts)` };
         if (this.crackstone) return { applied: true, detail: `next grab or curse blocked for ${dur} s (a grab's catch still counts)` };
         return { applied: true, detail: `next grab blocked for ${dur} s (the catch still counts)` };
       }
@@ -372,6 +411,7 @@ export class AbilityInterpreter {
       ctx.world.setWallOpen(sw.gateWallId, true);
       this.hyde.invalidatePath();
       this.crackstone?.invalidatePath();
+      this.slurp?.invalidatePath();
       return { applied: true, detail: sw.openS > 0 ? `gate opened for ${sw.openS} s` : 'gate opened' };
     }
     if (!fallbackStun) return { applied: false, detail: 'no switch in reach' };

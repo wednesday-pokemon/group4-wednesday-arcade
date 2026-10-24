@@ -2,7 +2,8 @@
 // forwards KeyboardEvent.code / movementX/Y here. Controls (OVERHAUL_CONTRACT "Controls", UX_OVERHAUL §9 / R4): WASD
 // move; mouse or arrow keys look (← → 120°/s, ↑ ↓ pitch); Shift sprint; C crouch (Ctrl only while the kiosk keyboard
 // lock is active); E interact (+ held for long actions / the egg set-down); Q = character power (slot 'F'; F still
-// works as a silent alias, never displayed); R = Pokémon move (slot 'Q'); V hint. Tab/Esc/M are app keys (PlayView).
+// works as a silent alias, never displayed); R = Pokémon move (slot 'Q'); V = Ask Weems (paid hint); X = minimap danger
+// view (an app-side edge, never sent to the sim). Tab/Esc/M are app keys (PlayView).
 // The sim's input field names stay `power` (slot F) / `move` (slot Q).
 import type { MysteryInput } from '../../mystery/types.ts';
 
@@ -25,7 +26,7 @@ export const KEY_PITCH_RAD_PER_S = (70 * Math.PI) / 180;
 /** Codes the game owns while playing: their browser defaults (scroll, find, focus moves…) are suppressed. */
 export const GAME_CODES: ReadonlySet<string> = new Set([
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight',
-  'KeyC', 'KeyE', 'KeyF', 'KeyQ', 'KeyR', 'KeyV', 'Space', 'Tab', 'PageUp', 'PageDown', 'Home', 'End', 'Slash', 'Quote', 'Backspace',
+  'KeyC', 'KeyE', 'KeyF', 'KeyQ', 'KeyR', 'KeyV', 'KeyX', 'Space', 'Tab', 'PageUp', 'PageDown', 'Home', 'End', 'Slash', 'Quote', 'Backspace',
 ]);
 
 type Edge = 'interact' | 'power' | 'move' | 'hint';
@@ -40,6 +41,8 @@ export class MysteryInputController {
   private held = new Set<string>();
   private edges: Record<Edge, boolean> = { interact: false, power: false, move: false, hint: false };
   private crouchLatched = false;
+  /** X presses not yet taken by the lens (app-side; not part of MysteryInput). */
+  private lensPresses = 0;
   private dx = 0;
   private dy = 0;
   /** Cumulative counters (tutorial steps + debug). */
@@ -60,6 +63,7 @@ export class MysteryInputController {
       const edge = EDGE_BY_CODE[code];
       if (edge) this.edges[edge] = true;
       if (this.prefs.crouchToggle && this.isCrouchKey(code)) this.crouchLatched = !this.crouchLatched;
+      if (code === 'KeyX') this.lensPresses++;
     }
     if (CTRL_CODES.has(code) && !this.ctrlCrouch()) return false; // ignored outside the kiosk lock
     this.held.add(code);
@@ -75,8 +79,16 @@ export class MysteryInputController {
     this.dy += movementY;
   }
 
+  /** X presses since the last call (the minimap lens cycles once per press). */
+  takeLens(): number {
+    const n = this.lensPresses;
+    this.lensPresses = 0;
+    return n;
+  }
+
   /** Window blur / overlay open: drop held keys and pending look so nothing sticks. Toggled crouch persists. */
   clear(): void {
+    this.lensPresses = 0;
     this.held.clear();
     this.dx = 0;
     this.dy = 0;

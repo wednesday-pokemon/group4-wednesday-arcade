@@ -1,6 +1,9 @@
-// Scoring + egg tier draw for mystery-v3.1 (pure; shared with Deno so the server can recompute both).
-// Score = round1(points × 100 − activeTimeS); DNF → null. Finishers (score desc, then time asc) rank above all DNFs.
+// Scoring + egg tier draw (pure; shared with Deno so the server can recompute both — no DOM, no Math.random, no Date).
+// mystery-v4 (docs/final/FINAL_CONTRACT.md §1, current): scoreV4(parts) → ScoreBreakdown, total clamped ≥ 0, finishers
+// only (DNF → null). mystery-v3.1 (legacy rows): scoreFor = round1(points × 100 − activeTimeS).
+// Finishers (score desc, then time asc) rank above all DNFs in both versions.
 import type { EggTier } from '../game/types.ts';
+import type { ScoreBreakdown } from './types.ts';
 import { prfUniform } from './prf.ts';
 
 export type LiveEggTier = Exclude<EggTier, 'none'>;
@@ -14,6 +17,68 @@ export function round1(x: number): number {
 
 export function scoreFor(points: number, activeTimeS: number): number {
   return round1(points * 100 - round1(activeTimeS));
+}
+
+/** mystery-v4 score constants (FINAL_CONTRACT §1). */
+export const SCORE_V4 = {
+  delivery: 1000,
+  accusation: 300,
+  perClue: 100,
+  maxClues: 3,
+  noDetection: 150,
+  noHints: 150,
+  timeBonusS: 300,
+  perHint: 50,
+  perHit: 75,
+} as const;
+
+/** What scoreV4 needs — all counted from validated RULE events (the server recomputes each one). */
+export interface ScoreV4Parts {
+  /** Egg delivered at Iago Tower. */
+  delivered: boolean;
+  /** The accused suspect is the case's culprit. */
+  correct: boolean;
+  /** Required clues found (capped at 3). */
+  cluesFound: number;
+  /** `enemy_detected` events. */
+  detections: number;
+  /** `hint_requested` events (explicit Ask-Weems presses only). */
+  hintsUsed: number;
+  /** `enemy_hit` events (blocked hits count). */
+  hits: number;
+  /** Active gameplay seconds (pauses / loading / prologue / tutorial excluded). */
+  activeTimeS: number;
+}
+
+/** A count from untrusted input: finite, ≥ 0, whole. */
+function count(x: number): number {
+  return Number.isFinite(x) && x > 0 ? Math.floor(x) : 0;
+}
+
+/**
+ * mystery-v4 score: delivery 1000 + accusation 300 (correct culprit) + 100 × min(clues, 3) + 150 (no detections) + 150 (no
+ * hints) + max(0, 300 − floor(activeTimeS)) − 50 × hints − 75 × hits; total = max(0, sum). Every part is an integer.
+ * Non-finite / negative counts count as 0; a non-finite time earns no time bonus.
+ */
+export function scoreV4(parts: ScoreV4Parts): ScoreBreakdown {
+  const S = SCORE_V4;
+  const hints = count(parts.hintsUsed);
+  const hits = count(parts.hits);
+  const detections = count(parts.detections);
+  const t = parts.activeTimeS;
+  const timeBonus = Number.isFinite(t) && t >= 0 ? Math.max(0, S.timeBonusS - Math.floor(t + 1e-9)) : 0;
+  const b = {
+    delivery: parts.delivered ? S.delivery : 0,
+    accusation: parts.correct ? S.accusation : 0,
+    clues: S.perClue * Math.min(S.maxClues, count(parts.cluesFound)),
+    noDetection: detections === 0 ? S.noDetection : 0,
+    noHints: hints === 0 ? S.noHints : 0,
+    timeBonus,
+    hintPenalty: hints > 0 ? -S.perHint * hints : 0,
+    hitPenalty: hits > 0 ? -S.perHit * hits : 0,
+  };
+  const sum = b.delivery + b.accusation + b.clues + b.noDetection + b.noHints + b.timeBonus + b.hintPenalty + b.hitPenalty;
+  return { ...b, total: Math.max(0, sum) };
 }
 
 export interface RankEntry { outcome: 'finished' | 'dnf'; score: number | null; activeTimeS: number }

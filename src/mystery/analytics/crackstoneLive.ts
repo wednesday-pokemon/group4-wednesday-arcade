@@ -7,7 +7,7 @@ import type { CrackstoneMode, StampedEvent, Vec2 } from '../types.ts';
 import {
   CRACK_HORIZON_S, CRACK_LABEL, CrackstoneRiskModel, CrackstoneTracker, crackstoneRiskModel, type CrackSample, type RiskGeometry,
 } from './crackstoneRisk.ts';
-import { crackstoneOf, crackstonePose, type CrackstonePublic } from './publicState.ts';
+import { cabinetOf, crackstoneOf, crackstonePose, type CrackstonePublic } from './publicState.ts';
 import type { CrackstoneForecast } from './types.ts';
 
 const r3 = (x: number) => Math.round(x * 1000) / 1000;
@@ -146,7 +146,7 @@ export class CrackstoneLive {
     const m = this.model;
     this.cached = {
       cells: m.cells.map((c, i) => ({ x: r2(c.x), z: r2(c.z), sizeM: m.cellM, p: r3(out.cells[i]) })),
-      here: { p: r3(out.here), fact: factOf(pub, run.player.hidden) },
+      here: { p: doorClosed(run) && !isHunting(pub) ? 0 : r3(out.here), fact: factOf(pub, run.player.hidden, doorClosed(run)) },
       horizonS: CRACK_HORIZON_S,
       label: CRACK_LABEL,
       area: { name: this.areaName, polygon: this.polygon.map((q) => ({ ...q })) },
@@ -162,8 +162,10 @@ export class CrackstoneLive {
     if (!pub) return null;
     const base = this.cached ?? this.sample(run);
     if (!base) return null;
-    const fact = factOf(pub, run.player.hidden);
-    const p = fact === 'hunting' || fact === 'seen' ? 1 : base.here.p;
+    const closed = doorClosed(run);
+    const fact = factOf(pub, run.player.hidden, closed);
+    // a closed cabinet door: invisible to his sight, proximity and scans (FINAL_CONTRACT §6) — unless he is already hunting
+    const p = fact === 'hunting' || fact === 'seen' ? 1 : closed ? 0 : base.here.p;
     return { ...base, here: { p, fact }, mode: pub.mode };
   }
 
@@ -172,9 +174,19 @@ export class CrackstoneLive {
   }
 }
 
-export function factOf(pub: CrackstonePublic, hidden: boolean): CrackstoneForecast['here']['fact'] {
-  if (pub.active && (pub.mode === 'CHASE' || pub.mode === 'ATTACK')) return 'hunting';
+export function factOf(pub: CrackstonePublic, hidden: boolean, cabinetClosed = false): CrackstoneForecast['here']['fact'] {
+  if (isHunting(pub)) return 'hunting';
+  if (cabinetClosed) return 'hidden';
   if (pub.canSeePlayer) return 'seen';
   if (hidden) return 'hidden';
   return null;
+}
+
+function isHunting(pub: CrackstonePublic): boolean {
+  return pub.active && (pub.mode === 'CHASE' || pub.mode === 'ATTACK');
+}
+
+/** The player is inside a cabinet with the door shut. */
+function doorClosed(run: MysteryRun): boolean {
+  return cabinetOf(run)?.phase === 'closed';
 }

@@ -4,6 +4,7 @@
 // search, never the drawn site. Display rules (5 % rounding, largest remainder, bands, facts as words, source labels)
 // come from odds.ts so the HUD Odds panel, the maps and this overlay can never disagree.
 import { clueAreaProbabilities, eggPosterior } from '../../mystery/analytics/bayes.ts';
+import type { EnemyId } from '../../mystery/types.ts';
 import type { LiveForecasts, RiskBand } from '../../mystery/analytics/types.ts';
 import type { CaseDef, CaseWorldDef, ClueDef, ClueId, InvestigationState } from '../../mystery/types.ts';
 import { deltaText, oddsCells, roundPct, SOURCE_LABEL, type OddsBand, type OddsInput } from './odds.ts';
@@ -113,12 +114,12 @@ export interface OddsRowView {
   /** Band word, or for risk the model's band ("Low" / "Medium" / "High"). */
   bandText: string | null;
   top: boolean;
-  tone: 'hyde' | 'predict' | 'crack';
+  tone: 'hyde' | 'predict' | 'crack' | 'slurp';
   ref: MapRef | null;
 }
 
 export interface OddsBlockView {
-  id: 'hyde' | 'egg' | 'clues' | 'tower' | 'crack';
+  id: 'hyde' | 'egg' | 'clues' | 'tower' | 'crack' | 'slurp' | 'appear';
   question: string;
   /** Small line under the question ("Emerges in 0:20"). */
   note: string | null;
@@ -173,6 +174,10 @@ export interface OddsContext {
   clueTotal: number;
   /** 'carried' / 'delivered' replace the egg rows with a fact line when the forecasts are missing. */
   eggState?: 'resting' | 'carried' | 'dropped' | 'delivered' | null;
+  /** Final (UX_FINAL §1d): which monsters of this case are on the map now (inactive ones: "may appear next"). */
+  active?: Partial<Record<EnemyId, boolean>> | null;
+  /** Slurp is part of this case. */
+  slurpPresent?: boolean;
 }
 
 /**
@@ -184,7 +189,58 @@ export function oddsBlocks(x: OddsContext): OddsBlockView[] {
   const out = [hydeBlock(x), eggBlock(x), clueBlock(x), towerBlock(x)];
   const c = crackBlock(x);
   if (c) out.push(c);
+  const sl = slurpBlock(x);
+  if (sl) out.push(sl);
+  const ap = appearBlock(x);
+  if (ap) out.push(ap);
   return out;
+}
+
+const ENEMY_LABEL: Record<EnemyId, string> = { hyde: 'Hyde', crackstone: 'Crackstone', slurp: 'Slurp' };
+
+/**
+ * "Will Slurp find you?" (UX_FINAL §1d) — only in cases with Slurp: the analytics' Slurp forecast for your spot (facts
+ * as words), else his threat-map layer value; "Away" / "Not on the map" while he is inactive. Never invented.
+ */
+export function slurpBlock({ forecasts, active, slurpPresent }: OddsContext): OddsBlockView | null {
+  if (!slurpPresent) return null;
+  const base = { id: 'slurp' as const, question: 'Will Slurp find you?', note: null, history: null, source: `${SOURCE_LABEL.rule} · wander rules, sight + proximity` };
+  if (active && active.slurp === false) return { ...base, rows: [], fact: 'Not on the map right now.' };
+  const sf = (forecasts as unknown as { slurp?: { here?: { p?: number; fact?: string | null }; horizonS?: number; label?: string } } | null | undefined)?.slurp;
+  const layer = forecasts?.threat?.enemies?.slurp;
+  const p = typeof sf?.here?.p === 'number' ? sf.here.p : typeof layer?.here === 'number' && layer.state === 'active' ? layer.here : null;
+  if (p === null) return { ...base, rows: [], fact: 'Not available yet.' };
+  const f = sf?.here?.fact;
+  const fact = f === 'hunting' ? 'Hunting you' : f === 'hidden' ? 'Hidden' : f === 'seen' ? 'Seen now' : null;
+  const cell = oddsCells([{ p, fact }], { distribution: false })[0]!;
+  const horizon = Math.round(sf?.horizonS ?? 15);
+  return {
+    ...base, fact: null,
+    rows: [{ key: 'slurp-here', name: `Finds you · ${horizon} s`, value: cell.text, pct: cell.pct, band: cell.band, bandText: cell.band ? BAND_WORD[cell.band] : null, top: false, tone: 'slurp', ref: null }],
+  };
+}
+
+/**
+ * "Where may monsters appear next?" — the encounter director's EXACT spawn distribution (grouped by area) for every
+ * monster that is not on the map; hidden when all are active / the analytics has no spawn layer.
+ */
+export function appearBlock({ forecasts, active }: OddsContext): OddsBlockView | null {
+  const enemies = (Object.keys(active ?? {}) as EnemyId[]).filter((e) => active?.[e] === false);
+  if (enemies.length === 0) return null;
+  const out: OddsRowView[] = [];
+  for (const e of enemies) {
+    const layer = forecasts?.threat?.enemies?.[e];
+    const spawns = layer?.state === 'inactive' && layer.spawns?.length ? layer.spawns
+      : e === 'hyde' && forecasts?.hyde.phase === 'before_emergence' ? forecasts.hyde.spawns : null;
+    if (!spawns) continue;
+    const by = new Map<string, number>();
+    for (const sp of spawns) by.set(sp.name, (by.get(sp.name) ?? 0) + sp.p);
+    const items = [...by].map(([name, p]) => ({ key: `appear-${e}-${name}`, name: `${ENEMY_LABEL[e]} · ${name}`, p, ref: null }));
+    const list = rows(items, { distribution: true, tone: e === 'hyde' ? 'hyde' : e === 'crackstone' ? 'crack' : 'slurp' }).filter((r) => r.pct !== null && r.pct >= 5).slice(0, 2);
+    out.push(...list);
+  }
+  if (out.length === 0) return null;
+  return { id: 'appear', question: 'Where may monsters appear next?', note: null, rows: out, fact: null, history: null, source: 'Rule-based estimate · spawn rules' };
 }
 
 const CRACK_FACT_WORD = { seen: 'Seen now', hidden: 'Hidden', hunting: 'Hunting you' } as const;

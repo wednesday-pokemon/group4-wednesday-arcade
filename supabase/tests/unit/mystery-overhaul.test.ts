@@ -19,6 +19,11 @@ import { CASE_WORLDS } from '../../functions/_shared/mystery/data/caseWorlds.ts'
 import { scoreFor } from '../../functions/_shared/mystery/scoring.ts';
 import { CASE_IDS } from '../../functions/_shared/mystery/types.ts';
 
+/** These tests pin the LEGACY mystery-v3.1 rules (v3.1 history stays verifiable/readable); v4 lives in mystery-v4.test.ts. */
+const V31 = 'mystery-v3.1' as const;
+const computeV31 = (...a: [Parameters<typeof computeResult>[0], Parameters<typeof computeResult>[1], Parameters<typeof computeResult>[2], Parameters<typeof computeResult>[3]?]) =>
+  computeResult(a[0], a[1], a[2], a[3], V31);
+
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 const SID = '6f1d2c3b-4a59-4e6f-8a7b-9c0d1e2f3a4b';
 
@@ -142,8 +147,8 @@ describe('overhaul telemetry is analytics-only (never changes the verified resul
     // finalize re-validates only the RULE events from the database: same state as the incremental append-time one
     const replay = applyBatch(initialProgress(), full.filter((e) => RULE_EVENT_TYPES.includes(e.type)), ctx);
     expect(ruleFingerprint(replay)).toBe(ruleFingerprint(withTele));
-    const a = computeResult(plain, kase, 'rare');
-    const b = computeResult(withTele, kase, 'rare');
+    const a = computeV31(plain, kase, 'rare');
+    const b = computeV31(withTele, kase, 'rare');
     expect(b).toEqual(a);
     expect(b).toMatchObject({ verdict: 'case_solved', score: scoreFor(3, 99), claimMatches: true });
   });
@@ -248,7 +253,7 @@ describe('server enums == the SQL CHECK lists (latest migration wins)', () => {
       for (const m of sql.matchAll(/create index mystery_events_rule_idx[^;]*?where type in \(([^)]*)\)/gi)) { last = literals(m[1]); where = file; }
     }
     expect(last, 'mystery_events_rule_idx defined in supabase/migrations').not.toBeNull();
-    expect(where).toBe('20261024000100_mystery_crackstone.sql');
+    expect(where).toBe('20261025000100_mystery_v4.sql');
     expect(sorted(last!)).toEqual(sorted(RULE_EVENT_TYPES));
     expect(RULE_EVENT_TYPES).toContain('curse');
   });
@@ -268,7 +273,7 @@ describe('forecast targets', () => {
 
   it('accepts every target; the overhaul ones as probabilities with a flat candidate feature', () => {
     expect([...FORECAST_TARGETS]).toEqual(['detection_15s', 'extraction', 'eta_s', 'egg_site', 'clue_area', 'hyde_zone', 'hyde_spawn',
-      'crackstone_risk']);
+      'crackstone_risk', 'slurp_risk', 'enemy_spawn']);
     expect(parse(fc('crackstone_risk', 0.27, { horizon_s: 10, area: 'archive_stacks', mode: 'PATROL' })).target).toBe('crackstone_risk');
     expect(parse(fc('egg_site', 0.5, { site: 'e_shed', prior: 0.5, traces: 2, ruled_out: false })))
       .toMatchObject({ target: 'egg_site', value: 0.5, features: { site: 'e_shed' } });
@@ -279,7 +284,7 @@ describe('forecast targets', () => {
     expect(parse(fc('eta_s', 140)).value).toBe(140);
   });
   it('rejects out-of-range probabilities, unknown targets and nested features', () => {
-    for (const target of ['egg_site', 'clue_area', 'hyde_zone', 'hyde_spawn', 'crackstone_risk']) {
+    for (const target of ['egg_site', 'clue_area', 'hyde_zone', 'hyde_spawn', 'crackstone_risk', 'slurp_risk', 'enemy_spawn']) {
       expect(code(() => parse(fc(target, 1.01))), target).toBe('INVALID_INPUT:forecasts[0].value');
       expect(code(() => parse(fc(target, -0.01))), target).toBe('INVALID_INPUT:forecasts[0].value');
       expect(code(() => parse(fc(target, Number.NaN))), target).toBe('INVALID_INPUT:forecasts[0].value');

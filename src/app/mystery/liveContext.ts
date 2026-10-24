@@ -2,7 +2,7 @@
 // Types + a React context only: nothing here imports supabase-js, so the LOCAL DEMO bundle stays free of it.
 import { createContext } from 'react';
 import type { MysteryAnalytics } from '../../mystery/analytics/index.ts';
-import type { CaseId, Duo, DuoOffer } from '../../mystery/types.ts';
+import type { CaseId, Duo, DuoOffer, MysteryRulesVersion } from '../../mystery/types.ts';
 import type { StationId } from '../../game/index.ts';
 import type { ConnectionState } from '../../lib/backend.ts';
 import type { MysteryResultView, MysteryReveal } from '../../lib/supabase/mysteryWire.ts';
@@ -40,6 +40,8 @@ export interface LiveSessionData {
   status: 'offered' | 'playing' | 'finished' | 'dnf' | 'abandoned';
   /** Highest acknowledged event seq (-1 = none). */
   lastSeq: number;
+  /** The rules version the SERVER created the session with (a restored v3.1 session must keep v3.1 scoring). */
+  rulesVersion?: MysteryRulesVersion;
 }
 
 export type LiveRestore =
@@ -98,4 +100,10 @@ export interface LiveStationHandle {
   dispose(): void;
   /** Diagnostics for render_game_to_text (never includes the seed). */
   debug(): object;
+  /**
+   * Home-page leaderboard (FINAL_CONTRACT §10): emits { connection, loaded, error, top5, leaderboard, defeated } with the
+   * RAW mystery_top5 / mystery_leaderboard_v4 / mystery_defeated_v4 rows (v4 only) + parsed `entries`, refreshed via
+   * Realtime INSERT / DELETE on mystery_results. Absent when the services have no leaderboard feed.
+   */
+  readonly leaderboard?: { subscribe(listener: (snapshot: unknown) => void): () => void };
 }

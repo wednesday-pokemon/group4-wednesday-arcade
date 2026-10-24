@@ -1,6 +1,6 @@
 // mystery-v3.1 LIVE station kiosk, end to end against the in-memory contract fake (real supabase-js client, real
 // functions transport, real server validation / rules modules, real MysteryRun + Bot + analytics). Offline only.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { MysteryAnalytics } from '../../src/mystery/analytics/index.ts';
 import type { SupabaseBatch } from '../../src/mystery/analytics/types.ts';
 import type { StationId } from '../../src/game/index.ts';
@@ -17,6 +17,8 @@ import {
 import { CASES } from '../../src/mystery/data/cases.ts';
 import { CASE_SOLUTIONS } from '../../src/mystery/data/solutions.ts';
 import { CASE_IDS, type CaseId } from '../../src/mystery/types.ts';
+
+vi.setConfig({ testTimeout: 300_000 }); // final sim: bot runs at 60 Hz (fakeSupabase.ts MYSTERY_TEST_TIMEOUT_MS)
 
 async function signedIn(server: FakeSupabaseServer, stationId: StationId = 'station_a', opts: Parameters<typeof openMysteryStation>[2] = {}) {
   const page = openMysteryStation(server, stationId, opts);
@@ -105,7 +107,7 @@ describe('mystery station: create → select → append → finalize', () => {
     // Session over: a refresh starts a new visitor.
     expect(readLiveSession(page.storage, 'station_a')).toBeNull();
     controller.dispose();
-  }, 60_000);
+  }, 300_000);
 
   it('a DNF run is verified and unranked', async () => {
     const server = new FakeSupabaseServer();
@@ -127,7 +129,7 @@ describe('mystery station: create → select → append → finalize', () => {
     expect(ui.final.reveal).toBeNull(); // nobody was accused: nothing to reveal
     expect(ui.final.result).toMatchObject({ caseId: DNF_CASE, evidence: [], deductionCorrect: false, accused: null });
     controller.dispose();
-  }, 60_000);
+  }, 300_000);
 });
 
 /** Wraps the uploaded batches: `edit` may rewrite the events of a batch (the local run is untouched). */
@@ -234,7 +236,7 @@ describe('mystery station: three cases', () => {
     // the second finalize returns the same result and reveal
     expect(await page.services.api.finalize(chosen.sessionId, null)).toEqual(final.response);
     controller.dispose();
-  }, 60_000);
+  }, 300_000);
 
   it('forged evidence ids are dropped by the server; the claim is flagged; the deduction is not credited', async () => {
     const server = new FakeSupabaseServer();
@@ -257,7 +259,7 @@ describe('mystery station: three cases', () => {
     expect(stored.evidence).toEqual(['falsified_transfer', 'note_drain_mud']);
     expect(JSON.stringify(stored.client_claim)).toContain('culprit_is_thornhill'); // raw claim kept for the operator audit
     controller.dispose();
-  }, 60_000);
+  }, 300_000);
 
   it('a client claiming correct / case_solved for a WRONG accusation is overruled by the server', async () => {
     const server = new FakeSupabaseServer();
@@ -281,7 +283,7 @@ describe('mystery station: three cases', () => {
     expect(final.response.rank).toBe(1);
     expect(final.response.reveal?.culprit).toBe(culprit);
     controller.dispose();
-  }, 60_000);
+  }, 300_000);
 
   it('the accusation is one shot: a second accusation is rejected (before and after finalize)', async () => {
     const server = new FakeSupabaseServer();
@@ -318,7 +320,7 @@ describe('mystery station: three cases', () => {
     expect(classifyFailure(late)).toBe('closed');
     expect(await page2.services.api.finalize(v2.chosen.sessionId, null)).toEqual(ok.response);
     k2.controller.dispose();
-  }, 120_000);
+  }, 300_000);
 });
 
 describe('mystery station: refresh / reconnect', () => {
@@ -400,7 +402,7 @@ describe('mystery station: refresh / reconnect', () => {
     expect((await again.restore()).kind).toBe('interrupted');
     expect(readLiveSession(page.storage, 'station_a')).toBeNull();
     again.dispose();
-  }, 60_000);
+  }, 300_000);
 });
 
 describe('mystery station: upload robustness', () => {
@@ -419,7 +421,7 @@ describe('mystery station: upload robustness', () => {
     expect(stored.size).toBe(sentSeqs.size); // nothing stored twice
     expect(server.mysterySessions.get(chosen.sessionId)!.event_count).toBe(sentSeqs.size);
     controller.dispose();
-  }, 60_000);
+  }, 300_000);
 
   it('SEQ_CONFLICT (another tab wrote different events) → get-session, drop ≤ lastSeq, resend the rest', async () => {
     const server = new FakeSupabaseServer();
@@ -443,7 +445,7 @@ describe('mystery station: upload robustness', () => {
     expect(s.status).toBe('finished');
     expect([...server.mysteryEvents.get(s.id)!.keys()].filter((q) => q <= 3)).toEqual([1, 2, 3]);
     controller.dispose();
-  }, 60_000);
+  }, 300_000);
 
   it('EVENT_REJECTED → the run is marked unverified, uploading stops, the local result is labelled "Not verified"', async () => {
     const server = new FakeSupabaseServer();
@@ -483,7 +485,7 @@ describe('mystery station: upload robustness', () => {
     expect(server.functionCalls('mystery-finalize')).toHaveLength(0);
     expect(server.mysteryResults.size).toBe(0);
     controller.dispose();
-  }, 60_000);
+  }, 300_000);
 
   it('offline: keeps playing locally ("Offline · saves locally"), then resyncs on reconnect and verifies', async () => {
     const server = new FakeSupabaseServer();
@@ -512,7 +514,7 @@ describe('mystery station: upload robustness', () => {
     expect((await controller.finalizing()!).kind).toBe('verified');
     expect(controller.getUi().sync).toBe('live');
     controller.dispose();
-  }, 60_000);
+  }, 300_000);
 
   it('network failures (no answer) back off and retry; the run is verified once the server is reachable', async () => {
     const server = new FakeSupabaseServer();
@@ -535,7 +537,7 @@ describe('mystery station: upload robustness', () => {
     }
     expect(controller.getUi().final.kind).toBe('verified');
     controller.dispose();
-  }, 60_000);
+  }, 300_000);
 
   it('finalize is idempotent: a second call returns the SAME stored result (replay), one row, one Realtime insert', async () => {
     const server = new FakeSupabaseServer();
@@ -557,7 +559,7 @@ describe('mystery station: upload robustness', () => {
     expect(ack.duplicates).toBe(1);
     expect(ack.accepted).toBe(0);
     controller.dispose();
-  }, 60_000);
+  }, 300_000);
 });
 
 describe('mystery station: selection and isolation', () => {
@@ -660,7 +662,7 @@ describe('mystery station: operator reset', () => {
     server.nextMysterySeeds.push(FINISH_SEED);
     expect((await controller.createSession('After Reset')).status).toBe('offered');
     controller.dispose();
-  }, 60_000);
+  }, 300_000);
 
   it('a stale reset notice never ends a NEW active session', async () => {
     const server = new FakeSupabaseServer();

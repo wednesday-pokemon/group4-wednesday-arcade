@@ -25,6 +25,7 @@ export interface NavFeed {
 export interface FeedKeyOptions {
   heardHydeBearing: number | null;
   heardCrackBearing?: number | null;
+  heardSlurpBearing?: number | null;
   showPredictions: boolean;
   highContrast: boolean;
   reducedMotion: boolean;
@@ -92,7 +93,12 @@ export function mapFeedKey(s: PublicMapState, o: FeedKeyOptions): string {
     s.hint.level, s.hint.areaId ?? '', tgt ? `${r1(tgt.x)},${r1(tgt.z)},${tgt.label}` : '-',
     rt ? `${rt.length},${end ? `${r1(end.x)},${r1(end.z)}` : ''}` : '-',
     forecastSig(s.forecasts), invSig(s.investigation),
-    o.heardHydeBearing ?? '-', o.heardCrackBearing ?? '-', o.showPredictions ? 1 : 0, o.highContrast ? 1 : 0, o.reducedMotion ? 1 : 0,
+    // final: the lens, Slurp's R4 marker, Weems' mark, which monsters are on the map
+    s.lens ? `${s.lens.enemy}${s.lens.inactive ? '~' : ''}` : '-',
+    s.slurp ? `${s.slurp.marker ? `${r1(s.slurp.marker.x)},${r1(s.slurp.marker.z)},${s.slurp.marker.kind}` : '-'},${s.slurp.chase ? 1 : 0}` : '-',
+    s.weemsMark ? `${r1(s.weemsMark.x)},${r1(s.weemsMark.z)}` : '-',
+    s.active ? Object.entries(s.active).map(([k, v]) => `${k[0]}${v ? 1 : 0}`).join('') : '-',
+    o.heardHydeBearing ?? '-', o.heardCrackBearing ?? '-', o.heardSlurpBearing ?? '-', o.showPredictions ? 1 : 0, o.highContrast ? 1 : 0, o.reducedMotion ? 1 : 0,
     animating(s) ? Math.floor(s.t * 30) : 0, Math.floor(s.t),
   ].join('|');
 }
@@ -133,7 +139,7 @@ export function areaNameAt(s: PublicMapState): string | null {
  */
 export function compassMarkers(
   s: PublicMapState, L: MapLayers,
-  o: { heardHydeBearing: number | null; heardCrackBearing?: number | null; showPredictions: boolean; forecasts: LiveForecasts | null },
+  o: { heardHydeBearing: number | null; heardCrackBearing?: number | null; heardSlurpBearing?: number | null; showPredictions: boolean; forecasts: LiveForecasts | null },
 ): CompassMarkerIn[] {
   const me: Vec2 = { x: s.player.x, z: s.player.z };
   const out: CompassMarkerIn[] = [];
@@ -174,12 +180,15 @@ export function compassMarkers(
       if (at.distanceM <= CURSED_MARKER_M) out.push({ id: 'cursed_area', kind: 'cursed_area', ...at, name: 'CURSED', lantern: false });
     }
   }
+  const sl = s.slurp;
+  if (sl?.marker) out.push({ id: 'slurp', kind: 'slurp_seen', ...markerAt(me, sl.marker), lantern: false, chasing: sl.chase });
+  else if (o.heardSlurpBearing !== null && o.heardSlurpBearing !== undefined) out.push({ id: 'slurp_heard', kind: 'slurp_heard', bearing: o.heardSlurpBearing, distanceM: null, lantern: false });
   return out;
 }
 
 export function buildNavFeed(
   s: PublicMapState,
-  o: { heardHydeBearing: number | null; heardCrackBearing?: number | null; showPredictions: boolean; highContrast: boolean; reducedMotion: boolean; lowGraphics?: boolean },
+  o: { heardHydeBearing: number | null; heardCrackBearing?: number | null; heardSlurpBearing?: number | null; showPredictions: boolean; highContrast: boolean; reducedMotion: boolean; lowGraphics?: boolean },
   key: string = mapFeedKey(s, o),
 ): NavFeed {
   const layers = buildMapLayers(s, 'mini');
@@ -187,7 +196,7 @@ export function buildNavFeed(
     map: s,
     layers,
     heading: headingDeg(s.player.yaw),
-    markers: compassMarkers(s, layers, { heardHydeBearing: o.heardHydeBearing, heardCrackBearing: o.heardCrackBearing ?? null, showPredictions: o.showPredictions, forecasts: s.forecasts }),
+    markers: compassMarkers(s, layers, { heardHydeBearing: o.heardHydeBearing, heardCrackBearing: o.heardCrackBearing ?? null, heardSlurpBearing: o.heardSlurpBearing ?? null, showPredictions: o.showPredictions, forecasts: s.forecasts }),
     areaName: areaNameAt(s),
     showPredictions: o.showPredictions,
     highContrast: o.highContrast,

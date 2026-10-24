@@ -2,6 +2,9 @@
 // Restored Home → Nickname → three duo cards → case-file reveal (the session's assigned case) → Thing's case
 // prologue → Thing tutorial → island (HUD, Tab board, Esc pause) → accusation at
 // Iago Tower → results → reset. The island view is lazy-loaded so three.js and the sim stay out of the menu bundle.
+// Final wave (docs/final/UX_FINAL.md §5/§6, rules mystery-v4): the Home carries the "Top Detectives" leaderboard panel
+// (LOCAL DEMO: this laptop's v4 records; LIVE: the station controller's `leaderboard` feed when it exposes one) and the
+// results show the v4 breakdown with a rank chip ("#n tonight" / "#n on this laptop" / "Verifying…" / "Not ranked").
 //
 // Two modes:
 //  * LOCAL DEMO (`/`, no `live` prop): crypto seed + draftOffer in this browser, persisted in
@@ -43,8 +46,11 @@ import {
   browserRandomBytes, createSession, openSession, resetSession, sameDuo, writeSession, type MysterySession, type SessionDeps,
 } from './session.ts';
 import { openCaseFullscreen } from './kiosk.ts';
-import { browserStorage, writeLive, type LivePhase } from './records.ts';
-import { HOME_TAGLINE } from './thingLines.ts';
+import { browserStorage, loadRecords, writeLive, type LivePhase } from './records.ts';
+import { HomeBoard } from '../../ui/mystery/leaderboard/HomeLeaderboard.tsx';
+import { createLocalBoardFeed, UNAVAILABLE_LIVE_FEED } from '../../ui/mystery/leaderboard/localFeed.ts';
+import { liveBoardFeed, localEntries, rankOf } from '../../ui/mystery/leaderboard/model.ts';
+import { breakdownOf, rankChipView, type RankChipView } from '../../ui/mystery/leaderboard/scoreView.ts';
 import { CASE_IDS, MYSTERY_RULES_VERSION, type CaseId, type CaseSolution } from '../../mystery/types.ts';
 import '../../ui/styles/mystery.css';
 
@@ -54,12 +60,13 @@ const PlayView = lazy(loadPlayView);
 const LOCAL_STATION_ID = 'local';
 const HomeBackdrop = lazy(() => import('./HomeBackdrop.tsx'));
 
-/** UX §1: the three step titles ARE the tagline verbatim. */
+/** UX §1: the three step titles ARE the tagline (the steps list's accessible name). UX_FINAL §5: step 3 = the monsters + cabinets. */
 const HOME_STEPS = [
   { title: 'Stay Silent.', body: 'Crouch with C and move slowly. Hydes hunt by sound.' },
   { title: 'Read the Clues.', body: 'Find three pieces of evidence. Tab opens your board.' },
-  { title: 'Escape the Hyde.', body: 'Carry the egg to Iago Tower, then name the culprit.' },
+  { title: 'Escape the monsters.', body: 'Hide in cabinets with E. Bring the egg to Iago Tower.' },
 ];
+const HOME_STEPS_LABEL = HOME_STEPS.map((s) => s.title).join(' ');
 
 export interface MysteryRouteProps {
   characterId: Duo['characterId'] | null;
@@ -152,7 +159,7 @@ function bootOnce(route: MysteryRouteProps, live: boolean) {
 /** The server's session as the journey's MysterySession (offer exactly as the server returned it). */
 export function sessionFromLive(d: LiveSessionData, createdAt = new Date().toISOString()): MysterySession {
   return {
-    rulesVersion: MYSTERY_RULES_VERSION,
+    rulesVersion: d.rulesVersion ?? MYSTERY_RULES_VERSION,
     sessionId: d.sessionId,
     seed: d.seed,
     offer: d.offer,
@@ -346,6 +353,16 @@ export function MysteryApp({ live = null, ...route }: MysteryAppProps) {
   }, [state.screen]);
   const shownResult = state.result && live && liveUi.final.kind === 'verified' ? serverRunResult(liveUi.final.result, state.result) : state.result;
 
+  // Home leaderboard: LIVE = the station's verified v4 feed when the controller exposes one; LOCAL DEMO = this laptop.
+  const boardFeed = useMemo(() => (live ? liveBoardFeed(live) ?? UNAVAILABLE_LIVE_FEED : createLocalBoardFeed()), [live]);
+  // Results rank chip (UX_FINAL §6): LIVE from the server's finalize rank; LOCAL from this laptop's v4 records.
+  const rankChip = useMemo<RankChipView | null>(() => {
+    if (state.screen !== 'results' || !shownResult || shownResult.outcome !== 'finished') return null;
+    if (live) return rankChipView({ mode: 'live', final: liveUi.final.kind, rank: liveUi.final.kind === 'verified' ? liveUi.final.rank : null });
+    const score = breakdownOf(shownResult)?.total ?? shownResult.score;
+    return rankChipView({ mode: 'local', rank: rankOf(localEntries(loadRecords(browserStorage())), session.sessionId, { score, activeTimeS: shownResult.activeTimeS }) });
+  }, [state.screen, shownResult, live, liveUi.final, session.sessionId]);
+
   useTestHooks(
     () => ({
       mode: 'mystery',
@@ -421,28 +438,34 @@ export function MysteryApp({ live = null, ...route }: MysteryAppProps) {
     switch (state.screen) {
       case 'home':
         return (
-          <Splash
-            stationName={live ? `${live.stationName} · Nevermore: Deadly Secrets` : 'Demo station · Nevermore: Deadly Secrets'}
-            mode={live ? 'live' : 'local_demo'}
-            tools={tools}
-            notice={notice}
-            restoring={false}
-            steps={HOME_STEPS}
-            stepsLabel={HOME_TAGLINE}
-            kicker="Pokémon Day III · Halloween Arcade"
-            subtitle="A Nevermore Mystery"
-            tagline="Every clue reveals a secret. Every sound invites the Hyde."
-            emblem={<ThingSigil size={96} animated pose="wave" label="Thing, your guide" />}
-            footnote="Score: egg points × 100 − your time. ~6 min"
-            startLabel="Open the case"
-            fullscreenHint={false}
-            onStart={() => {
-              // Kiosk: element fullscreen + keyboard lock from this click (Ctrl may then crouch). Never blocks the flow.
-              void openCaseFullscreen();
-              setNotice(null);
-              dispatch({ type: 'start' });
-            }}
-          />
+          <HomeBoard feed={boardFeed}>
+            {({ panel, button }) => (
+              <Splash
+                board={panel}
+                boardButton={button}
+                stationName={live ? `${live.stationName} · Nevermore: Deadly Secrets` : 'Demo station · Nevermore: Deadly Secrets'}
+                mode={live ? 'live' : 'local_demo'}
+                tools={tools}
+                notice={notice}
+                restoring={false}
+                steps={HOME_STEPS}
+                stepsLabel={HOME_STEPS_LABEL}
+                kicker="Pokémon Day III · Halloween Arcade"
+                subtitle="A Nevermore Mystery"
+                tagline="Every clue reveals a secret. Every sound invites the Hyde."
+                emblem={<ThingSigil size={96} animated pose="wave" label="Thing, your guide" />}
+                footnote="Deliver the egg, name the culprit, stay unseen. ~6 min"
+                startLabel="Open the case"
+                fullscreenHint={false}
+                onStart={() => {
+                  // Kiosk: element fullscreen + keyboard lock from this click (Ctrl may then crouch). Never blocks the flow.
+                  void openCaseFullscreen();
+                  setNotice(null);
+                  dispatch({ type: 'start' });
+                }}
+              />
+            )}
+          </HomeBoard>
         );
       case 'nickname':
         return (
@@ -529,6 +552,7 @@ export function MysteryApp({ live = null, ...route }: MysteryAppProps) {
             caseDef={activeCase}
             solution={solution?.caseId === activeCase.id ? solution : null}
             tools={tools}
+            rankChip={rankChip}
             onPlayAgain={reset}
           />
         );

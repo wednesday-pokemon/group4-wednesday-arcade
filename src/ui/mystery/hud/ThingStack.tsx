@@ -11,6 +11,7 @@ const HEAD_CLASS: Record<string, string> = {
   INVESTIGATION: 'is-investigation',
   PATTERN: 'is-pattern',
   CRACKSTONE: 'is-crack',
+  SLURP: 'is-slurp',
 };
 
 export function ThingStackView({ log, card }: { log: StackView | null; card: StackView | null }) {
@@ -33,7 +34,11 @@ function Card({ c }: { c: StackView }) {
     return (
       <div className="mhud-card mhud-card--advice" data-testid="thing-line" data-kind="advice">
         <ThingSigil size={32} pose="point" />
-        <span className={`mhud-card__head${c.head === 'CRACKSTONE' ? ' is-crack' : ''}`}><Icon name="signpost" /> {c.head}</span>
+        <span className={`mhud-card__head${c.head === 'CRACKSTONE' ? ' is-crack' : ''}`}>
+          <Icon name="signpost" /> {c.head}
+          {/* UX_FINAL §4: Thing's advice is free (never a hint_requested); the chip makes the contrast with Weems explicit */}
+          <span className="mhud-card__free" data-testid="thing-free">free</span>
+        </span>
         <span className="mhud-card__text">{c.text}</span>
         {c.why && <span className="mhud-card__why">Why: {c.why}</span>}
       </div>

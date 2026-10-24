@@ -11,7 +11,11 @@ Game-designer document. Sources: `docs/v3.1/GAME_PLAN_v3_1.md` (source of truth)
 | `cases.ts` | `CASES` (three cases, public), `isCaseId`, `caseById`, `ROOM_LABELS`, `CASE_DISCLAIMER` — answers in `solutions.ts` (`CASE_SOLUTIONS`) |
 | `thing.ts` | `THING`, `THING_STAY_SILENT`, `formatThingLine`, `ThingPose`, `ThingLine`, `TutorialLine` |
 | `island.ts` | `buildIsland()`, `PRACTICE_CRATE`, `SHORTCUT_GATE_WALL_ID` |
-| `caseWorlds.ts` | `CASE_WORLDS`, `caseWorld()` — per-case layout, candidate sites, spawns, zones, examines, passage, hazards (§10) |
+| `caseWorlds.ts` | `CASE_WORLDS`, `caseWorld()` — per-case layout, candidate sites, spawns, zones, examines, passage, hazards (§10); compact `playArea`, cabinets, Slurp, `encounterSpawns` (§12) |
+| `thing.ts` (final) | also `WEEMS` (optional scored hints), `DEATH_LINES`, `CABINET_PROMPTS`; `THING.prescriptive / slurp / cabinet / status` (§12) |
+
+> **Current source of truth for cases, maps and the three enemies: §12 "Final (2026-10-24)".** §2–§4b and §10 describe
+> the full-island layout and the earlier case texts (Isaac Night as a suspect is retired; he is now the monster Slurp).
 
 **Honesty notes.** Every number is a proposed default for playtesting. It is not validated balance. Distances and
 times below are computed from the map geometry. They are not playtest measurements. Move legality is tracked in
@@ -835,4 +839,240 @@ Catacombs"), `crackstone_deaf` "He can't hear you, but he sees far. Use walls." 
 4. **Searchlight post collision** (Case 03) is not in walls/cover. If the renderer adds a collider, it must stay
    ≤ 1.2 m radius (his path passes 1.72 m from (30, −48)).
 5. Case 02's path passes the winch lever (−22, −27) at 1.2 m. Levers have no collider today, so this is fine. If one
-   is added, keep it ≤ 0.4 m.
+   is added, keep it ≤ 0.4 m. *(Final: that lever moved to the tunnel office, see §12.)*
+
+---
+
+## 12. Final (2026-10-24): Galpin, compact maps, cabinets, Slurp, encounter director, Weems
+
+Requirements: `docs/final/FINAL_BRIEF.md`, contract `docs/final/FINAL_CONTRACT.md` §1–§8. Data: `cases.ts` /
+`solutions.ts` (content version **3**), `caseWorlds.ts` (`playArea`, cabinets, `slurp`, `encounterSpawns`),
+`tuning.ts` (`director`, `slurp`, `cabinet`, `scoring`), `thing.ts` (`WEEMS`, `DEATH_LINES`, `CABINET_PROMPTS`,
+`THING.prescriptive / slurp / cabinet / status`). **Everything below is computed by hand from the geometry — no shell
+this pass, no bot or playtest numbers.** The game-developer's walkability tests and the orchestrator's bot sweep are the
+authority; where they disagree, they win and I will move points.
+
+### 12.1 Suspects and culprits (all three cases)
+
+| Suspect | Role (this story only, not canon) | Culprit in |
+|---|---|---|
+| Marilyn Thornhill | Archivist and greenhouse curator | 01 The Poisoned Archive |
+| Françoise Galpin (`galpin`) | Visiting historian restoring the crypt | 02 The Crypt's Last Witness |
+| Barry Dort | Night guard and security watch | 03 The Midnight Signal |
+
+Isaac Night is no suspect anywhere; he roams as **Slurp**. The only in-fiction mention is Case 02's prologue egg line
+("the tunnels under the crypt — Slurp's haunt"). In Cases 01 / 03 Galpin simply takes Isaac's old innocent slot: Case 01
+`botanical_residue` (she returned the only other greenhouse key at 9:05 pm), Case 03 `watchtower_signal` (her observatory
+star log runs every five minutes 11:00–11:45). Case 01 note *Muddy Boots* became *Chalk Dust in the Hall* (stone
+rubbings — a role hint, no name).
+
+### 12.2 Case 02 rewritten — truth table (culprit Françoise Galpin)
+
+Statements: Thornhill "returned archive boxes to the tunnel early, then worked upstairs" · Galpin "my restoration kit
+was locked in the library all night; I never went below" · Barry "at the pier gate when the crypt bell rang".
+
+| Clue (id kept) | Proves | Names | Clears | Text in one line |
+|---|---|---|---|---|
+| `sabotaged_gate` — Sabotaged Crypt Gate | **method** | Galpin | — | pin drawn, chain sawn with a wire saw; the gate lock opened with the crypt restoration key issued only to F. Galpin |
+| `tunnel_access_record` — Restricted Tunnel Sign-In | **opportunity** | Galpin, Thornhill | Thornhill | "F. Galpin — 11:12 pm", minutes before the fall; Thornhill in 8:40, out 8:55 pm |
+| `equipment_match` — Restorer's Tool Satchel | **broken alibi** | Galpin, Barry | Barry | her stamped satchel, found underground: wire saw, chain filings, the gate's brass pin, fresh tunnel clay (the kit "locked in the library"); harbour master logs Barry's lantern at the pier 11:15 pm |
+
+| Clues found | Unexplained innocents | Fair conclusion | Verdict if Galpin accused |
+|---|---|---|---|
+| gate only | Thornhill, Barry | a key-holder made it fall | unsolved |
+| sign-in only | Barry | Galpin was below at 11:12 | unsolved |
+| satchel only | Thornhill | Galpin's kit went below | unsolved |
+| gate + sign-in | Barry | strong; Barry open | unsolved |
+| gate + satchel | Thornhill | strong; Thornhill open | unsolved |
+| sign-in + satchel | none | Galpin by elimination, method missing | unsolved |
+| all three | none | method + opportunity + alibi | **case_solved** (exactly the 3 cited) |
+
+Notes (support nobody): *Archive Boxes in the Tunnel* (tempts toward Thornhill; her 8:40 visit) and *The Crypt Bell*.
+Tests to update (game-developer): `cases.test.ts` `NAME_PATTERNS` / `ROLE_PATTERNS` need a `galpin` entry, e.g.
+`/\bGalpin\b|\bFrançoise\b|\bF\. ?G\./` and `/\bhistorian\b|\brestorer\b/i`, and `isaac` removed. No other clue text uses
+"historian" / "restorer" / "Galpin".
+
+### 12.3 Compact play areas (`CaseWorldDef.playArea`)
+
+| Case | Bounds (m) | Boundary pieces (case extraWalls) | Start (facing) | Hyde lap |
+|---|---|---|---|---|
+| 01 | x −19..45 × z −60..9 (64 × 69) | `pa_bnd_vine_s` + `pa_bnd_shelf_s` (z 8), `pa_rubble_crypt_door`, `pa_rubble_vault_door`, `pa_bnd_vine_court` (x −12.5) | (10, 5.5) east, at the archive's west door | 8 pts, 116 m, ~48 s |
+| 02 | x −45..19.5 × z −60..9 (64.5 × 69) | `cw_bnd_rubble_s` + `cw_bnd_hedge_s` (z 8), `cw_bnd_hedge_e` (x −6), `cw_bnd_fence_t` (x 18.7), `cw_bnd_fence_c` (x 17.5) | (14, −16) west, terrace east edge | 10 pts, 142 m, ~59 s |
+| 03 | x −19..45 × z −60..−5 (64 × 55) | `ms_fence_ravine` (ravine sealed), `ms_rubble_kennel`, `ms_bnd_fence_w` (x −12.5) | (2, −12.5) north, under the ridge | 7 pts, 93 m, ~39 s |
+
+Every boundary piece either joins an island wall (gap < 0.8 m) or keeps ≥ 3 m (doorway) / ≥ 2.5 m (corridor) to every
+wall incl. those outside the bounds (the `caseIslands.test.ts` rule). Tricky ones: the south boundary sits at z 8 (not 9)
+so it keeps 3.2 m from `chapel_s` / `chapel_e`'s end and 3.2 m from `res_w_n`'s door cap; terrace fences start at x 18.7
+(0.6 m from the `res_w_n` / `res_n_w` caps at (20, −10)); Case 02's courtyard fence moves to x 17.5 to leave
+`hs_court_e` outside and keep 3.7 m to the tower. `c_pillar_m2` (8, 8) becomes a fence post in Cases 01 / 02. Zones tile
+the bounds rectangle exactly, so unreachable cells between a fence and the bounds edge are still zoned.
+
+```
+CASE 01 — Poisoned Archive (x −19..45, z −60..9)
+ z-58 ##########################################################  cliff
+      |hedge|  TOWER YARD   [TOWER 3..13] cab   statue   E crate(30,-51)
+      |x-12.5  Hw(-10,-38)    door z-46   H(12,-40)        Slurp yard
+ z-34 ======|W gate|=========|E gate|==|POISON GARDEN|=|STACKS|==(Gomez gate)
+      GREENHOUSE (vines) S shelf(2.5,-27.5)  vine x17   S bed(23.5,-31)  cab  S term
+      E store(-6,-28) cab   L trellis(18.8,-32)  E nest(22.5,-21)  stacks  hide
+      H ravine(-12,-16)  H loop -> (12,-16) -> (-11,-13)   cab(24.7,-15)
+ z-10 ===ridge==[RAVINE]=====ridge=====+==res_n==[N door]===== archive N half
+      PORTER'S LODGE  books(5,-7) S ledger(12,-7) ruin  | ARCHIVE  boards  S desk(38,-6) cab
+      cab(13,-2.7)  practice(6,3.5)  START(10,5.5)-> D | shelves (Crackstone loop)  vial
+ z  8 =====hedge (pa_bnd_vine_s)=========================+===bookcase (pa_bnd_shelf_s)====
+```
+```
+CASE 02 — Crypt's Last Witness (x −45..19.5, z −60..9)
+ z-58 #######################################################  cliff
+      | N tunnel (puddles) ...........  mouth                [TOWER] |fence x17.5
+      | W tunnel  [OFFICE x-38..-26: S desk, E nest, cab, L winch] door x-26   H(12,-40)
+      |  S bend   X rubble(x-38)        S tunnel (winch examine)  Ht mouth(-21,-43)
+ z-34 =====court_s_egg=========|W gate Hw|=========|E gate|====|
+      CATACOMBS (Crackstone ring) S cage(-40,-31)  E nest(-28,-20)  EAST DOOR open  TERRACE  start(14,-16)<-
+      cab(-42.2,-11) cobweb  [N door = the GATE] coffin                 cab(-3.3,-27)   fence x18.7
+ z -8 ==egg_w==|GATE|====egg_e===   SIDE PATH(x-17.5..-6)  H(-12,-3)  RAVINE x-12
+      CRYPT HALL  S gate mech(-40,-4)  pillar  E altar(-22,1) rubble  D(-18,4) S register(-9.5,4) cab
+ z  8 =====collapse (cw_bnd_rubble_s)==========+==hedge==+ (x -6)
+```
+```
+CASE 03 — Midnight Signal (x −19..45, z −60..−5)
+ z-58 ###########################################################  cliff
+      |fence  Slurp  crates *tower light  [TOWER] |corridor|  S recorder(25,-51) *yard  E crates(37,-52)
+      |x-12.5 cab(-11.6,-42) S relay(-5,-49.5)  L(15,-43) X gate x17  booth S(20.5,-38) yard hut  (Crackstone)
+ z-34 ======|W gate Hw|====|E gate He|===court_s_3===|alley (closed)
+      OLD KENNEL E straw(-14,-30)  SHED cab E shed(3.5,-28)  tree   CONTROL HUT (x18.7..26) N door
+      S post(-12,-13.5) cab(-16.7,-15)  alarm  START(2,-12.5)  practice  W door  rack  S console cab
+ z-10 ==ridge==[FENCE: ravine sealed]========ridge=========+==res_n (research room out of play)==
+```
+
+Distances (straight-line, then routed estimates on the open floor):
+
+| Case | Start → nearest clue | Farthest site → tower door | Typical tour (expected, priors weighted) |
+|---|---|---|---|
+| 01 | ledger 18.8 m / archive door 10 m | Poison bed ~40 m (via trellis 25 m) | door 10 → desk 22 → door 22 → lodge 15 → ravine 24 → shelf 21 → egg 7 → tower 34 = **156 m**; + stacks 0.4 × 44, garden 0.4 × 27, far eggs ≈ 12 → **~196 m** |
+| 02 | register 24 m (via ravine) | tunnel bend ~52 m | ravine 27 → register 14 → crypt door 9 → gate 23 → N door 6 → cage 23 → E door 23 → W gate 13 → tunnel mouth 14 → office 15 → tower 46 = **213 m**; + bend 0.4 × 20, hall egg 0.35 × 35 → **~235 m** |
+| 03 | post 14 m | relay ~22 m, yard crates ~33 m (gate) | post 14 → hut 31 → console 6 → N door 11 → E gate 15 → lever 10 → booth 8 → recorder 14 → tower 28 = **135 m**; + relay 0.4 × 27, shed carry 0.5 × 45, others ≈ 15 → **~185 m** |
+
+Old full-island tours were 275–389 m (§4b). **Every area has ≥ 2 ways out** except where noted: 01 archive = west door +
+in-room shelf loops + cabinet + Gomez's stacks gate (the only single-door room; Crackstone's leash 16 m ends at the door);
+01 garden = south entrance + trellis; 02 catacombs = north door + east door (now open); 02 tunnel = ring with two mouths +
+office passage; 03 control hut = west + north doors; 03 yard = fence end corridor + checkpoint gate.
+
+### 12.4 Sites, levers, examines (all inside the areas)
+
+| Case | Clue sites → prior | Egg sites → prior | Passage (lever) | Examines (trace?) |
+|---|---|---|---|---|
+| 01 | transfer: archive desk (38, −6) .6 / stacks terminal (31, −24) .4 · residue: greenhouse shelf (2.5, −27.5) .6 / Poison bed (23.5, −31) .4 · ledger: porter's lodge (12, −7) 1 | potting store (−6, −28) .5 · garden nest (22.5, −21) .3 · yard crate (30, −51) .2 | `pa_vine_trellis` x 17 z −29.5..−25 (lever 18.8, −32): garden ↔ east gate saves ~19 m | vial (23, 5.5) ✓ · books (5, −7) ✓ · cut vines (−4.5, −21) ✗ |
+| 02 | gate: mechanism (−40, −4) 1 · sign-in: tunnel office (−31, −42.5) .55 / side-path register (−9.5, 4) .45 · satchel: by the cage (−40, −31) .6 / tunnel bend (−40.8, −47) .4 | catacomb nest (−28, −20) .4 · hall altar (−22, 1) .35 · office nest (−33, −49) .25 | `cw_rubble_tunnel` x −38 z −48.5..−44 (winch −36.2, −42): office ↔ west tunnel saves ~44 m | lantern (−21, 6) ✓ · winch (−34, −36.7) ✓ · cobwebs (−38, −10.5) ✗ |
+| 03 | log: ravine post (−12, −13.5) .55 / checkpoint booth (20.5, −38) .45 · override: console (23.8, −12.6) 1 · signal: yard recorder (25, −51) .6 / tower relay (−5, −49.5) .4 | potting shed (3.5, −28) .5 · yard crates (37, −52) .3 · kennel straw (−14, −30) .2 | `ms_gate` (unchanged, lever 15, −43) | radio (20.2, −19.5) ✓ · prints (21, −44) ✓ · silenced alarm (−5, −12.5) ✗ |
+
+Each site is ≥ 1.5 m from wall surfaces, ≥ 0.3 m from cover, ≥ 3 m from every other site of its case, and in its
+declared room (first match). Removed (outside the areas): Case 01 `pa_rec_1/2`, `pa_bookcase`, centrifuge; Case 02
+`cw_rubble_vault`, `cw_tunnel_1/2`, `cw_rubble_door`, coffins 1/2, fallen gate, boiler, `cw_hs_tunnel`; Case 03
+`ms_hut_n/w/s` (east lawn), `ms_post_fence`, racks 1/2 (research room), alley crates, `ms_hs_hut`, `ms_hs_post`.
+
+### 12.5 Cabinets (`kind: 'cabinet'`, radius 0.6, revealM 1.2) and crouch spots
+
+| Case | Cabinet (x, z) → door faces | Serves |
+|---|---|---|
+| 01 | `pa_cab_archive` (42.2, −4.5) W · `pa_cab_stacks` (34.45, −26.5) W · `pa_cab_lodge` (13, −2.7) S · `pa_cab_greenhouse` (−0.7, −23.4) E · `pa_cab_garden` (24.7, −15) W · `pa_cab_tower` (1.7, −50) W | desk / Crackstone, stacks dead end, start + tutorial, greenhouse, garden entrance, final carry |
+| 02 | `cw_cab_hall` (−40, 6.9) N · `cw_cab_catacomb` (−42.2, −11) E · `cw_cab_side` (−7.1, −4) W · `cw_cab_chamber` (−29, −51.6) S · `cw_cab_terrace` (−3.3, −27) W · `cw_cab_tower` (1.7, −50) W | gate clue, Crackstone's door, side path, tunnel office, terrace, carry |
+| 03 | `ms_cab_control` (24.7, −21) W · `ms_cab_post` (−16.7, −15) E · `ms_cab_shed` (−3.3, −27) W · `ms_cab_tower` (−11.55, −42) E · `ms_cab_yard` (17.9, −50) E | console, post, shed egg, out of the tower light, inside the yard |
+
+Rules used: back ≤ 0.2 m from a wall surface; 1.6 m in front of the door clear of walls and cover; the exit point
+(door + 1.2 m) on open floor; ≥ 3.5 m from any site / examine / lever door-to-prompt (no E conflict); ≥ 2.2 m from
+Crackstone waypoints and Slurp wander points; ≥ 4 m from every Hyde leg (closest: `ms_cab_tower` 4.2 m from C→D).
+Crouch spots kept: 01 `pa_hs_vines`, `pa_hs_stacks` + island `hs_research`, `hs_terrace`, `hs_court_e`; 02
+`cw_hs_catacomb` + `hs_crypt_alcove`, `hs_egg_alcove`, `hs_terrace`, `hs_court_w`; 03 `ms_hs_yhut` + `hs_terrace`,
+`hs_court_e`. Open question for the game-developer: whether a cabinet is a collider (radius 0.6) — placements assume it
+may be (none narrows a passage below 2.0 m).
+
+### 12.6 Encounter spawns (`encounterSpawns`; `hydeSpawns` = the Hyde rows, same ids)
+
+| Case | Hyde (weight) | Crackstone | Slurp |
+|---|---|---|---|
+| 01 | Ravine Pass (−12, −16) .40 · West Gate (−10, −38) .25 · East Gate (12, −31) .35 — 31 / 48 / 37 m from start | North Aisle (34.5, −7) .4 · Middle Aisle (33, 0.8) .3 · Stacks Door (31, −14.5) .3 — 28 / 24 / 29 m | Greenhouse Path (−4, −17) .3 · Yard West (−6, −46) .25 · Yard East (34, −44) .25 · Poison Garden (20.5, −17.5) .2 — 27 / 54 / 56 / 25 m |
+| 02 | Side Path (−12, −3) .40 · West Gate (−11, −37.5) .35 · Tunnel Mouth (−21, −43) .25 — 29 / 33 / 44 m | Crypt Hall (−33, 3) .4 · Catacomb Ring (−21, −12.5) .3 · Cage Lane (−33, −28.5) .3 — 51 / 35 / 49 m | North Tunnel (−32, −56) .3 · North Mouth (−22, −55) .25 · West Tunnel (−40.8, −42) .25 · Ravine Terrace (−6, −24) .2 — 61 / 53 / 61 / 22 m |
+| 03 | West Gate (−10, −38) .40 · Watchtower Steps (−2, −43) .30 · East Gate (12, −37) .30 — 28 / 31 / 27 m | Yard Entrance (32, −36.8) .4 · Yard Corner (41, −55.5) .3 · Searchlight Post (32.8, −44.5) .3 — 39 / 58 / 44 m | Tower Garden (−6, −55) .3 · Behind the Tower (15.2, −56) .25 · Control Hut Path (22, −30) .25 · West Fence (−10.5, −50) .2 — 43 / 45 / 27 / 40 m |
+
+Hyde spawns are on their loop and ≥ 25 m from the start (so the legacy `hyde.minSpawnDistanceM` 25 still holds);
+Crackstone spawns are his own loop waypoints (he then walks the unchanged haunt); every spawn is ≥ 20 m from the start,
+≥ 1.5 m from walls / cover and sits in the zone it names. The director's honest odds (contract §4): P = w′ / Σw′ over
+spawns ≥ 18 m from the player and out of view. Example, Case 01, player at the lodge ledger (12, −7) at t = 20 s:
+Ravine 24.5 m, West Gate 37.6 m, East Gate 24 m → all eligible if out of view; if the player looks north-west (ravine in
+the cone) → P(East Gate) = .35 / .60 = **58 %**, P(West Gate) **42 %**.
+
+### 12.7 Slurp (`CaseWorldDef.slurp`, `MYSTERY_TUNING.slurp`)
+
+| Case | areaName | Wander (7 pts) | Centroid | leashM |
+|---|---|---|---|---|
+| 01 | Garden Paths | lodge W (−6, −4), terrace (−4, −18), garden (20.5, −17.5), yard W (−6, −46), yard E (24, −52), (36, −42), (16, −37) | (11.5, −30.9) | 35 (max point 32 m; archive door 38 m — outside) |
+| 02 | Maintenance Tunnel | W tunnel (−40.8, −42), N tunnel (−32, −56), S tunnel (−29, −36.7), yard (−4, −40), terrace (−6, −24), (−15, −28), N mouth (−22, −55) | (−21.3, −40.2) | 25 (max 21.6 m; catacombs ring > 25 → Crackstone's) |
+| 03 | Watchtower Grounds | (−15, −20), (−6, −55), (6, −38), (22, −30), (−8, −30), behind tower (15.2, −56), (−10.5, −50) | (0.5, −39.9) | 28 (max 24.9 m; never into the fenced yard) |
+
+**leashM semantics (assumed; the sim decides):** max chase distance from the wander centroid; every wander point lies
+inside it. Each enemy owns a part of the map: Hyde = the central hub (ears), Crackstone = one building (eyes), Slurp =
+the open grounds / tunnel (smell + short sight + loud-noise ears) — so the director rarely stacks two of them.
+
+Tuning rationale (`tuning.ts` `slurp`): WANDER 1.4 (slowest enemy, unsettling pauses 0.8–2.4 s), INVESTIGATE 2.4,
+CHASE **3.8** (walk 3.2 < 3.8 < slowest carrying sprint 4.22; margin 0.42 m/s between Crackstone's 0.72 and the Hyde's
+0.22), SEARCH 1.8, LEAVE 2.2; sight 90° / 10 m / fog 7 m / crouch × 0.7 (7 m); proximity 3 m; hears only ≥ 0.8; attack
+range 1.6, wind-up 0.6 s, connect 2.0 m, 30 HP, knock-back 3 m, 3 s invulnerable, cooldown 6 s, then LEAVE. Player sees
+him at 18 m. Cycle = 4 wander waypoints (≈ 4 × (≈ 25 m / 1.4 + 1.6 s) ≈ 75 s) → the director may despawn him.
+
+### 12.8 Director tuning (`tuning.ts` `director`)
+
+| Key | Value | Why |
+|---|---|---|
+| minSpawnM | 18 | = the player's sight of the Hyde; on 55–70 m maps an eligible spawn should almost always exist (spot-checked by hand: from the start, the archive desk, the crypt gate and the control console at least one spawn per enemy is ≥ 25 m away; visibility not checked) |
+| despawnM | 24 | > minSpawnM: hysteresis, no pop-out / pop-in at the same range |
+| minActiveS | 35 | ≈ one Hyde lap (39–59 s) minus the walk in: each appearance can be read and avoided |
+| recentSpawnS / recentMult | 60 s / × 0.3 | the same doorway rarely spawns twice in a row (contract) |
+| objectiveMult | × 1.5 | pressure follows the objective without being certain |
+| maxActive | 2 | plus "one engaged at a time" (sim) |
+| firstSpawnS | Hyde 20 · Crackstone 35 · Slurp 50 | one new threat per ~15 s in the first minute; the tutorial's lessons (crouch, hide, cabinet) come one at a time |
+| respawnCooldownS | Hyde 25 · Crackstone 30 · Slurp 30 | after a despawn, ≥ 25 s of calm from that enemy (contract: "cooldown before respawn") |
+
+### 12.9 Pacing (active play; target investigation 2–3 min humans, 90–150 s bot)
+
+Bot ≈ route / ~2.0 m/s (the v2 sweep: 308 m → 171 s incl. hiding) + 12 s interactions; human = route × 1.3 / 2.7 m/s +
+14 s interactions + 25–45 s hiding / waiting + 15–25 s orientation.
+
+| Case | Expected route | Bot estimate | Human active | + menus / prologue / results 120–150 s |
+|---|---|---|---|---|
+| 01 | ~196 m | **~110–130 s** | 148–178 s | **4.5–5.5 min** |
+| 02 | ~235 m | **~130–150 s** | 167–197 s | **4.8–5.8 min** |
+| 03 | ~185 m | **~105–125 s** | 143–173 s | **4.4–5.4 min** |
+
+Three enemies add encounters; with the director caps I expect +20–40 s (2–3 short encounters, each solvable by a
+cabinet in ≤ 10 s), landing the whole visit at **~5–6.5 min**. Knobs if long: Case 02 register prior .45 → .55 (shortens
+the tunnel trip), `director.firstSpawnS.slurp` 50 → 70, `slurp.cycleWaypoints` 4 → 3. If short / too easy:
+`director.minActiveS` 35 → 45, Slurp CHASE 3.8 → 3.9. Score check (v4): a clean 150 s finisher = 1000 + 300 + 300 + 150
++ 150 + 150 = **2050**; one hint and one hit = 2050 − 150 (no-hints bonus) − 50 − 150 (no-detection bonus, assuming the
+hit followed a detection) − 75 = 1625.
+
+### 12.10 Thing vs Weems copy
+
+Thing (free, never `hint_requested`): `THING.prescriptive` (17 lines ≤ 52: "Hide. The Hyde is approaching.", "Close the
+cabinet. Press E.", "Take the safer path through the {area}.", "Use your Pokémon’s defensive move.", "Search the {area}
+to the {direction}." …), `THING.slurp` / `cabinet` / `status` reactions (≤ 34: "Slurp heard the cabinet door.", "Your
+Pokémon blocked the attack."). Tutorial `tut_hint` / `tut_go` now point V at Weems. `THING_STAY_SILENT` unchanged.
+Weems (`WEEMS`, ≤ 90, scored −50 each): `templates` L1 "Nevermore hides its secrets in the {area}. Begin there." / L2
+"The {label}, in the {area}. Look properly this time." filled from the live posterior, and `byCase[case][level]` (2 lines
+per level). L3 lines only describe the reasoning ("A key, a signature, a satchel. Find the one person all three belong
+to.") and never name or gender a suspect. Death cards: `DEATH_LINES` ("Defeated by Slurp" / "Slurp dragged you into the
+dark."). Cabinet prompts: `CABINET_PROMPTS` = "E — Hide", "E — Close Door", "Stay Quiet", "E — Exit".
+
+### 12.11 Open items (types.ts and other owners — asked, not edited)
+
+1. **No `types.ts` change needed.** Case 02 clue ids are unchanged; `SuspectId` 'galpin' is used as declared.
+2. `buildIsland()` (data/island.ts) still returns the full island (bounds, pier start, island patrol) — I left the
+   playArea application to the game-developer's `caseMap()` per contract §3, so the existing "shared prefix" test keeps
+   its meaning until they switch. If they prefer, I can make `buildIsland` apply `playArea` (bounds, start, patrol,
+   release points) — say so.
+3. `practiceCrateFor()` should use `playArea.practicePoint` (the pier crate is outside every area).
+4. Tests: `cases.test.ts` name / role patterns for `galpin`; `caseIslands.test.ts` must read `playArea.playerStart`
+   (the pier start is outside all areas) and `playArea.hydePatrol`; the Case 02 tunnel tight-spot test referenced
+   `cw_tunnel_1/2` (now gone) — suggested replacement: west tunnel 4.4 m (`cw_tunnel_w1` ↔ `cliff_w`), path
+   (−24, −56) → (−40.8, −47).
+5. `tuning.slurp` uses `pauseMinS` / `pauseMaxS` (the config reader's names) for the requested `wanderPauseS [min, max]`.

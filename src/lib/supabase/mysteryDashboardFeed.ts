@@ -1,5 +1,6 @@
 // LIVE mystery board for Laptop 1 (anon key; operator sign-in adds event-level analytics).
-//   REST:      mystery_station_status, mystery_standings (finishers above DNFs), mystery_results
+//   REST:      mystery_station_status, mystery_standings_v4 (finishers above DNFs), mystery_results of THIS rules version
+//              (MYSTERY_RULES_VERSION = 'mystery-v4'; v3.1 rows never mix into tonight's board — FINAL_CONTRACT §10)
 //   Realtime:  postgres_changes on mystery_station_status (INSERT/UPDATE) and mystery_results (INSERT/DELETE),
 //              plus the stations' heartbeat broadcast (liveness → "Signal lost" after 15 s)
 //   Operator:  mystery_events / mystery_offered_duos / mystery_forecasts / mystery_recommendations per finalized
@@ -13,11 +14,11 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload, SupabaseClient } 
 import { isStationId } from '../../game/index.ts';
 import type { StationId } from '../../game/index.ts';
 import type { SessionRecord } from '../../mystery/analytics/types.ts';
-import type { CaseId } from '../../mystery/types.ts';
+import { MYSTERY_RULES_VERSION, type CaseId } from '../../mystery/types.ts';
 import type { ConnectionState } from '../backend.ts';
 import { openBroadcastChannel } from './mysteryStationWatch.ts';
 import {
-  HEARTBEAT_EVENT, HEARTBEAT_TOPIC, MYSTERY_RESULT_COLUMNS, MYSTERY_STANDING_COLUMNS, MYSTERY_STATION_COLUMNS, SIGNAL_LOST_MS,
+  HEARTBEAT_EVENT, HEARTBEAT_TOPIC, MYSTERY_RESULT_COLUMNS, MYSTERY_STANDING_COLUMNS, MYSTERY_STANDINGS_VIEW, MYSTERY_STATION_COLUMNS, SIGNAL_LOST_MS,
   isNewerMysteryRow, orderStandings, parseHeartbeat, publicResultRow, recordFromRows, standingFromResult, standingsByCase,
   type EventRow, type MysteryHeartbeat,
   type MysteryResultRow, type MysteryStandingRow, type MysteryStationRow, type SessionDetail,
@@ -96,7 +97,7 @@ export class MysteryBoardState {
   /** Realtime INSERT (duplicates are idempotent: keyed by session_id). Test runs never reach the public board. */
   insertResult(raw: MysteryResultRow | null | undefined): boolean {
     const row = publicResultRow(raw);
-    if (!row || row.is_test) return false;
+    if (!row || row.is_test || row.rules_version !== MYSTERY_RULES_VERSION) return false;
     if (this.deleted.has(row.session_id)) return false;
     this.results.set(row.session_id, row);
     this.touch();
@@ -120,7 +121,7 @@ export class MysteryBoardState {
   /** A full REST snapshot replaces results + standings (rows deleted meanwhile stay deleted). */
   applyLoad(stations: MysteryStationRow[], standings: MysteryStandingRow[], results: MysteryResultRow[]): void {
     stations.forEach((r) => this.mergeStation(r));
-    const keep = results.map(publicResultRow).filter((r): r is MysteryResultRow => r !== null && !r.is_test && !this.deleted.has(r.session_id));
+    const keep = results.map(publicResultRow).filter((r): r is MysteryResultRow => r !== null && !r.is_test && r.rules_version === MYSTERY_RULES_VERSION && !this.deleted.has(r.session_id));
     this.results.clear();
     keep.forEach((r) => this.results.set(r.session_id, r));
     const fromRest = standings.filter((s) => !this.deleted.has(s.session_id));
@@ -276,8 +277,9 @@ export function createMysteryBoardFeed(deps: MysteryBoardDeps): MysteryBoardFeed
     try {
       const [st, sd, rs, operator] = await Promise.all([
         deps.rest.from('mystery_station_status').select(MYSTERY_STATION_COLUMNS),
-        deps.rest.from('mystery_standings').select(MYSTERY_STANDING_COLUMNS).limit(deps.resultsLimit ?? 1000),
-        deps.rest.from('mystery_results').select(MYSTERY_RESULT_COLUMNS).order('finalized_at', { ascending: false }).limit(deps.resultsLimit ?? 1000),
+        deps.rest.from(MYSTERY_STANDINGS_VIEW).select(MYSTERY_STANDING_COLUMNS).limit(deps.resultsLimit ?? 1000),
+        deps.rest.from('mystery_results').select(MYSTERY_RESULT_COLUMNS).eq('rules_version', MYSTERY_RULES_VERSION)
+          .order('finalized_at', { ascending: false }).limit(deps.resultsLimit ?? 1000),
         deps.isOperator().catch(() => false),
       ]);
       const error = st.error ?? sd.error ?? rs.error;
@@ -309,7 +311,7 @@ export function createMysteryBoardFeed(deps: MysteryBoardDeps): MysteryBoardFeed
     standingsTimer = setTimeout(() => {
       standingsTimer = null;
       void (async () => {
-        const { data, error } = await deps.rest.from('mystery_standings').select(MYSTERY_STANDING_COLUMNS).limit(deps.resultsLimit ?? 1000);
+        const { data, error } = await deps.rest.from(MYSTERY_STANDINGS_VIEW).select(MYSTERY_STANDING_COLUMNS).limit(deps.resultsLimit ?? 1000);
         if (error || !Array.isArray(data)) return;
         state.applyLoad([], data as unknown as MysteryStandingRow[], [...state.results.values()]);
         emit();

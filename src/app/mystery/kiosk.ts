@@ -6,7 +6,7 @@ type KeyboardLockApi = { lock?: (codes?: string[]) => Promise<void>; unlock?: ()
 
 /** Keys whose browser meaning we suppress while locked (Ctrl+W, Tab, Esc-exits-fullscreen, …). */
 export const LOCK_CODES = [
-  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyR', 'KeyF', 'KeyE', 'KeyC', 'KeyV', 'KeyM', 'Tab', 'Escape', 'Space',
+  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyR', 'KeyF', 'KeyE', 'KeyC', 'KeyV', 'KeyX', 'KeyM', 'Tab', 'Escape', 'Space',
   'ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
 ];
 

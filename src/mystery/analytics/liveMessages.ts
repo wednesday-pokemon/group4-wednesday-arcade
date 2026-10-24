@@ -21,7 +21,7 @@
 // player's own ability (POWER STATUS), the escape count (LOG). Scan / curse WARNINGS never enter the stream (the HUD
 // banners own them) and a `deferred` mode change says nothing. Extra limits: a CRACKSTONE P5 at most 1 per 20 s and
 // never pre-empts a waiting HYDE ALERT (it waits behind it); HYDE ALERT + CRACKSTONE items at most 4 per minute.
-import type { AbilityEffectKind, CrackstoneDetectVia, CrackstoneMode, HazardDef, HydeMode, NoiseSource, Stance, StampedEvent, Vec2 } from '../types.ts';
+import type { AbilityEffectKind, CrackstoneDetectVia, CrackstoneMode, EnemyId, HazardDef, HydeMode, NoiseSource, SlurpMode, Stance, StampedEvent, Vec2 } from '../types.ts';
 import type { CrackFrameFacts } from './crackstoneLive.ts';
 import { pointInPolygon } from '../geometry.ts';
 import type { LiveMessage } from './types.ts';
@@ -48,7 +48,19 @@ export const TITLES = {
   investigation: 'INVESTIGATION',
   pattern: 'PATTERN',
   advice: "THING'S ADVICE",
+  slurp: 'SLURP',
+  weems: 'PRINCIPAL WEEMS',
 } as const;
+
+/** Headword of each enemy's alerts / WHY messages. */
+export const ENEMY_TITLE: Readonly<Record<EnemyId, string>> = { hyde: TITLES.hyde, crackstone: TITLES.crackstone, slurp: TITLES.slurp };
+
+/** Thing's log lines for the director's spawns / despawns (≤ 34 chars; presence only, never a position). */
+export const LIFECYCLE_LOG: Readonly<Record<EnemyId, { spawned: string; despawned: string }>> = {
+  hyde: { spawned: 'The Hyde is on the prowl.', despawned: 'The Hyde slunk away.' },
+  crackstone: { spawned: 'Crackstone walks again.', despawned: 'Crackstone faded away.' },
+  slurp: { spawned: 'Slurp is shambling about.', despawned: 'Slurp shambled off.' },
+};
 
 /** UX §6 priority levels. */
 export const P = { log: 0, investigation: 1, routineAdvice: 2, why: 3, threatAdvice: 4, alert: 5 } as const;
@@ -91,6 +103,18 @@ const FLOOR_TEXT: Record<string, string> = {
 
 const ESCAPE_KINDS: readonly AbilityEffectKind[] = ['lure', 'distract', 'stun'];
 
+/** Codes that describe the hit itself (the game-over WHY's first line says that part). */
+const HIT_CODES = /^(caught_\d|slurp_hit|hit_blocked|crack_curse_hit|crack_curse_blocked)$/;
+
+type DiagFn = (code: string, title: string, text: string, priority: number, basis?: 'rule' | 'pattern', ref?: string | null) => void;
+
+/** "{Name}" as UX_FINAL §8 writes it: The Hyde / Crackstone / Slurp. */
+export const WHO: Readonly<Record<EnemyId, string>> = { hyde: 'The Hyde', crackstone: 'Crackstone', slurp: 'Slurp' };
+
+function enemyOfTitle(title: string): EnemyId | null {
+  return title === TITLES.hyde ? 'hyde' : title === TITLES.crackstone ? 'crackstone' : title === TITLES.slurp ? 'slurp' : null;
+}
+
 /** Mutable per-session state of the rules (stance, chase, last ability, counts). */
 export class EventRules {
   stance: Stance;
@@ -111,6 +135,25 @@ export class EventRules {
   crackEscapes = 0;
   private crackSighting: { t: number; via: CrackstoneDetectVia; distanceM: number } | null = null;
   private crackScanExplained = false;
+  // ---- final: director / Slurp / cabinets / rule-event counts
+  slurpChases = 0;
+  slurpEscapes = 0;
+  /** Exact counts of the scoring RULE events (enemy_detected / enemy_hit / hint_requested). */
+  detections: Record<EnemyId, number> = { hyde: 0, crackstone: 0, slurp: 0 };
+  hits: Record<EnemyId, number> = { hyde: 0, crackstone: 0, slurp: 0 };
+  blockedHits = 0;
+  hintsUsed = 0;
+  private lastCabinet: { t: number; action: string; loud: boolean } | null = null;
+  private lastBlock: { t: number; key: 'F' | 'Q'; abilityId: string } | null = null;
+  private emergedAt: number | null = null;
+  private readonly spawnedOnce = new Set<EnemyId>();
+  private witness: { enemy: EnemyId; t: number } | null = null;
+  private cabinetClosed = false;
+  private creakAt: number | null = null;
+  /** The newest RULE cause that is not the hit itself (diagnostic text) — the game-over WHY's second line. */
+  lastCause: { t: number; text: string; code: string; enemy: EnemyId | null } | null = null;
+  /** The newest such cause per enemy (the game-over WHY prefers the monster that ended the run). */
+  lastCauseBy: Partial<Record<EnemyId, { t: number; text: string; code: string; enemy: EnemyId | null }>> = {};
 
   constructor(private readonly ctx: MessageContext, initialStance: Stance = 'idle') {
     this.stance = initialStance;
@@ -128,8 +171,14 @@ export class EventRules {
   onEvent(e: StampedEvent, hidden: boolean, crack: CrackFrameFacts | null = null): MessageCandidate[] {
     const out: MessageCandidate[] = [];
     const t = e.t;
-    const diag = (code: string, title: string, text: string, priority: number, basis: 'rule' | 'pattern' = 'rule', ref: string | null = null) =>
+    const diag = (code: string, title: string, text: string, priority: number, basis: 'rule' | 'pattern' = 'rule', ref: string | null = null) => {
       out.push({ kind: 'diagnostic', code, title, text: fit(text, DIAG_MAX), basis, priority, t, ref });
+      if (basis === 'rule' && title !== TITLES.investigation && !HIT_CODES.test(code)) {
+        const enemy = enemyOfTitle(title);
+        this.lastCause = { t, text: fit(text, DIAG_MAX), code, enemy };
+        if (enemy) this.lastCauseBy[enemy] = this.lastCause;
+      }
+    };
     const log = (code: string, text: string) => out.push({ kind: 'log', code, title: TITLES.log, text: fit(text, LOG_MAX), priority: P.log, t });
     this.hidden = hidden;
     switch (e.type) {
@@ -138,6 +187,7 @@ export class EventRules {
         break;
       case 'noise':
         this.lastNoise = { t, source: e.source, x: e.x, z: e.z };
+        if (this.cabinetClosed && e.source !== 'decoy' && !(this.lastCabinet && Math.abs(this.lastCabinet.t - t) < 0.05)) this.creakAt = t;
         break;
       case 'hyde_heard':
         this.lastHeard = { t, source: e.source, distanceM: e.distanceM };
@@ -147,9 +197,49 @@ export class EventRules {
         break;
       case 'ability_used':
         this.lastAbility = { t, key: e.key, abilityId: e.abilityId, kinds: [...e.kinds], success: e.success };
+        if (e.success && e.kinds.includes('block_grab')) this.lastBlock = { t, key: e.key, abilityId: e.abilityId };
         break;
       case 'hyde_emerged':
+        this.emergedAt = t;
         log('hyde_emerged', 'The Hyde has emerged.');
+        break;
+      case 'hint_requested':
+        this.hintsUsed++;
+        break;
+      case 'enemy_spawned':
+        // the first Hyde spawn is announced by hyde_emerged ("The Hyde has emerged.") when the sim emits it
+        if (!(e.enemy === 'hyde' && this.emergedAt !== null && Math.abs(this.emergedAt - t) < 0.05 && !this.spawnedOnce.has('hyde'))) {
+          log(`spawn_${e.enemy}`, LIFECYCLE_LOG[e.enemy].spawned);
+        }
+        this.spawnedOnce.add(e.enemy);
+        break;
+      case 'enemy_despawned':
+        log(`despawn_${e.enemy}`, LIFECYCLE_LOG[e.enemy].despawned);
+        break;
+      case 'enemy_detected':
+        this.detections[e.enemy]++;
+        this.detected(e.enemy, e.via, t, diag);
+        break;
+      case 'enemy_hit':
+        this.hits[e.enemy]++;
+        if (e.blocked) this.blockedHits++;
+        if (e.enemy === 'slurp') {
+          if (e.blocked) diag('hit_blocked', TITLES.slurp, this.blockText('attack'), P.alert, 'rule', this.lastBlock?.abilityId ?? null);
+          else diag('slurp_hit', TITLES.slurp, `Slurp's lunge hit you. −${Math.round(e.hpLost)} HP.`, P.alert);
+        }
+        break;
+      case 'cabinet':
+        this.lastCabinet = { t, action: e.action, loud: e.loud };
+        if (e.action === 'close') this.cabinetClosed = true;
+        else if (e.action !== 'enter') this.cabinetClosed = false;
+        if (e.action === 'pulled_out') {
+          const who = this.witness?.enemy ?? 'hyde';
+          diag('pulled_out', ENEMY_TITLE[who], `${WHO[who]} saw you hide and pulled you out.`, P.alert);
+          this.witness = null;
+        }
+        break;
+      case 'slurp_mode':
+        this.slurpMode(t, e.from, e.to, e.reason, diag, log);
         break;
       case 'hyde_mode': {
         const alertNow = e.to === 'INVESTIGATE_SOUND' || e.to === 'SEARCH' || e.to === 'CHASE';
@@ -160,7 +250,9 @@ export class EventRules {
         }
         if (e.to === 'INVESTIGATE_SOUND' && e.reason === 'heard_noise') {
           const heard = this.lastHeard && this.lastHeard.t === t ? this.lastHeard : null;
-          if (heard) this.noiseCause(heard.source, t, diag);
+          if (this.creakNow(t)) diag('cabinet_creak', TITLES.hyde, 'The cabinet door creaked.', P.why);
+          else if (this.cabinetLoudAt(t)) diag('noise_cabinet', TITLES.hyde, 'The Hyde heard the cabinet door.', P.why);
+          else if (heard) this.noiseCause(heard.source, t, diag);
         } else if (e.to === 'CHASE' && e.reason === 'saw_player') {
           this.chases++;
           const d = this.lastSighting ? Math.round(this.lastSighting.distanceM) : null;
@@ -192,7 +284,7 @@ export class EventRules {
       case 'catch':
         this.catches++;
         diag(`caught_${e.catchNumber}`, TITLES.hyde, e.blocked
-          ? `Caught ${e.catchNumber} of 2. The block saved your HP.`
+          ? (this.lastBlock?.key === 'Q' ? `Caught ${e.catchNumber} of 2. Your Pokémon blocked it.` : `Caught ${e.catchNumber} of 2. The block saved your HP.`)
           : `Caught ${e.catchNumber} of 2: it reached you. −${e.hpLost} HP.`, P.alert);
         break;
       case 'crackstone_sighted':
@@ -212,7 +304,7 @@ export class EventRules {
         break;
       case 'curse':
         if (e.phase === 'hit') {
-          if (e.blocked) diag('crack_curse_blocked', TITLES.crackstone, 'Your block stopped the curse. No damage.', P.why);
+          if (e.blocked) diag('crack_curse_blocked', TITLES.crackstone, this.lastBlock ? this.blockText('curse') : 'Your block stopped the curse. No damage.', P.why);
           else diag('crack_curse_hit', TITLES.crackstone, `The curse hit: you stayed in the ring. −${e.hpLost} HP.`, P.alert);
         } else if (e.phase === 'miss' && crack?.lastCurse && t >= crack.lastCurse.landsAt - 0.05) {
           // landed and missed (a cancelled curse is the stun / lure's story, said by POWER STATUS)
@@ -283,11 +375,8 @@ export class EventRules {
       } else if (reason === 'scan_hit') {
         diag('crack_scan_hit', TITLES.crackstone, this.stance === 'crouch' ? 'The scan found you: crouching does not hide you.' : 'The scan found you: no wall between you. Hide!', P.alert);
       } else {
-        const at = d !== null ? `, ${d} m away` : '';
-        const text = this.stance === 'sprint' ? `Seen sprinting${at}. Break his sight!`
-          : this.stance === 'crouch' ? `Seen crouched${at}. Get behind a wall!`
-          : `Seen in the open${at}. Break his sight!`;
-        diag('crack_seen', TITLES.crackstone, text, P.alert);
+        void d; // the distance stays in the results panel (diagnostic.ts); the live line is the UX_FINAL §8 copy
+        diag('crack_seen', TITLES.crackstone, this.crackSeenText(), P.alert);
       }
       return;
     }
@@ -316,6 +405,117 @@ export class EventRules {
       diag(reason === 'stunned' ? 'crack_power_stun' : 'crack_power_lure', TITLES.power,
         `${this.ctx.abilityLabel(ab.key, ab.abilityId)} ${reason === 'stunned' ? 'stopped' : 'lured'} Crackstone.`, P.why, 'rule', ab.abilityId);
     }
+  }
+
+  // ------------------------------------------------------------------------------------------------- final helpers
+
+  private cabinetLoudAt(t: number): boolean {
+    const c = this.lastCabinet;
+    return c !== null && c.loud && t - c.t >= -1e-9 && t - c.t <= 0.1;
+  }
+
+  private creakNow(t: number): boolean {
+    return this.creakAt !== null && t - this.creakAt >= -1e-9 && t - this.creakAt <= 0.1;
+  }
+
+  /** "Your Pokémon blocked the attack." when the consumed block came from the Pokémon's move (Q slot), else the power's name. */
+  private blockText(what: 'attack' | 'curse'): string {
+    const b = this.lastBlock;
+    if (b?.key === 'Q') return `Your Pokémon blocked the ${what}.`;
+    if (b?.key === 'F') return fit(`${this.ctx.abilityLabel('F', b.abilityId)} blocked the ${what}.`, DIAG_MAX);
+    return `Your block stopped the ${what}.`;
+  }
+
+  /** enemy_detected (RULE event): the cause only when the event (and the same-instant hearing / stance) says so. */
+  private detected(enemy: EnemyId, via: 'sight' | 'sound' | 'proximity' | 'scan' | 'witnessed_hide', t: number, diag: DiagFn): void {
+    const title = ENEMY_TITLE[enemy];
+    if (via === 'witnessed_hide') {
+      this.witness = { enemy, t };
+      diag(`witnessed_${enemy}`, title, 'Witnessed: it saw you hide.', P.alert);
+      return;
+    }
+    if (enemy === 'hyde') {
+      if (via === 'sound') {
+        const heard = this.lastHeard && Math.abs(this.lastHeard.t - t) <= 0.1 ? this.lastHeard : null;
+        if (this.creakNow(t)) diag('cabinet_creak', title, 'The cabinet door creaked.', P.alert);
+        else if (this.cabinetLoudAt(t)) diag('noise_cabinet', title, 'The Hyde heard the cabinet door.', P.alert);
+        else if (heard?.source === 'footstep') diag('det_hyde_steps', title, 'Hyde detected your footsteps.', P.alert);
+        else if (heard) this.noiseCause(heard.source, t, (c, ti, tx, _p, b, r) => diag(c, ti, tx, P.alert, b, r));
+      } else if (via === 'proximity') diag('det_hyde_near', title, 'Too close: the Hyde sensed you.', P.alert);
+      // via sight: the hyde_mode → CHASE (saw_player) message says it with the distance
+      return;
+    }
+    if (enemy === 'crackstone') {
+      if (via === 'sight') diag('crack_seen', title, this.crackSeenText(), P.alert);
+      // proximity / scan: the crackstone_mode message (crack_sensed / crack_scan_hit) carries the rule
+      return;
+    }
+    if (via === 'sight') diag('slurp_seen', title, 'Slurp saw you and gave chase.', P.alert);
+    else if (via === 'proximity') diag('slurp_sensed', title, 'Too close: Slurp sensed you. Run!', P.alert);
+    else if (via === 'sound') this.slurpNoise(t, diag, P.alert);
+  }
+
+  private crackSeenText(): string {
+    return this.stance === 'sprint' ? 'Crackstone spotted you sprinting.' : this.stance === 'crouch' ? 'Crackstone spotted you, even crouched.' : 'Crackstone spotted you.';
+  }
+
+  /** Why Slurp heard something (he hears only LOUD noises): a loud cabinet action, the creak, the egg, a sprint, an ability. */
+  private slurpNoise(t: number, diag: DiagFn, priority: number): void {
+    const title = TITLES.slurp;
+    if (this.creakNow(t)) return diag('slurp_creak', title, 'The cabinet door creaked.', priority);
+    if (this.cabinetLoudAt(t)) return diag('slurp_cabinet', title, 'Slurp heard the cabinet door.', priority);
+    const n = this.lastNoise && Math.abs(this.lastNoise.t - t) <= 0.1 ? this.lastNoise : null;
+    if (!n) return;
+    if (n.source === 'egg_drop') return diag('slurp_egg', title, 'Slurp heard the egg hit the ground.', priority);
+    if (n.source === 'footstep' && this.stance === 'sprint') return diag('slurp_sprint', title, 'Slurp heard you sprinting.', priority);
+    if (n.source === 'ability') {
+      return diag('slurp_ability', title, this.lastAbility ? `Slurp heard ${this.ctx.abilityLabel(this.lastAbility.key, this.lastAbility.abilityId)}.` : 'Slurp heard your ability.', priority, 'rule', this.lastAbility?.abilityId ?? null);
+    }
+    if (n.source === 'hazard') return diag('slurp_alarm', title, 'The alarm drew Slurp in.', priority);
+    if (n.source === 'impact') return diag('slurp_impact', title, 'Slurp heard you crash into something.', priority);
+  }
+
+  /** Slurp's mode changes (slurp_mode events). */
+  private slurpMode(t: number, from: SlurpMode, to: SlurpMode, reason: string, diag: DiagFn, log: (code: string, text: string) => void): void {
+    if (reason === 'deferred') return;
+    const engaged = (m: SlurpMode) => m === 'CHASE' || m === 'ATTACK';
+    if (to === 'CHASE' && !engaged(from)) {
+      this.slurpChases++;
+      this.alerts++;
+      if (this.stance === 'sprint') this.alertsWhileSprinting++;
+      if (this.carrying) this.alertsWhileCarrying++;
+      if (reason === 'saw_player') diag('slurp_seen', TITLES.slurp, 'Slurp saw you and gave chase.', P.alert);
+      else if (reason === 'sensed_player') diag('slurp_sensed', TITLES.slurp, 'Too close: Slurp sensed you. Run!', P.alert);
+      return;
+    }
+    if (to === 'INVESTIGATE' && reason === 'heard_noise') {
+      this.slurpNoise(t, diag, P.why);
+      return;
+    }
+    const ab = this.lastAbility;
+    const own = ab !== null && this.recentAbility(t, 0.05);
+    const power = (r: string) => diag(r === 'stunned' ? 'slurp_power_stun' : 'slurp_power_lure', TITLES.power,
+      `${this.ctx.abilityLabel(ab!.key, ab!.abilityId)} ${r === 'stunned' ? 'stopped' : 'lured'} Slurp.`, P.why, 'rule', ab!.abilityId);
+    if (engaged(from) && !engaged(to)) {
+      if (reason === 'attack_done') return; // the hit itself is the story (enemy_hit)
+      this.slurpEscapes++;
+      log('slurp_escape', `Slurp lost you. Escapes: ${this.slurpEscapes}.`);
+      if ((reason === 'stunned' || reason === 'lured') && own && ab) power(reason);
+      else if (reason === 'lost_sight' && this.cabinetClosed) diag('slurp_escape_cabinet', TITLES.slurp, 'Lost Slurp: the cabinet door was shut.', P.why);
+      else if (reason === 'lost_sight' && this.hidden) diag('slurp_escape_hid', TITLES.slurp, 'Lost Slurp: hiding broke his sight.', P.why);
+      else if (reason === 'leash') diag('slurp_escape_leash', TITLES.slurp, 'Lost Slurp: you left his haunt.', P.why);
+      return;
+    }
+    if ((reason === 'stunned' || reason === 'lured') && own && ab) power(reason);
+  }
+
+  /** Total RULE-event counts (scoring evidence: detections, hits, hints). */
+  get detectionsTotal(): number {
+    return this.detections.hyde + this.detections.crackstone + this.detections.slurp;
+  }
+
+  get hitsTotal(): number {
+    return this.hits.hyde + this.hits.crackstone + this.hits.slurp;
   }
 
   private recentAbility(t: number, within: number): boolean {
@@ -368,12 +568,17 @@ export function isThreat(mode: HydeMode, emerged: boolean): boolean {
   return emerged && (mode === 'CHASE' || mode === 'INVESTIGATE_SOUND' || mode === 'SEARCH');
 }
 
+/** Slurp threat = the HUD shows him heard something / searching / chasing / grabbing. */
+export function isSlurpThreat(mode: SlurpMode | null | undefined): boolean {
+  return mode === 'CHASE' || mode === 'ATTACK' || mode === 'INVESTIGATE' || mode === 'SEARCH';
+}
+
 /** Crackstone threat = he is chasing or cursing (his position is public then, R4). */
 export function isCrackThreat(mode: CrackstoneMode | null | undefined): boolean {
   return mode === 'CHASE' || mode === 'ATTACK';
 }
 
-const ENEMY_TITLES: ReadonlySet<string> = new Set([TITLES.hyde, TITLES.crackstone]);
+const ENEMY_TITLES: ReadonlySet<string> = new Set([TITLES.hyde, TITLES.crackstone, TITLES.slurp]);
 
 /** Rate limiter for the message stream (UX §6). Holds at most one waiting log and one waiting diagnostic. */
 export class MessageGate {
@@ -466,6 +671,7 @@ export class MessageGate {
     return {
       id: `${prefix}:${c.code}:${c.t.toFixed(2)}:${this.seq}`, kind: c.kind, title: c.title, text: c.text,
       ...(c.basis ? { basis: c.basis } : {}), t: Math.round(c.t * 1000) / 1000, priority: c.priority,
+      ...(enemyOfTitle(c.title) ? { enemy: enemyOfTitle(c.title)! } : {}),
     };
   }
 }

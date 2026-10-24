@@ -302,9 +302,84 @@ function vineHedge(o: StyledOut, w: WallDef, rand: () => number): void {
   }
 }
 
+// ------------------------------------------------------------------------------------------------ boundary walls (compact maps)
+/** The playArea's boundary walls are named like `pa_bound_n` / `cr_border_west` / `ms_perimeter_fence_2`. */
+export function isBoundaryId(id: string): boolean { return /bound|bnd|border|perim|edge|limit|outer|enclos/.test(id); }
+
+function ironFence(o: StyledOut, w: WallDef): void {
+  const { len, rotY, dx, dz } = basis(w);
+  const h = Math.max(1.8, w.height);
+  const at = (s: number): [number, number] => [w.a.x + dx * s, w.a.z + dz * s];
+  const [mx, mz] = at(len / 2);
+  o.lit.add(BOX, PAL.stoneDark, [mx, 0.22, mz], [0, rotY, 0], [len + 0.2, 0.44, Math.max(w.thickness, 0.4)], { gradient: 0.2 });
+  const posts = Math.max(2, Math.round(len / 2.2) + 1);
+  for (let i = 0; i < posts; i++) {
+    const [px, pz] = at((i / (posts - 1)) * len);
+    o.lit.add(BOX, PAL.iron, [px, h / 2, pz], [0, rotY, 0], [0.16, h, 0.16], { gradient: 0.2 });
+    o.lit.add(CONE4, '#4a5088', [px, h + 0.22, pz], [0, rotY + Math.PI / 4, 0], [0.2, 0.44, 0.2], NG);
+  }
+  for (const yy of [h * 0.9, h * 0.25]) o.lit.add(BOX, PAL.iron, [mx, yy, mz], [0, rotY, 0], [len, 0.08, 0.08], NG);
+  const bars = Math.max(3, Math.round(len / 0.3));
+  for (let i = 0; i <= bars; i++) {
+    const [px, pz] = at((i / bars) * len);
+    o.lit.add(BOX, '#232638', [px, h * 0.55, pz], [0, rotY, 0], [0.035, h * 0.9, 0.035], NG);
+    if (i % 2 === 0) o.lit.add(CONE4, '#3a3f5c', [px, h * 1.02, pz], [0, rotY + Math.PI / 4, 0], [0.05, 0.16, 0.05], NG);
+  }
+}
+
+function gardenWall(o: StyledOut, w: WallDef, rand: () => number): void {
+  const { len, rotY, dx, dz, npx, npz } = basis(w);
+  const t = Math.max(0.5, w.thickness), h = w.height;
+  const at = (s: number): [number, number] => [w.a.x + dx * s, w.a.z + dz * s];
+  const n = Math.max(1, Math.round(len / 2.4));
+  for (let i = 0; i < n; i++) {
+    const s0 = (i / n) * len, s1 = ((i + 1) / n) * len;
+    const [cx, cz] = at((s0 + s1) / 2);
+    o.lit.add(BOX, PAL.stone[Math.floor(rand() * 3)], [cx, h / 2, cz], [0, rotY, 0], [s1 - s0 + 0.04, h, t], { gradient: 0.45, jitter: 0.12 });
+    for (let c = 1; c < 4; c++) o.lit.add(BOX, PAL.stoneDark, [cx, (h * c) / 4, cz], [0, rotY, 0], [s1 - s0 + 0.08, 0.05, t + 0.03], NG);
+    if (rand() < 0.5) o.lit.add(ICO0, PAL.moss, [cx + npx * t * 0.45, h * (0.3 + rand() * 0.5), cz + npz * t * 0.45], [rand(), rand() * 6, rand()], [0.4, 0.3, 0.1], { gradient: 0.1 });
+  }
+  const [mx, mz] = at(len / 2);
+  o.lit.add(BOX, '#3b4180', [mx, h + 0.1, mz], [0, rotY, 0], [len + t * 0.6, 0.2, t + 0.22], { gradient: 0 });
+}
+
+function rockRow(o: StyledOut, w: WallDef, rand: () => number): void {
+  const { len, dx, dz, npx, npz } = basis(w);
+  const t = Math.max(1, w.thickness), h = w.height;
+  const at = (s: number): [number, number] => [w.a.x + dx * s, w.a.z + dz * s];
+  const n = Math.max(3, Math.round(len / (t * 0.7)));
+  for (let i = 0; i <= n; i++) {
+    const [cx, cz] = at((i / n) * len);
+    const s = h * (0.6 + rand() * 0.55);
+    const j = (rand() - 0.5) * t * 0.4;
+    o.lit.add(ICO0, ['#2c3158', '#363b68', '#262a4e'][Math.floor(rand() * 3)], [cx + npx * j, s * 0.45, cz + npz * j], [rand(), rand() * 6, rand()], [t * (0.55 + rand() * 0.3), s * 0.6, t * (0.55 + rand() * 0.3)], { gradient: 0.5, jitter: 0.14 });
+    if (rand() < 0.4) o.lit.add(CONE4, '#363b68', [cx + npx * j, s * 0.95, cz + npz * j], [0, rand() * 6, 0], [t * 0.28, s * 0.55, t * 0.28], { gradient: 0.4 });
+  }
+}
+
+/** A boundary wall in the case's skin: hedge / rubble / rock / fence / stone by the designer's id words, else by kind. */
+function boundaryWall(o: StyledOut, w: WallDef, theme: Theme, rand: () => number): boolean {
+  const id = w.id;
+  let style: 'hedge' | 'rubble' | 'rock' | 'fence' | 'stone';
+  if (/hedge|vine|bush|thicket|bramble/.test(id)) style = 'hedge';
+  else if (/rubble|ruin|collapse|debris/.test(id)) style = 'rubble';
+  else if (/rock|boulder|cliff|crag/.test(id)) style = 'rock';
+  else if (/fence|rail|wire|gate/.test(id)) style = 'fence';
+  else style = w.kind === 'hedge' ? 'hedge' : w.kind === 'ruin' ? 'rubble' : w.kind === 'rock' || w.kind === 'cliff' ? 'rock' : w.kind === 'fence' ? 'fence' : 'stone';
+  switch (style) {
+    case 'hedge': vineHedge(o, w, rand); break;
+    case 'rubble': rubbleHeap(o, w, rand); break;
+    case 'rock': rockRow(o, w, rand); break;
+    case 'fence': if (theme === 'signal') patrolFence(o, w, rand); else ironFence(o, w); break;
+    case 'stone': if (theme === 'signal') concreteBarrier(o, w, w.height > 1.5); else gardenWall(o, w, rand); break;
+  }
+  return true;
+}
+
 /** Draws one extra wall in the case's style: first by the designer's id words (shelf / vine / rubble / fence / hut ...), then by kind. */
 export function addStyledWall(o: StyledOut, w: WallDef, theme: Theme, rand: () => number): boolean {
   const id = w.id;
+  if (isBoundaryId(id) && !/shelf|stack|bookcase/.test(id)) return boundaryWall(o, w, theme, rand);
   if (/shelf|stack|(^|_)rec(_|$)|bookcase/.test(id)) { bookshelfRow(o, w, rand); return true; }
   if (/vine/.test(id)) { vineHedge(o, w, rand); return true; }
   if (/rubble|tunnel/.test(id)) { rubbleHeap(o, w, rand); return true; }
