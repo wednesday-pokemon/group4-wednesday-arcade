@@ -36,7 +36,7 @@ import { zoneIndexAt } from './hydeZones.ts';
 import { DETECTION_HORIZON_S, detectionTimes } from './labels.ts';
 import { cabinetOf, cabinetsOf, crackstoneCentroid, crackstoneOf, hydeActiveOf, slurpOf, type CrackstonePublic, type SlurpPublic } from './publicState.ts';
 import { kindsOf, navDistance } from './state.ts';
-import type { Advice, AdviceAction, AdviceOption, AdviceRecord, AreaProb, CrackstoneForecast, TelemetrySample, ThreatMap, ZoneProb } from './types.ts';
+import type { Advice, AdviceAction, AdviceOption, AdviceRecord, AdviceSource, AreaProb, CrackstoneForecast, TelemetrySample, ThreatMap, ZoneProb } from './types.ts';
 import { publicView, topEggSite, type PublicView } from './view.ts';
 
 export const ENGINE_LABEL = 'rule-based decision engine' as const;
@@ -72,6 +72,11 @@ export function pct(p: number): string {
   if (x > 0.95) return '>95%';
   if (x < 0.05) return '<5%';
   return `${Math.min(95, Math.max(5, Math.round(x * 20) * 5))}%`;
+}
+
+/** Analytics v2: the layer of an oddsCopy() reason — the forecast while uncertain, an observed fact once certain. */
+export function oddsSource(p: number): AdviceSource {
+  return p >= CERTAIN_P ? 'descriptive' : 'predictive';
 }
 
 /** `estimate(pct)` while uncertain, the `fact` in words once p ≥ CERTAIN_P. */
@@ -147,6 +152,8 @@ function opt(action: AdviceAction, text: string, reason: string, score: number, 
     target: extra.target ?? null, ability: extra.ability ?? null, clueId: extra.clueId ?? null,
     ...(extra.targetLabel ? { targetLabel: extra.targetLabel } : {}),
     ...(extra.enemy ? { enemy: extra.enemy } : {}),
+    ...(extra.source ? { source: extra.source } : {}),
+    ...(extra.sourceNote ? { sourceNote: extra.sourceNote } : {}),
   };
 }
 
@@ -220,7 +227,7 @@ function zoneWhy(p: number): string {
 
 // ----------------------------------------------------------------------------------------------------- abilities
 
-interface Relevance { score: number; purpose: string; reason: string }
+interface Relevance { score: number; purpose: string; reason: string; source?: AdviceSource }
 
 /** P(at least one uncollected clue lies within `rangeM` of the player) from the clue posteriors (rangeM ≤ 0 = anywhere). */
 export function clueChanceWithin(view: PublicView, at: Vec2, rangeM: number): number {
@@ -289,12 +296,12 @@ function effectRelevance(s: Situation, e: AbilityEffect, keyLabel: string): Rele
       if (obj === 'find_clues') {
         const q = clueChanceWithin(s.view, s.p, e.rangeM);
         if (q < 0.35) return null;
-        return { score: 62, purpose: e.visual === 'scent_trail' ? 'follow the scent' : 'reveal evidence', reason: oddsCopy(q, (x) => `Clue chance in range ${x} · Bayesian`, 'A missing clue is within range') };
+        return { score: 62, purpose: e.visual === 'scent_trail' ? 'follow the scent' : 'reveal evidence', reason: oddsCopy(q, (x) => `Clue chance in range ${x} · Bayesian`, 'A missing clue is within range'), source: oddsSource(q) };
       }
       if (obj === 'find_egg' && !s.view.inv.eggSeenAt) {
         const q = eggChanceWithin(s.view, s.p, e.rangeM);
         if (q < 0.35) return null;
-        return { score: 60, purpose: 'reveal the egg', reason: oddsCopy(q, (x) => `Egg odds in range ${x} · Bayesian`, 'The egg is within range') };
+        return { score: 60, purpose: 'reveal the egg', reason: oddsCopy(q, (x) => `Egg odds in range ${x} · Bayesian`, 'The egg is within range'), source: oddsSource(q) };
       }
       return null;
     }
@@ -305,7 +312,7 @@ function effectRelevance(s: Situation, e: AbilityEffect, keyLabel: string): Rele
       if (!active || s.chased || t < fx.premonitionUntil) return null;
       if (!(s.alert || (s.known && d < 25) || s.view.ownZoneP >= 0.4)) return null;
       if (e.rangeM > 0 && d > e.rangeM) return null;
-      return { score: 64, purpose: 'see its next path', reason: s.known ? `Hyde ${MODE_WORD[s.mode]} ${m(d)} away` : zoneWhy(s.view.ownZoneP) };
+      return { score: 64, purpose: 'see its next path', reason: s.known ? `Hyde ${MODE_WORD[s.mode]} ${m(d)} away` : zoneWhy(s.view.ownZoneP), source: s.known ? 'descriptive' : oddsSource(s.view.ownZoneP) };
     case 'power_switch':
       return null; // handled by abilityOption (needs the next-effect fallback rule)
   }
@@ -398,7 +405,7 @@ export function abilityOption(s: Situation, key: 'F' | 'Q', def: AbilityDef, sta
   const text = defensive ? rx('defensive', "Use your Pokémon's defensive move.") : `Use ${def.name} (${keyLabel}) to ${purpose}.`;
   const reason = defensive ? `${def.name} (${keyLabel}): ${best.reason}` : best.reason;
   return opt(key === 'F' ? 'use_power' : 'use_move', text, reason, best.score, {
-    ability: { key, id: def.id, name: def.name, kinds: kindsOf(def) }, ...(best.enemy ? { enemy: best.enemy } : {}),
+    ability: { key, id: def.id, name: def.name, kinds: kindsOf(def) }, ...(best.enemy ? { enemy: best.enemy } : {}), ...(best.source ? { source: best.source } : {}),
   });
 }
 
@@ -663,7 +670,7 @@ function crackOptions(run: MysteryRun, cs: CrackSituation, crack: CrackstoneFore
           if (a + pathLen(q, b) > direct * 1.6 + 15) continue;
         }
         out.push(opt('avoid_area', `Crackstone may see you here. Move ${dirWord(run, q.x, q.z)}.`, oddsCopy(crack.here.p, (x) => `Sees this spot within 10 s: ${x} · Rule-based`, 'He will see this spot soon'), 72,
-          { target: q, targetLabel: 'Out of his sight lines', enemy }));
+          { target: q, targetLabel: 'Out of his sight lines', enemy, source: oddsSource(crack.here.p) }));
         break;
       }
     }
@@ -788,7 +795,7 @@ function cabinetOptions(run: MysteryRun, s: Situation, cs: CrackSituation | null
   const outside = view?.enemyOutside ?? null;
   const near = outside?.enemy ?? threat?.enemy ?? null;
   if (view?.witnessedBy) {
-    out.push(opt('exit_cabinet', `${WHO_ADV[view.witnessedBy]} saw you hide! Get out now.`, 'It is coming to pull you out. E to exit', 96, { enemy: view.witnessedBy }));
+    out.push(opt('exit_cabinet', `${WHO_ADV[view.witnessedBy]} saw you hide! Get out now.`, 'It is coming to pull you out. E to exit', 96, { enemy: view.witnessedBy, source: 'diagnostic', sourceNote: 'saw you hide' }));
     return out;
   }
   if (door === 'open') {
@@ -994,7 +1001,7 @@ function zoneDetour(run: MysteryRun, goal: Vec2, view: PublicView, zones: readon
   if (!best) return null;
   const who = zones[risky].enemy;
   return opt('alt_route', rx('saferPathArea', `Take the safer path via the ${zones[best.zone].name}.`, { area: zones[best.zone].name }), riskWhy(zones[risky]), 68,
-    { target: best.via, targetLabel: zones[best.zone].name, ...(who && who !== 'hyde' ? { enemy: who } : {}) });
+    { target: best.via, targetLabel: zones[best.zone].name, ...(who && who !== 'hyde' ? { enemy: who } : {}), source: oddsSource(zones[risky].p) });
 }
 
 // ----------------------------------------------------------------------------------------------------- engine
@@ -1045,7 +1052,7 @@ export class PrescriptiveService {
     if (p.stance === 'sprint' && !s.chased && s.emerged) {
       const sprintR = stanceNoiseRadius(run, 'sprint');
       if (s.known && d <= sprintR * 1.6) out.push(opt('stop_sprinting', 'Stop sprinting. Walk or crouch.', `Sprinting is heard ${m(sprintR)} off`, 88 + fragile));
-      else if (!s.known && ownRisk >= 0.3) out.push(opt('stop_sprinting', 'Walk slowly. Your noise is rising.', zoneWhy(ownRisk), 76 + fragile));
+      else if (!s.known && ownRisk >= 0.3) out.push(opt('stop_sprinting', 'Walk slowly. Your noise is rising.', zoneWhy(ownRisk), 76 + fragile, { source: oddsSource(ownRisk) }));
     }
     const hc = !p.hidden ? hideCabinetOption(run, s, cs, ss, fragile) : null;
     if (hc) out.push(hc);
@@ -1066,11 +1073,11 @@ export class PrescriptiveService {
       if ((s.alert && d < 20) || (s.view.visible && s.los && d < 16)) {
         out.push(opt('crouch', 'Crouch (C) and move slowly.', `Hyde ${m(d)} away; steps carry ${m(walkR)}`, (s.alert ? 80 : 72) + fragile));
       } else if (!s.known && ownRisk >= 0.4 && p.stance !== 'idle') {
-        out.push(opt('crouch', 'Stay quiet. Hyde nearby. Crouch (C).', zoneWhy(ownRisk), 72 + fragile));
+        out.push(opt('crouch', 'Stay quiet. Hyde nearby. Crouch (C).', zoneWhy(ownRisk), 72 + fragile, { source: oddsSource(ownRisk) }));
       }
     }
     if (!s.known && s.emerged && ownRisk >= 0.4 && p.crouched && !p.hidden) {
-      out.push(opt('stay_quiet', 'Stay quiet. Hyde nearby.', zoneWhy(ownRisk), 66 + fragile));
+      out.push(opt('stay_quiet', 'Stay quiet. Hyde nearby.', zoneWhy(ownRisk), 66 + fragile, { source: oddsSource(ownRisk) }));
     }
 
     // ---- objective (public targets only)
@@ -1100,7 +1107,7 @@ export class PrescriptiveService {
         goal = target;
         if (run.playerNav().reachable(p, { x: top.def.x, z: top.def.z }, tol)) {
           out.push(opt('get_egg', seen ? eggAdvice(run, view) : inside ? `Check the ${top.def.label} for the egg.` : eggAdvice(run, view),
-            seen ? 'You saw it there' : oddsCopy(top.p, (x) => `Egg odds ${x} · Bayesian estimate`, 'The egg can only be there'), s.threat ? 48 : 64, { target, targetLabel: seen || inside || !area ? top.def.label : area.name }));
+            seen ? 'You saw it there' : oddsCopy(top.p, (x) => `Egg odds ${x} · Bayesian estimate`, 'The egg can only be there'), s.threat ? 48 : 64, { target, targetLabel: seen || inside || !area ? top.def.label : area.name, source: seen ? 'descriptive' : oddsSource(top.p) }));
         }
       }
     }
@@ -1112,11 +1119,11 @@ export class PrescriptiveService {
         const total = run.caseDef.clues.length;
         if (pick.inside) {
           out.push(opt('inspect_clue', `Check the ${pick.label} ${dirWord(run, pick.target.x, pick.target.z)}.`, oddsCopy(pick.siteP, (x) => `Most likely spot here: ${x}`, 'The only possible spot here'), s.threat ? 50 : 68,
-            { target: pick.target, clueId: pick.clueId, targetLabel: pick.label }));
+            { target: pick.target, clueId: pick.clueId, targetLabel: pick.label, source: oddsSource(pick.siteP) }));
         } else {
           const left = total - found;
           out.push(opt('search_room', left === 1 ? `One clue left. Search the ${pick.area.name}.` : `Search the ${pick.area.name}.`,
-            oddsCopy(pick.p, (x) => `Clue chance ${x} · Bayesian estimate`, 'A missing clue is there'), s.threat ? 40 : 60, { target: pick.target, clueId: pick.clueId, targetLabel: pick.area.name }));
+            oddsCopy(pick.p, (x) => `Clue chance ${x} · Bayesian estimate`, 'A missing clue is there'), s.threat ? 40 : 60, { target: pick.target, clueId: pick.clueId, targetLabel: pick.area.name, source: oddsSource(pick.p) }));
         }
       }
     }

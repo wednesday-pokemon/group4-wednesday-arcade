@@ -7,6 +7,7 @@ import { memo } from 'react';
 import type { OddsV3Row, OddsV3View } from '../../../app/mystery/hud/oddsV3.ts';
 import { Icon } from '../../Icon.tsx';
 import { HudIcon } from './HudIcon.tsx';
+import { LayerBadge } from './LayerBadge.tsx';
 
 export const OddsPanel = memo(function OddsPanel({ odds }: { odds: OddsV3View }) {
   if (odds.phase === 'hidden' || odds.rows.length === 0) return null;
@@ -14,7 +15,7 @@ export const OddsPanel = memo(function OddsPanel({ odds }: { odds: OddsV3View })
   const objective = odds.rows.find((r) => r.id === 'objective') ?? null;
   return (
     <section className="mhud-panel mhud-odds mhud-odds--v3" aria-label="Danger soon: the odds" data-testid="hud-odds" data-phase={odds.phase}>
-      <p className="mhud-odds__title"><Icon name="gauge" />Danger soon</p>
+      <p className="mhud-odds__title"><LayerBadge layer="pred" /><Icon name="gauge" />Danger soon</p>
       {monsters.length > 0 && (
         <ul className="mhud-odds__rows">
           {monsters.map((r) => <MonsterRow key={`${r.id}:${r.kind}`} r={r} />)}

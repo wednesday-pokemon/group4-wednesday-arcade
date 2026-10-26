@@ -348,3 +348,20 @@
 
 /* lens bar: two-line label needs the full 30 px (descenders of "may appear") */
 .mhud-right .mhud-lens { height: 1.875rem; }
+
+/* ---------- analytics v2: numbered layer badges (match the AnalyticsLegend chip colours) + advice source / alternatives ---------- */
+.mhud-layer {
+  display: inline-grid; place-items: center; flex: none; width: 1.125rem; height: 1.125rem; margin-right: 0.15rem; border-radius: 50%;
+  border: 1.5px solid currentColor; font-size: max(14px, 0.75rem); font-weight: var(--fw-bold); line-height: 1; letter-spacing: 0;
+  font-variant-numeric: tabular-nums lining-nums; background: rgba(11, 16, 32, 0.9);
+}
+.mhud-layer--desc { color: var(--c-layer-desc); }
+.mhud-layer--diag { color: var(--c-layer-diag); }
+.mhud-layer--pred { color: var(--c-layer-pred); }
+.mhud-layer--presc { color: var(--c-layer-presc); }
+.mhud-log .mhud-layer { margin-right: 0; }
+.mhud-card__src { color: var(--c-text-muted); }
+.mhud-card__alt { font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mhud-card--advice.has-alt { max-height: 5.75rem; }
+.mhud-card--advice.has-alt > .thing-sigil { grid-row: span 4; }
+.alegend__n { display: inline-grid; place-items: center; width: 1rem; height: 1rem; border-radius: 50%; border: 1px solid currentColor; font-size: 0.75rem; line-height: 1; }

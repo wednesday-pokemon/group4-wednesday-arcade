@@ -36,6 +36,9 @@ describe('mystery flow', () => {
     expect(s.session.caseId).toBe('midnight_signal'); // assigned with the session, before the cards
     expect(run(s, { type: 'prologueDone' })).toBe(s); // the story starts only after the case file
     s = run(s, { type: 'caseRevealed' });
+    expect(s.screen).toBe('murder'); // the 3D "how it happened" cutscene
+    expect(run(s, { type: 'prologueDone' }).screen).toBe('murder'); // out-of-order actions are ignored
+    s = run(s, { type: 'murderDone' });
     expect(s.screen).toBe('prologue');
     expect(s.session.selected).toEqual({ characterId: card.characterId, pokemonId: card.pokemonId });
     expect(s.attempt).toBe(1);
@@ -73,7 +76,7 @@ describe('mystery flow', () => {
   });
 
   it('board and pause overlays: Tab toggles the board, Esc closes the board first, then toggles pause', () => {
-    const s0 = run(initialFlow(session('R')), { type: 'select', duo: session().offer.cards[0] }, { type: 'caseRevealed' }, { type: 'prologueDone' }, { type: 'tutorialDone' });
+    const s0 = run(initialFlow(session('R')), { type: 'select', duo: session().offer.cards[0] }, { type: 'caseRevealed' }, { type: 'murderDone' }, { type: 'prologueDone' }, { type: 'tutorialDone' });
     let s = run(s0, { type: 'toggleBoard' });
     expect(s.overlay).toBe('board');
     s = run(s, { type: 'togglePause' });
@@ -93,7 +96,7 @@ describe('mystery flow', () => {
     const cards = initialFlow(session('R'));
     expect(run(cards, { type: 'deposited' })).toBe(cards);
     expect(run(cards, { type: 'ended', result: result() })).toBe(cards);
-    const story = run(cards, { type: 'select', duo: cards.session.offer.cards[0] }, { type: 'caseRevealed' });
+    const story = run(cards, { type: 'select', duo: cards.session.offer.cards[0] }, { type: 'caseRevealed' }, { type: 'murderDone' });
     expect(run(story, { type: 'deposited' })).toBe(story);
     expect(run(story, { type: 'ended', result: result() })).toBe(story);
     const tut = run(story, { type: 'prologueDone' });
@@ -102,7 +105,7 @@ describe('mystery flow', () => {
   });
 
   it('a DNF during play goes to results', () => {
-    const s = run(initialFlow(session('R')), { type: 'select', duo: session().offer.cards[2] }, { type: 'caseRevealed' }, { type: 'prologueDone' }, { type: 'tutorialDone' },
+    const s = run(initialFlow(session('R')), { type: 'select', duo: session().offer.cards[2] }, { type: 'caseRevealed' }, { type: 'murderDone' }, { type: 'prologueDone' }, { type: 'tutorialDone' },
       { type: 'ended', result: result({ outcome: 'dnf', dnfReason: 'second_catch', verdict: 'not_accused', score: null }) });
     expect(s.screen).toBe('results');
     expect(s.result?.outcome).toBe('dnf');
@@ -132,7 +135,7 @@ describe('mystery flow', () => {
     const duo = noStory.session.offer.cards[0];
     expect(run(noStory, { type: 'select', duo }).screen).toBe('tutorial');
     expect(run(initialFlow(session('R'), true), { type: 'select', duo }).screen).toBe('play');
-    const storyThenPlay = run(initialFlow(session('R'), true, false), { type: 'select', duo }, { type: 'caseRevealed' });
+    const storyThenPlay = run(initialFlow(session('R'), true, false), { type: 'select', duo }, { type: 'caseRevealed' }, { type: 'murderDone' });
     expect(storyThenPlay.screen).toBe('prologue');
     expect(run(storyThenPlay, { type: 'prologueDone' }).screen).toBe('play');
     expect(run(noStory, { type: 'reset', session: session() }).skipPrologue).toBe(true);

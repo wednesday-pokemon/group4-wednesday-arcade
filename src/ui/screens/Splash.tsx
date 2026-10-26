@@ -35,6 +35,8 @@ interface SplashProps {
   board?: ReactNode;
   /** Final wave: the topline trophy button that opens the full board on narrow screens. */
   boardButton?: ReactNode;
+  /** Optional How to Play button slot, rendered next to the Start CTA. */
+  howToPlay?: ReactNode;
 }
 
 function useNeedsFullscreenHint(): boolean {
@@ -54,7 +56,7 @@ function useNeedsFullscreenHint(): boolean {
 
 export function Splash({
   stationName, mode, tools, notice, restoring, onStart, steps = TUTORIAL_STEPS, footnote, startLabel, subtitle, tagline, emblem,
-  kicker, stepsLabel, fullscreenHint = true, board, boardButton,
+  kicker, stepsLabel, fullscreenHint = true, board, boardButton, howToPlay,
 }: SplashProps) {
   const h1 = useRef<HTMLHeadingElement>(null);
   const start = useRef<HTMLButtonElement>(null);
@@ -102,6 +104,7 @@ export function Splash({
           </p>
         )}
         <div className="splash__cta">
+          {howToPlay}
           <Button
             ref={start}
             variant="primary"

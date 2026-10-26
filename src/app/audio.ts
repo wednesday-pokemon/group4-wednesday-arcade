@@ -269,11 +269,12 @@ class AudioEngine {
   }
 
   /**
-   * Threat-driven ambience (0 calm … 1 about to catch): a low drone that swells with the threat, and ONE shared
+   * Threat-driven ambience (+ `nearestM`: distance to the nearest active monster, which speeds the heartbeat up as it
+   * closes in — see heartbeatIntervalS) (0 calm … 1 about to catch): a low drone that swells with the threat, and ONE shared
    * heartbeat whose rate follows the danger level (call every frame; level 0 = silent, 1 ≈ 1 Hz, 2 ≈ 2 Hz). `source`
    * picks the timbre: the Hyde's growl drone, or Crackstone's organ fifth (110 + 164.8 Hz) — crossfaded over ~0.6 s.
    */
-  setThreat(threat: number, level: 0 | 1 | 2, source: ThreatSource = 'hyde'): void {
+  setThreat(threat: number, level: 0 | 1 | 2, source: ThreatSource = 'hyde', nearestM: number | null = null): void {
     const ctx = this.ctx;
     if (!ctx || !this.master) return;
     this.threat = Math.max(0, Math.min(1, threat));
@@ -289,9 +290,12 @@ class AudioEngine {
     this.droneFilter!.frequency.setTargetAtTime(160 + this.threat * 520, t, 0.4);
     const chant = t < this.chantUntil ? CHANT_DUCK : 1;
     this.musicGain?.gain.setTargetAtTime(MUSIC_LEVEL * (1 - MUSIC_DUCK * this.threat) * chant, t, 0.6);
-    if (level > 0 && !this.muted && t >= this.nextBeatAt) {
+    // the beat follows whichever is more urgent: the monsters' alert level or how close the nearest one is
+    const prox = heartbeatIntervalS(nearestM);
+    const interval = Math.min(level === 2 ? 0.5 : level === 1 ? 1.0 : Infinity, prox ?? Infinity);
+    if (Number.isFinite(interval) && !this.muted && t >= this.nextBeatAt) {
       this.heartbeat(t + 0.01);
-      this.nextBeatAt = t + (level === 2 ? 0.5 : 1.0);
+      this.nextBeatAt = t + interval;
     }
   }
 
@@ -588,3 +592,12 @@ class AudioEngine {
 }
 
 export const audio = new AudioEngine();
+
+/** Heartbeat by proximity: silent beyond 25 m, then faster the closer the nearest monster is (1.1 s → 0.33 s at ≤ 3 m). */
+export const HEARTBEAT_FAR_M = 25;
+const HEARTBEAT_NEAR_M = 3;
+export function heartbeatIntervalS(distanceM: number | null): number | null {
+  if (distanceM === null || !Number.isFinite(distanceM) || distanceM > HEARTBEAT_FAR_M) return null;
+  const k = Math.min(1, Math.max(0, (HEARTBEAT_FAR_M - distanceM) / (HEARTBEAT_FAR_M - HEARTBEAT_NEAR_M)));
+  return 1.1 - (1.1 - 0.33) * k;
+}

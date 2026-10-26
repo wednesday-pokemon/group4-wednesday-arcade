@@ -15,7 +15,8 @@ import {
   OPERATOR, driveRun, openMysteryBoard, openMysteryStation, settle, stationCredentials, type MysteryStationPage,
 } from './fakeSupabase.ts';
 import { CASES } from '../../src/mystery/data/cases.ts';
-import { CASE_SOLUTIONS } from '../../src/mystery/data/solutions.ts';
+import { CASE_VARIANTS } from '../../src/mystery/data/solutions.ts';
+import { isClueSealed } from '../../src/mystery/caseVariant.ts';
 import { CASE_IDS, type CaseId } from '../../src/mystery/types.ts';
 
 vi.setConfig({ testTimeout: 300_000 }); // final sim: bot runs at 60 Hz (fakeSupabase.ts MYSTERY_TEST_TIMEOUT_MS)
@@ -213,25 +214,41 @@ describe('mystery station: three cases', () => {
     expect(server.mysteryCaseBags.size).toBe(2);
   });
 
-  it('a verified run of the assigned case: result + reveal carry that case; stored evidence = exactly the 3 clues', async () => {
+  it('a verified run of the assigned case + murderer: result + reveal carry them; stored evidence = exactly the 3 clues', async () => {
     const server = new FakeSupabaseServer();
     const page = await signedIn(server);
     const { controller, timers } = controllerFor(page);
     server.nextMysteryCases.push('midnight_signal');
+    server.nextMysteryCulprits.push('thornhill'); // a scenario the fixed-culprit game never had
+    const SOL = CASE_VARIANTS.midnight_signal.thornhill.solution;
     const { chosen } = await startVisitor(server, page, controller, FINISH_SEED);
     expect(chosen.caseId).toBe('midnight_signal');
-    const { run } = await driveRun(controller, chosen, { stationId: 'station_a', timers });
+    // nothing before finalize carries the murderer: not the envelope, not the (sealed) public case
+    const before = JSON.stringify(await page.services.api.get(chosen.sessionId));
+    expect(before).not.toMatch(/culprit|thornhill/i);
+    expect(before).not.toContain(SOL.resolution.slice(0, 30));
+    let leaked = '';
+    const { run } = await driveRun(controller, chosen, {
+      stationId: 'station_a', timers,
+      // every ack carries only the texts of clues the server has recorded as found
+      onChunk: (r) => {
+        for (const c of r.caseDef.clues) if (!r.cluesFound.includes(c.id) && !isClueSealed(c)) leaked = c.id;
+      },
+    });
+    expect(leaked, 'an unfound clue was readable').toBe('');
     expect(run.caseDef.id).toBe('midnight_signal');
+    expect(run.caseDef.clues.some(isClueSealed), 'every found clue was revealed by the server').toBe(false);
+    for (const c of run.caseDef.clues) expect(c.text).toBe(CASE_VARIANTS.midnight_signal.thornhill.clues[c.id]!.text);
     const final = await controller.finalizing()!;
     if (final.kind !== 'verified') throw new Error('expected verified');
     const r = final.response.result;
     expect(r).toMatchObject({ caseId: 'midnight_signal', caseVersion: CASES.midnight_signal.version, verdict: 'case_solved',
-      correct: true, deductionCorrect: true, claimMatches: true, accused: CASE_SOLUTIONS.midnight_signal.culprit });
-    expect([...r.evidence].sort()).toEqual([...CASE_SOLUTIONS.midnight_signal.supportingEvidence].sort());
-    expect(final.response.reveal).toEqual({ culprit: CASE_SOLUTIONS.midnight_signal.culprit, resolution: CASE_SOLUTIONS.midnight_signal.resolution });
+      correct: true, deductionCorrect: true, claimMatches: true, accused: 'thornhill' });
+    expect([...r.evidence].sort()).toEqual([...SOL.supportingEvidence].sort());
+    expect(final.response.reveal).toEqual({ culprit: 'thornhill', resolution: SOL.resolution });
     const ui = controller.getUi();
     if (ui.final.kind !== 'verified') throw new Error('expected verified');
-    expect(ui.final.reveal?.culprit).toBe(CASE_SOLUTIONS.midnight_signal.culprit);
+    expect(ui.final.reveal?.culprit).toBe('thornhill');
     expect(server.mysteryResults.get(chosen.sessionId)).toMatchObject({ case_id: 'midnight_signal', deduction_correct: true });
     // the second finalize returns the same result and reveal
     expect(await page.services.api.finalize(chosen.sessionId, null)).toEqual(final.response);
@@ -266,8 +283,9 @@ describe('mystery station: three cases', () => {
     const page = await signedIn(server);
     const { controller, timers } = controllerFor(page);
     server.nextMysteryCases.push('crypt_last_witness');
+    server.nextMysteryCulprits.push('barry');
     const { chosen } = await startVisitor(server, page, controller, FINISH_SEED);
-    const culprit = CASE_SOLUTIONS.crypt_last_witness.culprit;
+    const culprit = 'barry';
     const innocent = CASES.crypt_last_witness.suspects.find((x) => x.id !== culprit)!.id;
     // the visitor accuses an innocent; a lying client then claims it was right and solved
     const source = tamperUploads((events) => events.map((e) => (e.type === 'accusation' ? { ...e, correct: true, deductionCorrect: true }

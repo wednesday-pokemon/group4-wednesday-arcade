@@ -4,6 +4,7 @@ import type { StationId } from './game/index.ts';
 import type {
   CaseId, DuoCard, DuoOffer, EnemyId, MysteryRulesVersion, NightshadeId, PokemonId, ScoreBreakdown, SuspectId,
 } from './mystery/types.ts';
+import { callRpc } from './db.ts';
 import { HttpError } from './errors.ts';
 import {
   RULE_EVENT_TYPES, progressFromRow, progressSummary, type MysteryEventType, type MysteryProgress, type ParsedEvent,
@@ -287,4 +288,16 @@ export async function loadEnvelope(admin: SupabaseClient, row: MysterySessionRow
     row.status === 'finished' || row.status === 'dnf' ? loadResult(admin, row.id) : Promise.resolve(null),
   ]);
   return { session: sessionView(row), offer, result: result ? resultView(result) : null };
+}
+
+/**
+ * The session's murderer (server only). Idempotent: the first call stores `draw` (a fresh crypto-random suspect), every
+ * later call returns the stored one, so a refresh / replay / retry can never reroll it. Never put the result in a
+ * response before finalize.
+ */
+export async function sessionCulprit(admin: SupabaseClient, sessionId: string, draw: SuspectId): Promise<SuspectId> {
+  const out = await callRpc(admin, 'mystery_assign_culprit', { p_session_id: sessionId, p_culprit: draw });
+  const c = out.culprit;
+  if (c !== 'thornhill' && c !== 'galpin' && c !== 'barry') throw new HttpError('INTERNAL', 'Unexpected culprit from the database');
+  return c;
 }

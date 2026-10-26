@@ -157,6 +157,7 @@ export function MysteryResults({ result: r, analytics, nickname, card, caseDef, 
           <div className="mys-results__cta">
             <Button ref={again} variant="primary" size="lg" kbd="Enter" onClick={onPlayAgain} data-testid="btn-play-again">New investigation</Button>
           </div>
+
         </section>
 
         <LayerPanels report={analytics} result={r} />

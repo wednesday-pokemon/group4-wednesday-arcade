@@ -6,10 +6,10 @@ import type { StationId } from '../../game/index.ts';
 import { eventFromRow } from '../../mystery/analytics/telemetry.ts';
 import { FORECAST_TARGETS, type ForecastTarget, type SessionRecord } from '../../mystery/analytics/types.ts';
 import type {
-  CaseId, ClueId, DnfReason, Duo, DuoCard, DuoOffer, EggState, EnemyId, MysteryRulesVersion, NightshadeId, RunResult, ScoreBreakdown, SuspectId,
+  CaseId, ClueContent, ClueId, DnfReason, Duo, DuoCard, DuoOffer, EggState, EnemyId, MysteryRulesVersion, NightshadeId, RunResult, ScoreBreakdown, SuspectId,
   Verdict,
 } from '../../mystery/types.ts';
-import { CASE_IDS, ENEMY_IDS, MYSTERY_RULES_VERSION, NIGHTSHADE_IDS, SUSPECT_IDS } from '../../mystery/types.ts';
+import { CASE_IDS, CLUE_IDS, ENEMY_IDS, MYSTERY_RULES_VERSION, NIGHTSHADE_IDS, SUSPECT_IDS } from '../../mystery/types.ts';
 import { isCaseId } from '../../mystery/data/cases.ts';
 import type { PokemonId } from '../../game/types.ts';
 import { BackendError } from '../backend.ts';
@@ -113,6 +113,8 @@ export interface MysteryAppendAck {
   recommendationsUpserted: number;
   /** Analytics records the server dropped as invalid (best-effort analytics; the run stays verified). */
   forecastsDropped: number;
+  /** The session murderer's texts of the clues the server has recorded as FOUND (unfound ones never arrive). */
+  clues: Partial<Record<ClueId, ClueContent>>;
   recommendationsDropped: number;
 }
 
@@ -299,6 +301,22 @@ export function parseEnvelope(raw: unknown): MysterySessionEnvelope | null {
   };
 }
 
+/** Lenient: an unknown clue id or a malformed entry is skipped (the clue then just stays sealed). */
+export function parseClueContents(raw: unknown): Partial<Record<ClueId, ClueContent>> {
+  const out: Partial<Record<ClueId, ClueContent>> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  const s = (v: unknown, max: number) => (typeof v === 'string' && v.length <= max ? v : null);
+  for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(CLUE_IDS as readonly string[]).includes(id) || !v || typeof v !== 'object') continue;
+    const c = v as Record<string, unknown>;
+    const text = s(c.text, 600), short = s(c.short, 200), meaning = s(c.meaning, 200), deduction = s(c.deduction, 300), found = s(c.found, 200);
+    const mentions = Array.isArray(c.mentions) ? c.mentions.filter((m): m is SuspectId => (SUSPECT_IDS as readonly unknown[]).includes(m)) : null;
+    if (text === null || short === null || meaning === null || deduction === null || found === null || !mentions) continue;
+    out[id as ClueId] = { text, short, meaning, mentions, deduction, found };
+  }
+  return out;
+}
+
 export function parseAppendAck(raw: unknown): MysteryAppendAck {
   const a = obj(raw, 'append');
   const p = obj(a.progress ?? {}, 'append.progress');
@@ -315,6 +333,7 @@ export function parseAppendAck(raw: unknown): MysteryAppendAck {
     recommendationsUpserted: Number(a.recommendationsUpserted ?? 0),
     forecastsDropped: Number(a.forecastsDropped ?? 0) || 0,
     recommendationsDropped: Number(a.recommendationsDropped ?? 0) || 0,
+    clues: parseClueContents(a.clues),
   };
 }
 

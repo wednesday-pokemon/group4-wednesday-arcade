@@ -7,7 +7,9 @@ import { EvidenceBoard, evidenceOptions, mentionedNames, shortRole } from '../..
 import { caseTruthView, fmtScore, verdictView } from '../../../src/ui/mystery/MysteryResults.tsx';
 import { MAX_ADVANTAGES, MAX_DISADVANTAGES, offerViews, STAT_ROWS } from '../../../src/ui/mystery/duoView.ts';
 import { CASES, ROOM_LABELS } from '../../../src/mystery/data/cases.ts';
-import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
+import { CASE_VARIANTS } from '../../../src/mystery/data/solutions.ts';
+import { withClueContent } from '../../../src/mystery/caseVariant.ts';
+import { FIXED_SOLUTIONS as CASE_SOLUTIONS } from '../mystery/fixedSolutions.ts';
 import { allPairs, buildCard, draftOffer } from '../../../src/mystery/draft.ts';
 import type { CaseDef, CaseSolution, ClueId, RunResult } from '../../../src/mystery/types.ts';
 
@@ -103,7 +105,8 @@ describe('evidence board (public data only)', () => {
   });
 
   it('shows case number, title, victim, statements, notes; locked clues show only where to search', () => {
-    const c = CASES.poisoned_archive;
+    // the run's case as the visitor holds it: every clue's text read (the board must still show only the found one)
+    const c = withClueContent(CASES.poisoned_archive, CASE_VARIANTS.poisoned_archive.barry.clues);
     const html = board(c, [c.clues[0]!.id], 'review');
     expect(html).toContain(`Case ${c.number} · ${c.title}`);
     expect(html).toContain(`Victim: ${c.victim}`);

@@ -68,6 +68,9 @@ async function toPrologue(page, next = '[data-testid="screen-prologue"]') {
     await page.waitForTimeout(600);
     await page.click('[data-testid="btn-case-skip"]', { timeout: 2000 }).catch(() => undefined);
     await page.click('[data-testid="btn-case-begin"]');
+    // then the 3D "how it happened" cutscene (hooded killer), skipped
+    await page.waitForSelector('[data-testid="screen-murder"]', { timeout: 30000 });
+    await page.click('[data-testid="btn-murder-skip"]');
   }
   await page.waitForSelector(next, { timeout: 30000 });
 }
@@ -99,7 +102,7 @@ async function partA() {
     if (PANELS[i] === 'suspects') {
       const names = await page.$$eval('.suspect-card__name', (els) => els.map((e) => e.textContent));
       const classes = await page.$$eval('.suspect-card', (els) => [...new Set(els.map((e) => e.className))]);
-      assert(names.join('|') === 'Marilyn Thornhill|Isaac Night|Barry Dort' && classes.length === 1, `three equally framed suspects: ${names} ${classes}`);
+      assert([...names].sort().join('|') === 'Barry Dort|Françoise Galpin|Marilyn Thornhill' && classes.length === 1, `three equally framed suspects: ${names} ${classes}`);
     }
     if (PANELS[i] === 'assignment') assert((await page.$$('[data-testid="prologue-duo"] img')).length === 2, 'chosen duo shown on panel 6');
     await page.screenshot({ path: `${OUT}/A${i + 1}-${PANELS[i]}.png` });

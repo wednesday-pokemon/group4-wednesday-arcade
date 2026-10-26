@@ -14,7 +14,7 @@ export interface LiveRunHooks {
   /** A new MysteryRun + analytics for the selected duo started (uploads begin). */
   runStarted(run: MysteryRunLike, analytics: MysteryAnalytics): void;
   /** Flush pending events now (egg deposit). */
-  flushNow(reason: 'deposit' | 'finish'): void;
+  flushNow(reason: 'deposit' | 'finish' | 'clue'): void;
   /** finish / dnf reached the results moment: flush, then finalize in the background. */
   runEnded(run: MysteryRunLike, analytics: MysteryAnalytics): void;
   /** ~1 Hz station status (heartbeat to Laptop 1). */

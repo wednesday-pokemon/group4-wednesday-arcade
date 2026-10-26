@@ -25,7 +25,8 @@ import { CrackstoneLive, crackstoneRiskFor } from './crackstoneLive.ts';
 import { directorManages, EncounterLive } from './encounterLive.ts';
 import { slurpRiskFrom } from './slurpModel.ts';
 import { EventRules, isCrackThreat, isSlurpThreat, isThreat, MessageGate, P, TITLES, ADVICE_MAX, WHY_MAX } from './liveMessages.ts';
-import { cabinetDoorPhase, oddsCopy, type PrescriptiveService } from './prescriptive.ts';
+import { cabinetDoorPhase, oddsCopy, oddsSource, type PrescriptiveService } from './prescriptive.ts';
+import { alternativesOf } from './insights.ts';
 import {
   cabinetOf, crackstoneModeOf, hydeActiveOf, hydeEmergedOf, hydeVisibleOf, investigationOf, minSpawnM, slurpOf, visibleHydePosition, worldOf,
 } from './publicState.ts';
@@ -364,12 +365,17 @@ export class LiveEngine {
     if (this.lastThing && this.lastThing.kind === 'advice' && this.lastThing.text === text) this.lastThing = { ...this.lastThing, followed };
   }
 
-  private adviceMessage(o: AdviceOption, t: number, priority: number, prefix: 'advice' | 'hint'): LiveMessage {
+  private adviceMessage(o: AdviceOption | Advice, t: number, priority: number, prefix: 'advice' | 'hint'): LiveMessage {
     this.adviceSeq++;
+    // analytics v2: the reason's layer + the scored runner-ups (generic labels; the options are public-state only)
+    const alts = 'alternatives' in o ? alternativesOf(o, o.alternatives) : [];
     return {
       id: `${prefix}:${o.action}:${t.toFixed(2)}:${this.adviceSeq}`, kind: 'advice', title: o.enemy === 'crackstone' ? TITLES.crackstone : TITLES.advice,
       text: fit(o.text, ADVICE_MAX), why: fit(o.reason, WHY_MAX), t: Math.round(t * 1000) / 1000, priority, free: true,
       ...(o.enemy ? { enemy: o.enemy } : {}),
+      ...(o.source ? { source: o.source } : {}),
+      ...(o.sourceNote ? { sourceNote: o.sourceNote } : {}),
+      ...(alts.length ? { alternatives: alts } : {}),
       target: o.target ? { x: Math.round(o.target.x * 100) / 100, z: Math.round(o.target.z * 100) / 100, label: o.targetLabel ?? 'Target' } : null,
     };
   }
@@ -442,6 +448,7 @@ export class LiveEngine {
     const option = (action: AdviceOption['action'], text: string, reason: string, extra: Partial<AdviceOption> = {}): AdviceOption => ({
       action, text: fit(text, ADVICE_MAX), reason: fit(reason, WHY_MAX), feasible: true, score: 50, target: extra.target ?? null,
       ability: null, clueId: extra.clueId ?? null, ...(extra.targetLabel ? { targetLabel: extra.targetLabel } : {}),
+      ...(extra.source ? { source: extra.source } : {}),
     });
     if (run.status === 'accusing') return make(option('review_evidence', 'Review the evidence on Tab.', 'Weigh what each clue you found says'));
     if (this.anyThreat(run)) {
@@ -470,7 +477,7 @@ export class LiveEngine {
       if (topArea && level === 2) {
         const clue = view.clueSites.filter((s) => s.areaId === topArea.areaId).sort((a, b) => b.p - a.p)[0];
         return make(option('search_room', `Try the ${topArea.name}.`, oddsCopy(topArea.p, (x) => `Clue chance ${x} · ${LABEL_BAYES}`, 'A missing clue is there'),
-          { target: { x: topArea.x, z: topArea.z }, targetLabel: topArea.name, clueId: clue?.clueId ?? null }));
+          { target: { x: topArea.x, z: topArea.z }, targetLabel: topArea.name, clueId: clue?.clueId ?? null, source: oddsSource(topArea.p) }));
       }
       const sites = view.clueSites.filter((s) => s.p > 1e-6);
       const d = (s: { x: number; z: number }) => Math.hypot(s.x - run.player.x, s.z - run.player.z);
@@ -478,7 +485,7 @@ export class LiveEngine {
       if (site) {
         const area = view.world.areas.find((a) => a.id === site.areaId);
         return make(option('inspect_clue', `Check the ${site.label}${area ? ` in the ${area.name}` : ''}.`, oddsCopy(site.p, (x) => `Most likely spot: ${x} (may be wrong)`, 'The only spot left for this clue'),
-          { target: { x: site.x, z: site.z }, targetLabel: site.label, clueId: site.clueId }));
+          { target: { x: site.x, z: site.z }, targetLabel: site.label, clueId: site.clueId, source: oddsSource(site.p) }));
       }
     }
     if ((obj === 'find_egg' || obj === 'find_clues') && view.world && run.egg.state === 'resting') {
@@ -491,10 +498,10 @@ export class LiveEngine {
       if (top) {
         const area = view.world.areas.find((a) => a.id === top.def.areaId);
         if (level === 2 && area && !view.inv.eggSeenAt) {
-          return make(option('get_egg', `Try the ${area.name} for the egg.`, oddsCopy(top.p, (x) => `Egg odds ${x} · ${LABEL_BAYES}`, 'The egg can only be there'), { target: { x: area.x, z: area.z }, targetLabel: area.name }));
+          return make(option('get_egg', `Try the ${area.name} for the egg.`, oddsCopy(top.p, (x) => `Egg odds ${x} · ${LABEL_BAYES}`, 'The egg can only be there'), { target: { x: area.x, z: area.z }, targetLabel: area.name, source: oddsSource(top.p) }));
         }
         return make(option('get_egg', view.inv.eggSeenAt ? `Pick up the egg at the ${top.def.label}.` : `Check the ${top.def.label} for the egg.`,
-          view.inv.eggSeenAt ? 'You saw it there' : oddsCopy(top.p, (x) => `Egg odds ${x} (may be wrong)`, 'The only spot left for the egg'), { target: { x: top.def.x, z: top.def.z }, targetLabel: top.def.label }));
+          view.inv.eggSeenAt ? 'You saw it there' : oddsCopy(top.p, (x) => `Egg odds ${x} (may be wrong)`, 'The only spot left for the egg'), { target: { x: top.def.x, z: top.def.z }, targetLabel: top.def.label, source: view.inv.eggSeenAt ? 'descriptive' : oddsSource(top.p) }));
       }
     }
     const rec = this.prescriptive.recommend(run, zones, this.crackForecast(run), this.lastThreat);

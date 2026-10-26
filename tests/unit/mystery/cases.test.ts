@@ -1,10 +1,12 @@
-// Consistency of the three case files (public data) against their answer keys (docs/MYSTERY_CASES.md, design §4b).
+// Consistency of the three case files (public data) against their 9 case × murderer variants (docs/MYSTERY_CASES.md,
+// design §4b). Every variant is checked as the visitor would read it: the public case with that variant's clue texts.
 // Deduction rule for every case: METHOD, OPPORTUNITY and BROKEN ALIBI against the same person; the culprit is named in
 // all three clues, each innocent in exactly one — the clue that clears them; two case-file notes support nobody.
 import { describe, expect, it } from 'vitest';
 import { CASES, caseById, isCaseId, ROOM_LABELS } from '../../../src/mystery/data/cases.ts';
 import { caseWorld } from '../../../src/mystery/data/caseWorlds.ts';
-import { CASE_SOLUTIONS, caseSolution } from '../../../src/mystery/data/solutions.ts';
+import { CASE_VARIANTS, caseSolution, caseVariant } from '../../../src/mystery/data/solutions.ts';
+import { CLUE_SEALED_TEXT, withClueContent } from '../../../src/mystery/caseVariant.ts';
 import { CASE_IDS, CLUE_IDS, SUSPECT_IDS, type CaseDef, type RoomId, type SuspectId } from '../../../src/mystery/types.ts';
 
 /** How each suspect is named in clue text (surname, given name, initials as written in the clues). */
@@ -47,13 +49,18 @@ function publicStrings(def: CaseDef): [string, string][] {
 describe('case registry', () => {
   it('exactly the three case ids, numbered 01–03 in order, each its own scene', () => {
     expect(Object.keys(CASES)).toEqual([...CASE_IDS]);
-    expect(Object.keys(CASE_SOLUTIONS).sort()).toEqual([...CASE_IDS].sort());
+    expect(Object.keys(CASE_VARIANTS).sort()).toEqual([...CASE_IDS].sort());
     expect(CASE_IDS.map((id) => CASES[id].number)).toEqual(['01', '02', '03']);
     expect(new Set(CASE_IDS.map((id) => CASES[id].prologue.scene)).size).toBe(3);
     for (const id of CASE_IDS) {
       expect(CASES[id].id).toBe(id);
       expect(caseById(id)).toBe(CASES[id]);
-      expect(caseSolution(id)).toBe(CASE_SOLUTIONS[id]);
+      expect(Object.keys(CASE_VARIANTS[id]).sort()).toEqual([...SUSPECT_IDS].sort()); // any suspect can be guilty
+      for (const s of SUSPECT_IDS) {
+        expect(caseVariant(id, s)).toBe(CASE_VARIANTS[id][s]);
+        expect(caseSolution(id, s)).toBe(CASE_VARIANTS[id][s].solution);
+        expect(caseSolution(id, s).culprit).toBe(s);
+      }
       expect(isCaseId(id)).toBe(true);
     }
     expect(isCaseId('silent_evidence')).toBe(false);
@@ -77,15 +84,53 @@ describe('case registry', () => {
     const json = JSON.stringify(CASES);
     expect(json).not.toMatch(/"(culprit|supportingEvidence|links|clears|proves|implicates|exonerates|innocents|resolution)"/);
   });
+
+  it('public clues are SEALED: no text, mentions or takeaway ships before a clue is found', () => {
+    for (const id of CASE_IDS) {
+      for (const c of CASES[id].clues) {
+        expect(c.text, c.id).toBe(CLUE_SEALED_TEXT);
+        expect(c.mentions, c.id).toEqual([]);
+        expect([c.meaning ?? '', c.deduction, c.thing.found], c.id).toEqual(['', '', '']);
+      }
+    }
+  });
+
+  it('public clue labels name nobody (titles, prompts, places and visions fit every murderer)', () => {
+    for (const id of CASE_IDS) {
+      for (const c of CASES[id].clues) {
+        const label = [c.title, c.shortTitle ?? '', c.interactLabel, c.location, c.thing.vision].join(' | ');
+        for (const s of SUSPECT_IDS) expect(label, `${c.id} vs ${s}`).not.toMatch(NAME_PATTERNS[s]);
+        for (const s of SUSPECT_IDS) expect(label, `${c.id} vs ${s} (role)`).not.toMatch(ROLE_PATTERNS[s]);
+      }
+    }
+  });
+
+  it('variants are rewritten, not name-swapped: the same clue reads differently per murderer once names are masked', () => {
+    const mask = (t: string) => SUSPECT_IDS.reduce((acc, s) => acc.replace(new RegExp(NAME_PATTERNS[s].source, 'g'), 'X')
+      .replace(new RegExp(ROLE_PATTERNS[s].source, 'gi'), 'X'), t);
+    for (const id of CASE_IDS) {
+      for (const c of CASES[id].clues) {
+        const texts = SUSPECT_IDS.map((s) => mask(CASE_VARIANTS[id][s].clues[c.id]!.text));
+        expect(new Set(texts).size, `${id}/${c.id}`).toBe(3);
+      }
+    }
+  });
 });
 
-for (const id of CASE_IDS) {
-  const def = CASES[id];
-  const sol = CASE_SOLUTIONS[id];
+for (const id of CASE_IDS) for (const murderer of SUSPECT_IDS) {
+  const variant = CASE_VARIANTS[id][murderer];
+  const def = withClueContent(CASES[id], variant.clues);
+  const sol = variant.solution;
   const clueIds = def.clues.map((c) => c.id);
   const innocents = SUSPECT_IDS.filter((s) => s !== sol.culprit);
 
-  describe(`${def.number} ${def.title}`, () => {
+  describe(`${def.number} ${def.title} — murderer ${murderer}`, () => {
+    it('the variant covers exactly the case clues, and its key names this murderer', () => {
+      expect(Object.keys(variant.clues).sort()).toEqual([...clueIds].sort());
+      expect(sol.culprit).toBe(murderer);
+      for (const c of def.clues) expect(c.text, c.id).not.toBe(CLUE_SEALED_TEXT);
+    });
+
     it('3 clues, each with one candidate-site group in the case world; 2 notes; same three suspects', () => {
       expect(def.clues).toHaveLength(3);
       const world = caseWorld(id);

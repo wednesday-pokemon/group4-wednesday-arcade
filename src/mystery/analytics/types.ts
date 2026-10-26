@@ -268,6 +268,13 @@ export type AdviceAction =
   | 'close_cabinet' // inside with the door open: E closes it (a shut door hides you from every enemy)
   | 'exit_cabinet'; // inside and clear (or you were seen hiding): E steps out
 
+/**
+ * Which analytics layer an advice REASON was taken from (analytics v2): 'predictive' = a displayed forecast (Bayesian /
+ * rule-based odds), 'diagnostic' = a rule-verified cause (e.g. it saw you hide), 'descriptive' = an observed fact. Absent
+ * = not tagged (the HUD then shows no source).
+ */
+export type AdviceSource = 'descriptive' | 'diagnostic' | 'predictive';
+
 export interface AdviceOption {
   action: AdviceAction;
   text: string; // ≤ 60 chars
@@ -284,6 +291,10 @@ export interface AdviceOption {
   clueId: string | null;
   /** Which enemy the advice is about (absent = the Hyde / general). The live card's title is CRACKSTONE for 'crackstone'. */
   enemy?: EnemyId;
+  /** The layer the reason comes from (only set where it is known). */
+  source?: AdviceSource;
+  /** Short diagnostic cause behind the reason ("saw you hide"), only with source 'diagnostic'. */
+  sourceNote?: string;
 }
 
 export interface Advice extends AdviceOption {
@@ -501,6 +512,29 @@ export interface LiveMessage {
   free?: true;
   /** Final: which enemy an alert / advice is about (headword colour). */
   enemy?: EnemyId;
+  /** Analytics v2 (advice only): the layer the `why` comes from, when known (AdviceOption.source). */
+  source?: AdviceSource;
+  /** Analytics v2 (advice only): diagnostic cause note ("saw you hide"). */
+  sourceNote?: string;
+  /** Analytics v2 (advice only): the other FEASIBLE options the engine scored (≤ 2, best first). Labels are generic. */
+  alternatives?: AdviceAlternative[];
+}
+
+/** A scored runner-up of the advice (public: a generic action label + the engine's score, never a target). */
+export interface AdviceAlternative { action: AdviceAction; label: string; score: number }
+
+/**
+ * Analytics v2 prediction check-back: the player searched a candidate site whose probability was DISPLAYED (public
+ * forecast, the HUD's rounding) just before, and the result is known.
+ */
+export interface PredictionCheck {
+  t: number;
+  site: 'egg' | 'clue';
+  siteId: string;
+  /** Displayed percent (multiple of 5) and its display text ("40%", "<5%", ">95%"). */
+  pct: number;
+  text: string;
+  found: boolean;
 }
 export interface LiveAnalytics {
   t: number; forecasts: LiveForecasts; messages: LiveMessage[]; advice: LiveMessage | null;

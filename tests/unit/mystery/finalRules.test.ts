@@ -2,7 +2,7 @@
 // (FINAL_CONTRACT §1 / §8, UX_FINAL §4), rules version.
 import { describe, expect, it } from 'vitest';
 import { withTuning } from '../../../src/mystery/config.ts';
-import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
+import { FIXED_SOLUTIONS as CASE_SOLUTIONS } from './fixedSolutions.ts';
 import { playEpisode } from '../../../src/mystery/episode.ts';
 import type { MysteryRun } from '../../../src/mystery/run.ts';
 import { scoreV4 } from '../../../src/mystery/scoring.ts';

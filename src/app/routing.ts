@@ -6,7 +6,8 @@
 //                                                same journey; dev/operator shortcut. A valid Nightshade + Pokémon pair
 //                                                skips straight to the island (tutorial=0 skips the tutorial too;
 //                                                prologue=0 skips the case-file reveal + Thing's story; case=<caseId>
-//                                                forces that case for this ephemeral session); `seed`
+//                                                forces that case for this ephemeral session; culprit=<suspectId>
+//                                                forces its murderer — LOCAL DEMO test fixture only); `seed`
 //                                                alone reproduces that seed's three-card offer. Never persisted.
 //                                                TEST FIXTURE: &crackstone=0 plays the case without Joseph Crackstone
 //                                                (read by useMysteryLoop; never on the LIVE station).
@@ -24,10 +25,10 @@
 //   /?mode=dashboard&demo=1                      Laptop 1 MYSTERY dashboard, LOCAL DEMO: sessions finished on this browser
 //   /?mode=dashboard&legacy=1[&demo=1]           legacy v2.5 board (its LOCAL DEMO with demo=1)
 import { isCaseId } from '../mystery/data/cases.ts';
-import type { CaseId } from '../mystery/types.ts';
+import type { CaseId, SuspectId } from '../mystery/types.ts';
 import { isCharacterId, isPokemonId, isStationId } from '../game/index.ts';
 import type { CharacterId, PokemonId, StationId } from '../game/index.ts';
-import { NIGHTSHADE_IDS, type NightshadeId } from '../mystery/types.ts';
+import { NIGHTSHADE_IDS, SUSPECT_IDS, type NightshadeId } from '../mystery/types.ts';
 
 export type Route =
   | { kind: 'terminal'; stationId: StationId | null; forceLocal: boolean }
@@ -36,7 +37,7 @@ export type Route =
   | { kind: 'mystery_live_dashboard' }
   | { kind: 'mystery_station'; stationId: StationId }
   | { kind: 'play'; characterId: CharacterId | null; pokemonId: PokemonId | null; skipTutorial: boolean }
-  | { kind: 'mystery'; characterId: NightshadeId | null; pokemonId: PokemonId | null; seed: string | null; skipTutorial: boolean; skipPrologue: boolean; caseId: CaseId | null }
+  | { kind: 'mystery'; characterId: NightshadeId | null; pokemonId: PokemonId | null; seed: string | null; skipTutorial: boolean; skipPrologue: boolean; caseId: CaseId | null; culprit?: SuspectId | null }
   | { kind: 'invalid'; message: string };
 
 export function parseRoute(search: string): Route {
@@ -64,6 +65,7 @@ export function parseRoute(search: string): Route {
       skipTutorial: params.get('tutorial') === '0',
       skipPrologue: params.get('prologue') === '0',
       caseId: isCaseId(params.get('case')) ? (params.get('case') as CaseId) : null,
+      ...((SUSPECT_IDS as readonly (string | null)[]).includes(params.get('culprit')) ? { culprit: params.get('culprit') as SuspectId } : {}),
     };
   }
   if (mode === 'rowing' || mode === 'play') {

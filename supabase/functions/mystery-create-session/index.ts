@@ -7,7 +7,9 @@
 //   testCase  one of the three case ids; same flag, and only together with testSeed: forces the session's case.
 // The CASE is drawn by mystery_create_session from this station's shuffled bag (even distribution, independent of the
 // seed) BEFORE the cards are shown; envelope.session.caseId / caseVersion. A replay returns the same session and case.
-// The culprit is never part of this (or any pre-finalize) response.
+// The MURDERER is drawn here too (crypto RNG, any of the three suspects, independent of the seed the browser gets) and
+// stored server-only (mystery_session_secrets); a replay keeps the stored one. It is never part of this (or any
+// pre-finalize) response.
 // 201 -> MysterySessionEnvelope { session, offer, result: null }   (new session; open session on this station superseded)
 // 200 + x-idempotent-replay -> CURRENT envelope of the session created by this actionId (offer unchanged; may already
 //       have a selected duo / events / a result)
@@ -17,8 +19,8 @@ import { actorOf, requireCaller, requireStation } from '../_shared/auth.ts';
 import { generateSeed } from '../_shared/crypto.ts';
 import { adminClient, callRpc } from '../_shared/db.ts';
 import { readJson, serve } from '../_shared/http.ts';
-import { loadEnvelope, loadMysterySession } from '../_shared/mystery-db.ts';
-import { MYSTERY_RULES_VERSION, caseVersions, computeOffer, requireData } from '../_shared/mystery-rules.ts';
+import { loadEnvelope, loadMysterySession, sessionCulprit } from '../_shared/mystery-db.ts';
+import { MYSTERY_RULES_VERSION, caseVersions, computeOffer, culpritDraw, requireData } from '../_shared/mystery-rules.ts';
 import { parseMysteryCreate } from '../_shared/mystery-validation.ts';
 
 serve('mystery-create-session', async (req, ctx) => {
@@ -48,6 +50,7 @@ serve('mystery-create-session', async (req, ctx) => {
   });
   const replay = out.replay === true;
   const row = await loadMysterySession(admin, String(out.sessionId), stationId);
+  await sessionCulprit(admin, row.id, culpritDraw(row.case_id, row.case_version)); // idempotent: a replay keeps the stored murderer
   ctx.log('info', 'mystery_session_created', {
     sessionId: row.id, stationId, replay, isTest: row.is_test, caseId: row.case_id, rulesVersion: row.rules_version,
     superseded: out.supersededSessionIds ?? [],

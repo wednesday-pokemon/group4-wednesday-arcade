@@ -321,6 +321,8 @@ export const THING: ThingScript = {
  * - L1 general search area · L2 specific spot or evidence relationship · L3 deduction guidance.
  * - `templates` are filled from the live posterior (the most likely unchecked area / site) — honest, never the hidden
  *   layout; `byCase` are the case's fixed lines (index = how many hints of that level were already given, clamped).
+ * - The culprit is drawn per session (any of the three suspects in any case), so every `byCase` line must read true
+ *   for all three culprit variants of its case (the variants in solutions.ts): name objects and records, never a role.
  */
 export interface WeemsScript {
   name: string;
@@ -352,7 +354,7 @@ export const WEEMS: WeemsScript = {
         'Read the door ledger beside the time on that transfer form.', // 59
       ],
       3: [
-        'One badge stood at two doors while its owner claims a third room. Follow the badge.', // 84
+        'Doors remember every badge, pass and card. Set each story beside the ledger.', // 76
         'Whoever signed the egg away also held the poison. Let the clocks agree.', // 71
       ],
     },
@@ -366,22 +368,22 @@ export const WEEMS: WeemsScript = {
         'Set the sign-in times against the moment the gate fell.', // 55
       ],
       3: [
-        'A key, a signature, a satchel. Find the one person all three belong to.', // 71
+        'A key, a signature, a bag of tools. Find the one person all three belong to.', // 76
         'Test each statement against what was found below. One claim cannot survive it.', // 79
       ],
     },
     midnight_signal: {
       1: [
-        'Alarms are silenced from a control room. Ours leans on the alley wall.', // 70
-        'Guards keep logs. Try the ravine post or the checkpoint booth.', // 62
+        'The control room remembers how the alarms died. It leans on the alley wall.', // 75
+        'Every post keeps a logbook. Try the ravine post or the checkpoint booth.', // 72
       ],
       2: [
-        'The override console remembers a card. The patrol log remembers a wall.', // 71
-        'The watchtower recorder knows where the all-clear was truly sent from.', // 70
+        'The console knows how the alarms died. The logbook knows who walked where.', // 74
+        'The watchtower recorder saw every lamp lit tonight, and where it shone.', // 71
       ],
       3: [
-        'A card, a lamp, a log. Ask which single person they all point to.', // 65
-        'Check each alibi against a record that cannot lie: lamps, cards, star logs.', // 75
+        'A console, a lamp, a logbook. Ask which single person they all point to.', // 72
+        'Check each alibi against records that cannot lie: lamps, stamps and locks.', // 74
       ],
     },
   },

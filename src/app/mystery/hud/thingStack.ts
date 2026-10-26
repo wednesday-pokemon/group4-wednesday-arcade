@@ -19,6 +19,9 @@ export interface StackItem {
   head: string;
   text: string;
   why?: string | null;
+  /** Analytics v2 (advice): source label of the Why line and the "Also considered" line (see hudModel StackView). */
+  whySource?: string | null;
+  alt?: string | null;
   /** Diagnostic basis: rule-verified (solid border) vs pattern (dashed + "≈"). */
   basis?: 'rule' | 'pattern';
   priority: number;

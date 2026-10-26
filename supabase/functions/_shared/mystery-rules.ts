@@ -10,9 +10,9 @@ import { draftOffer } from './mystery/draft.ts';
 import { eggTierForSeed, round1, scoreFor, scoreV4 } from './mystery/scoring.ts';
 import { evidenceSupports, isCorrectSuspect, sanitizeEvidence, solutionMatches, verdictFor } from './mystery/caseLogic.ts';
 import { isCaseId } from './mystery/data/cases.ts';
-import { CASE_IDS, NIGHTSHADE_IDS, MYSTERY_RULES_VERSION } from './mystery/types.ts';
+import { CASE_IDS, NIGHTSHADE_IDS, MYSTERY_RULES_VERSION, SUSPECT_IDS } from './mystery/types.ts';
 import type {
-  CaseDef, CaseId, CaseSolution, ClueId, DnfReason, DuoOffer, EnemyId, MysteryRulesVersion, ScoreBreakdown, SuspectId,
+  CaseDef, CaseId, CaseSolution, ClueContent, ClueId, DnfReason, DuoOffer, EnemyId, MysteryRulesVersion, ScoreBreakdown, SuspectId,
   Verdict,
 } from './mystery/types.ts';
 import { isPokemonId } from './game/index.ts';
@@ -85,29 +85,64 @@ export function computeOffer(seed: string): DuoOffer {
 }
 
 // ------------------------------------------------------------------------------------------------- cases
-/** The case a session plays: its public definition + the server's answer key (same id AND version). */
+/** The case a session plays: its public definition + the server's answer key + the culprit's clue texts. */
 export interface SessionCase {
   caseDef: CaseDef;
   solution: CaseSolution;
+  /** Clue texts of the session's variant (server only; released per FOUND clue, see revealedClues). */
+  clues: Partial<Record<ClueId, ClueContent>>;
 }
 
 /**
- * The CaseDef + CaseSolution of a session's stored case. A missing / mismatched answer key is a deployment fault
- * (500 MISCONFIGURED); a session created under another case version cannot be verified (409 CASE_OUTDATED).
- * `caseVersion` undefined = do not check (catalogue use).
+ * The CaseDef + the variant of a session's stored case and murderer. A missing / mismatched answer key is a deployment
+ * fault (500 MISCONFIGURED); a session created under another case version cannot be verified (409 CASE_OUTDATED).
+ * `caseVersion` undefined = do not check (catalogue use). `culprit` undefined = every variant is validated and the
+ * first is returned (catalogue use only — never for a session).
  */
-export function resolveCase(caseId: unknown, caseVersion: number | undefined, data: MysteryData = requireData()): SessionCase {
+export function resolveCase(
+  caseId: unknown, caseVersion: number | undefined, data: MysteryData = requireData(), culprit?: SuspectId,
+): SessionCase {
   if (!isCaseId(caseId)) throw new HttpError('INTERNAL', 'The session names an unknown case');
   const caseDef = data.cases[caseId];
-  const solution = data.solutions[caseId];
-  if (!caseDef || !solution || !solutionMatches(caseDef, solution)) {
-    throw new HttpError('MISCONFIGURED', 'Case data and answer key are out of step (run npm run sync:shared, then redeploy)', { caseId });
+  const variants = data.variants[caseId];
+  const ids = culprit === undefined ? SUSPECT_IDS : [culprit];
+  for (const id of ids) {
+    const v = variants?.[id];
+    if (!caseDef || !v || v.solution.culprit !== id || !solutionMatches(caseDef, v.solution)
+      || caseDef.clues.some((c) => !v.clues[c.id])) {
+      throw new HttpError('MISCONFIGURED', 'Case data and answer key are out of step (run npm run sync:shared, then redeploy)', { caseId, culprit: id });
+    }
   }
   if (caseVersion !== undefined && caseVersion !== caseDef.version) {
     throw new HttpError('CASE_OUTDATED', 'This session was created for another version of its case and cannot be verified',
       { caseId, sessionVersion: caseVersion, deployedVersion: caseDef.version });
   }
-  return { caseDef, solution };
+  const v = variants[ids[0]];
+  return { caseDef, solution: v.solution, clues: v.clues };
+}
+
+/** A uniformly random murderer for a new session (crypto RNG; independent of the seed the browser receives). */
+export function drawCulprit(rand: () => number = () => crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32): SuspectId {
+  return SUSPECT_IDS[Math.min(SUSPECT_IDS.length - 1, Math.floor(rand() * SUSPECT_IDS.length))];
+}
+
+/** Case versions before 4 had ONE fixed murderer per case (sessions stored then keep it). */
+const LEGACY_CULPRIT: Record<CaseId, SuspectId> = { poisoned_archive: 'thornhill', crypt_last_witness: 'galpin', midnight_signal: 'barry' };
+
+/** The draw to offer mystery_assign_culprit for a session (only used if none is stored yet). */
+export function culpritDraw(caseId: unknown, caseVersion: number | null | undefined): SuspectId {
+  return isCaseId(caseId) && typeof caseVersion === 'number' && caseVersion < 4 ? LEGACY_CULPRIT[caseId] : drawCulprit();
+}
+
+export function isSuspectId(v: unknown): v is SuspectId {
+  return typeof v === 'string' && (SUSPECT_IDS as readonly string[]).includes(v);
+}
+
+/** The variant clue texts the visitor may read: only the clues the server has recorded as found. */
+export function revealedClues(c: SessionCase, cluesFound: readonly ClueId[]): Partial<Record<ClueId, ClueContent>> {
+  const out: Partial<Record<ClueId, ClueContent>> = {};
+  for (const id of cluesFound) if (c.clues[id]) out[id] = c.clues[id];
+  return out;
 }
 
 /** Deployed version of every case (mystery_create_session stores the drawn case's version). Validates every key. */

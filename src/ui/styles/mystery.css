@@ -369,3 +369,15 @@ kbd.kcap {
 
 /* UX_FINAL §7: a 14 px barChart (descriptive layer) before "Stats compare duos…" on the duo draft. */
 .duo-draft__stats-icon { width: 0.875rem; height: 0.875rem; margin: 0 0.25rem 0 0.15rem; vertical-align: -0.1em; color: var(--c-layer-desc); }
+
+/* ---------- analytics v2: results links (prediction check-backs, advice scorecard, why you lost points) ---------- */
+.lp-score { color: var(--c-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lp-score__k { font-weight: var(--fw-bold); }
+.lp-score__cal { color: var(--c-text-muted); }
+/* "Why you lost points" inside the Diagnostic panel: one line per item, the points in a badge */
+.lp-lost__head { font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--layer); line-height: 1.25; margin-top: 0.3rem; }
+.lp-row--lost { align-items: baseline; }
+.lp-badge--pts { min-width: 2.6rem; text-align: center; border: 1px solid var(--c-border-strong); color: var(--c-text); font-variant-numeric: tabular-nums lining-nums; }
+.lp-rows--lost { gap: 0.1rem; margin-top: 0.15rem; }
+.lp-rows--lost .lp-badge--pts { line-height: 1.2; }
+.lp-pred.has-checks .lp-spark { height: 4.75rem; }

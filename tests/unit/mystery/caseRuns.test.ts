@@ -2,10 +2,10 @@
 // F powers pointing at THIS case's clues / egg, and determinism per (duo, seed, case).
 import { describe, expect, it } from 'vitest';
 import { CASES } from '../../../src/mystery/data/cases.ts';
-import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
+import { CASE_VARIANTS } from '../../../src/mystery/data/solutions.ts';
 import { caseMap } from '../../../src/mystery/defaults.ts';
 import { POKEMON_IDS, REGISTRIES } from '../../../src/mystery/draft.ts';
-import { playEpisode, type BotEpisode } from '../../../src/mystery/episode.ts';
+import { episodeCulprit, playEpisode, type BotEpisode } from '../../../src/mystery/episode.ts';
 import { yawTo } from '../../../src/mystery/geometry.ts';
 import { layoutFromMap } from '../../../src/mystery/layout.ts';
 import { MysteryRun } from '../../../src/mystery/run.ts';
@@ -34,7 +34,7 @@ function median(xs: number[]): number {
 
 function expectSolved(ep: BotEpisode, caseId: CaseId): void {
   const tag = `${caseId} ${ep.duo.characterId}+${ep.duo.pokemonId} ${ep.seed}`;
-  const sol = CASE_SOLUTIONS[caseId];
+  const sol = CASE_VARIANTS[caseId][episodeCulprit(ep.seed)].solution; // the episode's own (seeded) murderer
   const r = ep.result!;
   expect(ep.timedOut, tag).toBe(false);
   expect(r, tag).toMatchObject({ outcome: 'finished', verdict: 'case_solved', caseId, caseVersion: CASES[caseId].version, accused: sol.culprit, correct: true, deductionCorrect: true });
@@ -57,6 +57,7 @@ describe('every case is solvable by the stealthy bot with a spread of duos (21 p
       const retried: string[] = [];
       let withReveal = 0;
       let abilityUses = 0;
+      const murderers = new Set<SuspectId>();
       for (const { duo, useAbilities } of duosFor(ci)) {
         const seed = `solve-${caseId}-${duo.characterId}-${duo.pokemonId}`;
         let ep = playEpisode(duo, seed, { profile: 'stealthy', useAbilities }, { caseDef });
@@ -67,12 +68,14 @@ describe('every case is solvable by the stealthy bot with a spread of duos (21 p
           ep = playEpisode(duo, `${seed}-again`, { profile: 'stealthy', useAbilities }, { caseDef });
         }
         expectSolved(ep, caseId);
+        murderers.add(episodeCulprit(ep.seed));
         expect(ep.run.map.id).toBe(caseMap(caseId).id);
         times.push(ep.result!.activeTimeS);
         if (REVEALS(duo)) withReveal++;
         abilityUses += ep.events.filter((e) => e.type === 'ability_used').length;
         if (!useAbilities) expect(ep.events.some((e) => e.type === 'ability_used')).toBe(false);
       }
+      expect([...murderers].sort(), 'every murderer of this case was solved').toEqual([...SUSPECT_IDS].sort());
       expect(withReveal).toBeGreaterThanOrEqual(3);
       expect(21 - withReveal).toBeGreaterThanOrEqual(3);
       expect(retried.length, `DNFs (retried): ${retried.join(', ')}`).toBeLessThanOrEqual(2);
@@ -98,14 +101,14 @@ function atAccusation(caseId: CaseId, found: ClueId[] = CASES[caseId].clues.map(
   return run;
 }
 
-for (const caseId of CASE_IDS) {
+for (const caseId of CASE_IDS) for (const murderer of SUSPECT_IDS) {
   const def = CASES[caseId];
-  const sol = CASE_SOLUTIONS[caseId];
+  const sol = CASE_VARIANTS[caseId][murderer].solution;
   const all = def.clues.map((c) => c.id);
   const innocents = SUSPECT_IDS.filter((s) => s !== sol.culprit);
   const other = CASE_IDS.find((c) => c !== caseId)!;
 
-  describe(`${def.number} ${caseId}: the one-shot accusation`, () => {
+  describe(`${def.number} ${caseId} (murderer ${murderer}): the one-shot accusation`, () => {
     it('culprit + exactly the three clues → case_solved', () => {
       const run = atAccusation(caseId);
       const ev = run.accuse({ suspectId: sol.culprit, evidence: [...all].reverse() }, sol);
@@ -159,7 +162,7 @@ for (const caseId of CASE_IDS) {
 
     it("another case's (or a stale) answer key and unknown suspects are refused; the real one still works", () => {
       const run = atAccusation(caseId);
-      expect(run.accuse({ suspectId: sol.culprit, evidence: [...all] }, CASE_SOLUTIONS[other])).toEqual([]);
+      expect(run.accuse({ suspectId: sol.culprit, evidence: [...all] }, CASE_VARIANTS[other][murderer].solution)).toEqual([]);
       expect(run.accuse({ suspectId: sol.culprit, evidence: [...all] }, { ...sol, version: sol.version + 1 })).toEqual([]);
       expect(run.accuse({ suspectId: 'wednesday' as SuspectId, evidence: [...all] }, sol)).toEqual([]);
       expect(run.status).toBe('accusing');

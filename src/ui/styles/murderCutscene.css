@@ -1,0 +1,52 @@
+/* "How it happened" cutscene: full-bleed 3D stage under cinematic letterbox bars (same plum/gold language as the case-file reveal).
+   Red stays reserved for the Hyde. Reduced motion / no WebGL: still frame (or dark gradient) with the same bars and captions. */
+.murder {
+  --mu-gold: #c9a45c;
+  position: fixed; inset: 0; z-index: var(--z-overlay); overflow: hidden; color: var(--c-text); background: #05060f;
+}
+.murder__stage { position: absolute; inset: 0; }
+.murder--nogl .murder__stage {
+  background:
+    radial-gradient(60% 50% at 50% 42%, rgba(91, 42, 110, 0.5), transparent 75%),
+    radial-gradient(40% 30% at 50% 60%, rgba(245, 176, 76, 0.1), transparent 70%),
+    linear-gradient(180deg, #140b20 0%, #0d0b1c 55%, #06070f 100%);
+}
+.murder::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+.murder__bar {
+  position: absolute; left: 0; right: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-4); padding: 0 var(--page-pad); background: #000; animation: murder-bar 700ms var(--ease-out) both;
+}
+.murder__bar--top { top: 0; height: clamp(3.25rem, 9vh, 6rem); }
+.murder__bar--bottom {
+  bottom: 0; height: clamp(5.75rem, 17vh, 9rem); flex-direction: column; justify-content: center; gap: var(--sp-3); text-align: center;
+  animation-name: murder-bar-b;
+}
+@keyframes murder-bar { from { transform: translateY(-100%); } to { transform: none; } }
+@keyframes murder-bar-b { from { transform: translateY(100%); } to { transform: none; } }
+
+.murder__kicker {
+  font: var(--fw-semi) var(--fs-sm) / 1.2 var(--font-display); letter-spacing: 0.16em; text-transform: uppercase; color: var(--mu-gold);
+}
+.murder__tools { display: inline-flex; align-items: center; gap: var(--sp-2); margin-left: auto; }
+
+.murder__caption {
+  margin: 0; max-width: 56rem; font-size: var(--fs-lg); line-height: var(--lh-snug); color: var(--c-text);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8); animation: murder-cap 600ms var(--ease-out) both;
+}
+@keyframes murder-cap { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+.murder__dots { display: flex; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.murder__dots li { width: 1.6rem; height: 3px; border-radius: 2px; background: rgba(243, 236, 220, 0.22); }
+.murder__dots li.is-past { background: rgba(201, 164, 92, 0.55); }
+.murder__dots li.is-on { background: var(--mu-gold); }
+
+.reduced-motion .murder__bar, .reduced-motion .murder__caption, .murder--still .murder__bar, .murder--still .murder__caption { animation: none; }
+.high-contrast .murder__caption { text-shadow: none; }
+@media (max-width: 900px) {
+  .murder__kicker { font-size: var(--fs-xs); letter-spacing: 0.1em; }
+  .murder__caption { font-size: var(--fs-md); }
+}

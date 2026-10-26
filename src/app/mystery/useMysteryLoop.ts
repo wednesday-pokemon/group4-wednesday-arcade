@@ -13,11 +13,12 @@
 // Crackstone (UX_ENEMIES): plaque, scan / curse banner, CURSED row, one threat-edge chevron, captions + cues, his
 // CRACKSTONE stack items (rate-limited by AlertLimiter), the organ drone (audio.setThreat source) and the spectator
 // status fields.
+import { CLUE_SEALED_TEXT, provisionalCulprit, revealClues, sessionCaseDef } from '../../mystery/caseVariant.ts';
 import { useContext, useEffect, useRef, useState } from 'react';
-import { createMysteryAnalytics, type Advice, type MysteryAnalytics } from '../../mystery/analytics/index.ts';
+import { alternativesLine, alternativesOf, checkBackLine, createMysteryAnalytics, sourceTag, type Advice, type MysteryAnalytics } from '../../mystery/analytics/index.ts';
 import type { LiveAnalytics, LiveMessage } from '../../mystery/analytics/types.ts';
 import type { MysteryRun } from '../../mystery/run.ts';
-import type { Accusation, CaseDef, ClueId, Duo, InvestigationState, StampedEvent, Vec2 } from '../../mystery/types.ts';
+import type { Accusation, CaseDef, ClueContent, ClueId, Duo, InvestigationState, StampedEvent, SuspectId, Vec2 } from '../../mystery/types.ts';
 import { mapGeometry, type MapTarget, type PublicMapState } from '../../ui/mystery/map/mapData.ts';
 import { headingDeg, relBearingDeg } from '../../ui/mystery/map/mapRender.ts';
 import { announce } from '../announce.tsx';
@@ -26,7 +27,7 @@ import { getSettings, useSettings } from '../settings.ts';
 import { heardBearing } from './hud/compass.ts';
 import { HintLadder, HINT_SHOW_S, ladderPaused } from './hud/hintLadder.ts';
 import { buildNavFeed, mapFeedKey, type NavFeed } from './hud/navFeed.ts';
-import { OddsDeltaTracker } from './hud/oddsModel.ts';
+import { eggCells, OddsDeltaTracker } from './hud/oddsModel.ts';
 import { FinalHud, type FinalRunLike, type SceneDeathApi } from './hud/finalHud.ts';
 import { deltaText } from '../../ui/mystery/odds.ts';
 import {
@@ -42,7 +43,9 @@ import {
   type AbilityMeta, type ClueCardView, type ExamineToastView, type HudExtras, type MysteryHudModel, type StackView, type Toast,
 } from './hudModel.ts';
 import { IDLE_INPUT, MysteryInputController, type MysteryFrameInput } from './input.ts';
-import { integrationStatus, loadCaseSolution, loadCrackstoneFreeMap, loadRunCtor, loadSceneCtor, nightshadeDef, partnerDef } from './integration.ts';
+import {
+  integrationStatus, loadCaseSolution, loadCrackstoneFreeMap, loadLocalClueContents, loadRunCtor, loadSceneCtor, nightshadeDef, partnerDef,
+} from './integration.ts';
 import { LiveRunContext } from './liveContext.ts';
 import { ctrlCrouchEnabled } from './kiosk.ts';
 import { browserStorage, writeLive, type LivePhase } from './records.ts';
@@ -85,8 +88,13 @@ export type AutopilotProfile = 'stealthy' | 'careless';
 export interface MysteryLoopOptions {
   duo: Duo;
   seed: string;
-  /** The session's assigned case (public definition; the answer key is loaded only at the accusation). */
+  /** The session's assigned case (public definition, clues SEALED; the answer key is loaded only at the accusation). */
   caseDef: CaseDef;
+  /**
+   * LOCAL DEMO only: the session murderer (its clue texts are merged into the run's case as each clue is found). LIVE
+   * leaves it unset — the server releases each found clue's text with its append ack (liveRun) and keeps the murderer.
+   */
+  culprit?: SuspectId | null;
   /** LIVE station: never echo the seed into debug output. */
   hideSeed?: boolean;
   tutorial: boolean;
@@ -164,6 +172,8 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
   const opts = useRef(o);
   opts.current = o;
   const runRef = useRef<MysteryRunLike | null>(null);
+  /** LOCAL DEMO: the session murderer's clue texts (null on a LIVE station, where the server releases them). */
+  const localClues = useRef<Partial<Record<ClueId, ClueContent>> | null>(null);
   const inputRef = useRef<MysteryInputController | null>(null);
   const sceneRef = useRef<MysterySceneLike | null>(null);
   const analyticsRef = useRef<MysteryAnalytics | null>(null);
@@ -225,8 +235,12 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         // TEST FIXTURE only (local demo): `&crackstone=0` plays the case without its second enemy
         const noCrack = !opts.current.hideSeed && typeof location !== 'undefined' && new URLSearchParams(location.search).get('crackstone') === '0';
         const fixtureMap = noCrack ? await loadCrackstoneFreeMap(opts.current.caseDef.id) : null;
+        const culprit = opts.current.culprit;
+        localClues.current = culprit ? await loadLocalClueContents(opts.current.caseDef.id, culprit) : null;
         if (disposed) return;
-        const run = new Run({ duo: opts.current.duo, seed: opts.current.seed, caseDef: opts.current.caseDef, tutorial: opts.current.tutorial, ...(fixtureMap ? { map: fixtureMap } : {}) });
+        // The run owns a fresh copy of the (sealed) case: found clues are revealed into it, never into the shared data.
+        const caseDef = sessionCaseDef(opts.current.caseDef, opts.current.seed);
+        const run = new Run({ duo: opts.current.duo, seed: opts.current.seed, caseDef, tutorial: opts.current.tutorial, ...(fixtureMap ? { map: fixtureMap } : {}) });
         const s = getSettings();
         // The renderer gets the run's per-session map (run.map), never the shared case map.
         cleanup = start(run, new Scene(container, run.map, opts.current.duo, { reducedMotion: s.reducedMotion, lowGraphics: s.lowGraphics }));
@@ -320,6 +334,10 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       const shimmerSaid = new Set<string>();
       let shimmer = 0;
       let firstCarryTip = false;
+      // analytics v2 check-backs: each egg site's DISPLAYED estimate (Odds panel / map rounding) as of the last live tick,
+      // so a search is compared with what the visitor saw just before it (facts — Seen / Not here — are not predictions)
+      const eggShown = new Map<string, { pct: number; text: string }>();
+      let checkBackAt = -Infinity;
       // nav feed: one build per frame at most, and none while its content key is unchanged (canvases then skip too)
       let feedCache: { realT: number; simT: number; feed: NavFeed } | null = null;
       let seenArr: string[] = [];
@@ -396,6 +414,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       const sayLog = (id: string, text: string, auto = true) => say({ id, kind: 'log', head: "THING'S LOG", text, priority: 0, auto });
       const fromMsg = (m: LiveMessage, auto = true, priority = m.priority): Omit<StackItem, 't'> => ({
         id: m.id, kind: stackKindOf(m.kind), head: m.title, text: m.text, why: m.why ?? null, ...(m.basis ? { basis: m.basis } : {}), priority, auto, target: m.target ?? null,
+        ...(m.kind === 'advice' ? { whySource: sourceTag(m.source, m.sourceNote), alt: alternativesLine(m.alternatives) } : {}),
       });
       const threatNow = () => (emerged && (run.hyde.mode === 'INVESTIGATE_SOUND' || run.hyde.mode === 'SEARCH' || run.hyde.mode === 'CHASE')) || crackHunting();
       const towerTarget: MapTarget = { x: run.map.tower.x, z: run.map.tower.z, label: 'Iago Tower', kind: 'tower' };
@@ -408,7 +427,10 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       /** Legacy-advice adapter (analytics without live()): a prescriptive Advice as a THING'S ADVICE card. */
       const sayAdvice = (a: Advice, priority: number, auto: boolean) => {
         lastAdvice = a;
-        say({ id: `advice_${a.t}_${a.action}`, kind: 'advice', head: "THING'S ADVICE", text: a.text, why: a.reason, priority, auto, target: a.target ? { ...a.target, label: '' } : null });
+        say({
+          id: `advice_${a.t}_${a.action}`, kind: 'advice', head: "THING'S ADVICE", text: a.text, why: a.reason, priority, auto, target: a.target ? { ...a.target, label: '' } : null,
+          whySource: sourceTag(a.source, a.sourceNote), alt: alternativesLine(alternativesOf(a, a.alternatives ?? [])),
+        });
       };
 
       // ---------------------------------------------------------------------------------------- hint ladder (R7)
@@ -488,6 +510,9 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
             case 'clue_found': {
               audio.play('chime');
               audio.play('paper');
+              const local = localClues.current?.[e.clueId];
+              if (local) revealClues(run.caseDef, { [e.clueId]: local });
+              else liveRef.current?.flushNow('clue'); // LIVE: the text arrives with the ack of this event
               const c = clueCardContent(run.caseDef, e.clueId);
               clueCard = { v: { id: ++toastSeq, clueId: e.clueId, ...c }, shownAt: realT, until: realT + CLUE_CARD_S };
               announce(`Clue found: ${c.fullTitle}. ${c.short}${c.meaning ? ` Meaning: ${c.meaning}` : ''}`);
@@ -543,18 +568,27 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
               obsEpoch++;
               break;
             }
-            case 'site_checked':
+            case 'site_checked': {
               obsEpoch++;
               ladder.progress();
+              const shownEgg = e.site === 'egg' && e.seq !== 0 ? eggShown.get(e.siteId) : undefined;
+              if (shownEgg) {
+                const check = { t: e.t, site: 'egg' as const, siteId: e.siteId, pct: shownEgg.pct, text: shownEgg.text, found: e.found };
+                analytics.notePredictionCheck(check);
+                sayLog(`check_${e.seq}`, checkBackLine(check));
+                checkBackAt = realT;
+                eggShown.delete(e.siteId);
+              }
               if (!e.found && realT - lastEmptyToastAt >= EMPTY_TOAST_GAP_S && !(examine && realT < examine.until)) {
                 lastEmptyToastAt = realT;
                 examine = {
                   v: { id: ++toastSeq, kind: 'empty', head: null, text: e.site === 'clue' ? 'Nothing here.' : 'Not here.', odds: e.site === 'clue' ? 'Clue odds updated.' : 'Egg odds updated.' },
                   until: realT + EXAMINE_TOAST_S, trace: null,
                 };
-                if (e.site === 'egg') sayLog(`egg_empty_${e.siteId}`, 'Not here. Odds updated.');
+                if (e.site === 'egg' && !shownEgg) sayLog(`egg_empty_${e.siteId}`, 'Not here. Odds updated.');
               }
               break;
+            }
             case 'passage_opened': {
               const ps = world?.passage;
               examine = { v: { id: ++toastSeq, kind: 'passage', head: 'PASSAGE OPEN', text: ps?.text ?? 'A hidden passage opens.', odds: null }, until: realT + EXAMINE_TOAST_S, trace: null };
@@ -784,8 +818,19 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
           console.warn('[mystery] analytics.live failed', err);
           return;
         }
+        eggShown.clear();
+        const ef = liveA.forecasts;
+        if (ef.egg) {
+          const cells = eggCells(ef, inv);
+          ef.egg.sites.forEach((s, i) => {
+            const c = cells[i];
+            if (c && c.pct !== null && c.fact === null) eggShown.set(s.siteId, { pct: c.pct, text: c.text });
+          });
+        }
         for (const m of liveA.messages) {
           if (/WEEMS/i.test(m.title)) continue; // UX_FINAL §4: Weems' text never enters Thing's stack (her card shows it)
+          // a check-back line ("Predicted 40% here: empty ✓") already said this search's result
+          if (m.kind === 'log' && /site_empty/.test(m.id) && realT - checkBackAt < 3) continue;
           const cm = crackMessage(m);
           if (cm === 'drop') continue;
           if (/crackstone_area/.test(m.id) && crackAnnouncedAt === null) crackAnnouncedAt = run.t; // label promoted 30 s
@@ -891,6 +936,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       const stackBlocked = () => run.status !== 'playing' || (!!clueCard && realT - clueCard.shownAt < CLUE_CARD_BLOCK_S) || (!!toast && toast.t.tone === 'danger');
       const stackView = (sh: { item: StackItem } | null): StackView | null => sh && {
         id: sh.item.id, kind: sh.item.kind, head: sh.item.head, text: sh.item.text, why: sh.item.why ?? null, basis: sh.item.basis ?? null, priority: sh.item.priority,
+        ...(sh.item.kind === 'advice' ? { whySource: sh.item.whySource ?? null, alt: sh.item.alt ?? null } : {}),
       };
       const hudSnapshot = (): MysteryHudModel => {
         const shown = stack.update(realT, stackBlocked());
@@ -911,6 +957,14 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         if (card?.kind === 'advice' && card.target) adviceTarget = { ...card.target, kind: 'advice', until: Math.max(adviceTarget?.until ?? 0, realT + ADVICE_TARGET_S) };
         if (toast && realT > toast.until) toast = null;
         if (clueCard && realT > clueCard.until) clueCard = null;
+        // LIVE: a card opened while its clue was still sealed refreshes (and restarts) once the server's text arrives.
+        if (clueCard && clueCard.v.short === CLUE_SEALED_TEXT) {
+          const fresh = clueCardContent(run.caseDef, clueCard.v.clueId);
+          if (fresh.short !== CLUE_SEALED_TEXT) {
+            clueCard = { v: { ...clueCard.v, ...fresh }, shownAt: realT, until: realT + CLUE_CARD_S };
+            announce(`Clue read: ${fresh.fullTitle}. ${fresh.short}${fresh.meaning ? ` Meaning: ${fresh.meaning}` : ''}`);
+          }
+        }
         if (examine && realT > examine.until) examine = null;
         // ---- Crackstone: plaque (0.5 s hold; CHASE / ATTACK bypass), edge candidates (R4-gated), banner, CURSED row
         let crackView: MysteryHudModel['crack'] = null;
@@ -1075,7 +1129,8 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
         const reached = ladder.tick(dt, paused);
         if (reached) showHint(reached, false);
         if (draw) scene.render(run, events, dt);
-        if (run.status === 'playing' && (emerged || (crack && crack.active()))) {
+        const nearestM = nearestMonsterM(run);
+        if (run.status === 'playing' && (emerged || (crack && crack.active()) || nearestM !== null)) {
           // ONE drone + heartbeat: threat = max of both; level = max; the enemy with the higher level drives the timbre
           const h = run.hyde;
           const hT = emerged ? h.suspicion : 0;
@@ -1088,7 +1143,7 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
             cL = m === 'CHASE' || m === 'ATTACK' ? 2 : m === 'INVESTIGATE' || m === 'SEARCH' || tele.banner?.kind === 'scan' && tele.banner.exposure === 'exposed' ? 1 : 0;
           }
           const source: ThreatSource = cL > hL || (cL === hL && cT > hT) ? 'crackstone' : 'hyde';
-          audio.setThreat(Math.max(hT, cT), Math.max(hL, cL) as 0 | 1 | 2, source);
+          audio.setThreat(Math.max(hT, cT), Math.max(hL, cL) as 0 | 1 | 2, source, nearestM);
         } else audio.calm();
         if (ending && !reported && realT - ending.at >= END_DELAY_S[ending.outcome]) {
           reported = true;
@@ -1323,7 +1378,8 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
       if (!run || run.status !== 'accusing' || accusingRef.current) return false;
       // One shot: a second click while the answer key loads does nothing.
       accusingRef.current = true;
-      const solution = await loadCaseSolution(run.caseDef.id);
+      // Local demo knows its murderer; LIVE judges from the clues it holds (the server's verdict replaces it).
+      const solution = await loadCaseSolution(run.caseDef.id, opts.current.culprit ?? provisionalCulprit(run.caseDef, run.cluesFound, accusation.suspectId));
       if (runRef.current !== run || run.status !== 'accusing') return false;
       const events = run.accuse(accusation, solution);
       const out = analyticsRef.current?.frame(run as unknown as MysteryRun, events);
@@ -1380,3 +1436,21 @@ export function useMysteryLoop(container: HTMLElement | null, o: MysteryLoopOpti
   };
 }
 
+
+/** Straight-line distance to the nearest ACTIVE monster (Hyde / Crackstone / Slurp), or null when none is out. */
+export function nearestMonsterM(run: object): number | null {
+  const r = run as {
+    player: { x: number; z: number };
+    enemyStatus?: () => Record<string, { active: boolean }>;
+    hyde?: { x: number; z: number } | null; crackstone?: { x: number; z: number } | null; slurp?: { x: number; z: number } | null;
+  };
+  const status = r.enemyStatus?.();
+  if (!status) return null;
+  let best: number | null = null;
+  for (const [id, pos] of [['hyde', r.hyde], ['crackstone', r.crackstone], ['slurp', r.slurp]] as const) {
+    if (!pos || !status[id]?.active) continue;
+    const d = Math.hypot(pos.x - r.player.x, pos.z - r.player.z);
+    if (best === null || d < best) best = d;
+  }
+  return best;
+}

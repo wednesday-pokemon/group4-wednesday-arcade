@@ -1,12 +1,12 @@
 // Mystery visitor flow (rules mystery-v3.1), a pure reducer:
-//   home → nickname → cards → case (the assigned case file is revealed) → prologue (Thing's case story) → tutorial → play ⇄ (board overlay | pause overlay) → accusing → results → reset (home).
+//   home → nickname → cards → case (the assigned case file is revealed) → murder (3D "how it happened", hooded killer) → prologue (Thing's case story) → tutorial → play ⇄ (board overlay | pause overlay) → accusing → results → reset (home).
 // No separate character / Pokémon menus: the visitor picks one of the three offered duo cards. Side effects
 // (persisting the session, starting runs) live in MysteryApp; this file only decides what screen comes next.
 import type { ResultsAnalytics } from '../../mystery/analytics/index.ts';
 import type { Duo, RunResult } from '../../mystery/types.ts';
 import { offeredCard, withClosed, withNickname, withSelected, type MysterySession } from './session.ts';
 
-export type MysteryScreen = 'home' | 'nickname' | 'cards' | 'case' | 'prologue' | 'tutorial' | 'play' | 'accusing' | 'results';
+export type MysteryScreen = 'home' | 'nickname' | 'cards' | 'case' | 'murder' | 'prologue' | 'tutorial' | 'play' | 'accusing' | 'results';
 export type MysteryOverlay = 'none' | 'board' | 'pause';
 
 export interface MysteryFlowState {
@@ -30,6 +30,7 @@ export type MysteryAction =
   | { type: 'nickname'; nickname: string }
   | { type: 'select'; duo: Duo }
   | { type: 'caseRevealed' }
+  | { type: 'murderDone' }
   | { type: 'prologueDone' }
   | { type: 'tutorialDone' }
   | { type: 'toggleBoard' }
@@ -82,7 +83,9 @@ export function mysteryReducer(state: MysteryFlowState, action: MysteryAction): 
       };
     }
     case 'caseRevealed':
-      return state.screen === 'case' ? { ...state, screen: 'prologue' } : state;
+      return state.screen === 'case' ? { ...state, screen: 'murder' } : state;
+    case 'murderDone':
+      return state.screen === 'murder' ? { ...state, screen: 'prologue' } : state;
     case 'prologueDone':
       return state.screen === 'prologue' ? { ...state, screen: afterPrologue(state), overlay: 'none' } : state;
     case 'tutorialDone':

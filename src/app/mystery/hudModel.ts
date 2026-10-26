@@ -235,7 +235,13 @@ export interface ClueCardView {
 /** Replaces the E prompt in place for 3 s: examine result, empty site, passage / switch. Second line = cyan odds change. */
 export interface ExamineToastView { id: number; kind: 'examine' | 'empty' | 'passage' | 'switch'; head: string | null; text: string; odds: string | null }
 
-export interface StackView { id: string; kind: StackKind; head: string; text: string; why: string | null; basis: 'rule' | 'pattern' | null; priority: number }
+export interface StackView {
+  id: string; kind: StackKind; head: string; text: string; why: string | null; basis: 'rule' | 'pattern' | null; priority: number;
+  /** Analytics v2 (advice): the layer the Why came from — "Predictive" / "Diagnostic: saw you hide"; null = not shown. */
+  whySource?: string | null;
+  /** Analytics v2 (advice): "Also considered: Hide 82 · Crouch 72"; null = none. */
+  alt?: string | null;
+}
 
 export type HydeLevel = 0 | 1 | 2;
 

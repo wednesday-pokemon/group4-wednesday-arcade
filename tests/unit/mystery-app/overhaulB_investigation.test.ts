@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { LiveForecasts } from '../../../src/mystery/analytics/types.ts';
 import { CASES, ROOM_LABELS } from '../../../src/mystery/data/cases.ts';
-import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
+import { FIXED_SOLUTIONS as CASE_SOLUTIONS } from '../mystery/fixedSolutions.ts';
 import type { CaseDef, CaseWorldDef, ClueId, InvestigationState } from '../../../src/mystery/types.ts';
 import { EvidenceBoard } from '../../../src/ui/mystery/EvidenceBoard.tsx';
 import { hitTest, highlightId } from '../../../src/ui/mystery/InvestigationMap.tsx';

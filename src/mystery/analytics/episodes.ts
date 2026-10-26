@@ -6,7 +6,7 @@
 // asserts the logs are identical. In addition it records each snapshot's perceivable LiveContext, the walked distance
 // and lets a hook observe the live run (read-only) at every sample, e.g. to ask the PrescriptiveService for advice.
 import { Bot, type BotOptions } from '../bot.ts';
-import { CASE_SOLUTIONS } from '../data/solutions.ts';
+import { episodeCase } from '../episode.ts';
 import { MysteryRun, type MysteryRunOptions } from '../run.ts';
 import type { Duo, RunResult } from '../types.ts';
 import { duoFactorsFromRun, liveContext, type LiveContextOptions } from './state.ts';
@@ -34,7 +34,8 @@ export interface SimEpisode {
 export function simulateEpisode(
   duo: Duo, seed: string, options: BotOptions, hooks: EpisodeHooks = {}, runOptions: Partial<MysteryRunOptions> = {},
 ): SimEpisode {
-  const run = new MysteryRun({ ...runOptions, duo, seed, tutorial: false });
+  const kase = episodeCase(seed, runOptions.caseDef);
+  const run = new MysteryRun({ ...runOptions, caseDef: kase.caseDef, duo, seed, tutorial: false });
   const bot = new Bot(run, options, seed);
   const collector = new TelemetryCollector({
     sessionId: seed, stationId: null, caseId: run.caseDef.id, caseVersion: run.caseDef.version, duo: { ...duo }, factors: duoFactorsFromRun(run),
@@ -65,7 +66,7 @@ export function simulateEpisode(
     run.setInput(input);
     step++;
   }
-  if (run.status === 'accusing') run.accuse(bot.accusation(), CASE_SOLUTIONS[run.caseDef.id]);
+  if (run.status === 'accusing') run.accuse(bot.accusation(), kase.solution);
   collector.syncFromLog(run.log);
   const result = run.result();
   collector.setResult(result);

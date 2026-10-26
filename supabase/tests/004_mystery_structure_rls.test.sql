@@ -100,7 +100,8 @@ select is(
       'public.mystery_select_duo(uuid,text,text,text,jsonb)',
       'public.mystery_append_events(uuid,text,integer,jsonb,jsonb,jsonb,jsonb)',
       'public.mystery_finalize_session(uuid,text,integer,jsonb,jsonb)',
-      'public.mystery_abandon_station(text,text,jsonb)']) f,
+      'public.mystery_abandon_station(text,text,jsonb)',
+      'public.mystery_assign_culprit(uuid,text)']) f, -- randomized murderer (20261026000100)
      unnest(array['anon', 'authenticated', 'public']) r
    where case when r = 'public'
               then exists (select 1 from pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
@@ -110,7 +111,7 @@ select is(
 select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname like 'mystery\_%' and p.prosecdef and p.proconfig @> array['search_path=""']
      and has_function_privilege('service_role', p.oid, 'EXECUTE')),
-  5, 'all five mystery RPCs are SECURITY DEFINER, empty search_path, executable by service_role');
+  6, 'all six mystery RPCs are SECURITY DEFINER, empty search_path, executable by service_role');
 select ok(exists (select 1 from pg_constraint where conname = 'mystery_events_session_seq_key'), 'unique (session_id, seq) on mystery_events');
 select ok(exists (select 1 from pg_constraint where conname = 'mystery_offered_duos_pair_key'), 'unique (session, character, pokemon) on mystery_offered_duos');
 select ok(exists (select 1 from pg_constraint where conname = 'mystery_offered_duos_pkey'), 'unique (session, slot) on mystery_offered_duos');

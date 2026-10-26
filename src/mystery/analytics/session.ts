@@ -28,9 +28,10 @@ import { spawnProbabilities, zoneIndexAt } from './hydeZones.ts';
 import { scoreV4 } from '../scoring.ts';
 import { ENEMY_IDS } from '../types.ts';
 import { weemsHint } from './weems.ts';
+import { pointsLostItems, type PointsLostItem } from './insights.ts';
 import type {
   Advice, AdviceRecord, DiagnosticItem, DiagnosticReport, ForecastRecord, ForecastTarget, LiveAnalytics, LiveMessage, LiveStats, ProbabilityEstimate,
-  RiskBand, RiskEstimate, SessionRecord, SessionReport, SupabaseBatch, TelemetrySample, WeemsHint,
+  PredictionCheck, RiskBand, RiskEstimate, SessionRecord, SessionReport, SupabaseBatch, TelemetrySample, WeemsHint,
 } from './types.ts';
 
 export interface MysteryAnalyticsOptions {
@@ -63,7 +64,11 @@ export interface RiskPoint { t: number; p: number; band: RiskBand; detectedNow: 
 export interface ResultsAnalytics {
   descriptive: SessionReport;
   /** `reasons` = why this run fell short: incorrect deduction / missed clues of the case + top stealth mistakes. */
-  diagnostic: DiagnosticReport & { top: DiagnosticItem[]; topPattern: DiagnosticItem | null; reasons: DiagnosticItem[] };
+  diagnostic: DiagnosticReport & {
+    top: DiagnosticItem[]; topPattern: DiagnosticItem | null; reasons: DiagnosticItem[];
+    /** Analytics v2 "Why you lost points" (≤ 5, finished runs with a v4 breakdown; absent on old reports). */
+    pointsLost?: PointsLostItem[];
+  };
   predictive: {
     /** Exact panel line: "ML estimate · trained on simulated episodes · held-out Brier X (baseline Y)" or the rule-based line. */
     label: string;
@@ -71,6 +76,8 @@ export interface ResultsAnalytics {
     series: RiskPoint[];
     detections: number[]; // times of detection events (claw ticks)
     card: ModelCard;
+    /** Analytics v2: searched sites whose displayed probability was checked by the result (absent on old reports). */
+    checks?: PredictionCheck[];
   };
   prescriptive: {
     engine: typeof ENGINE_LABEL;
@@ -114,6 +121,8 @@ export class MysteryAnalytics {
   /** Weems hints issued this run (Tab → "Weems' hints"), and those not yet returned by live(). */
   private readonly weemsLog: WeemsHint[] = [];
   private weemsQueue: WeemsHint[] = [];
+  /** Analytics v2 prediction check-backs, reported by the HUD (it owns the DISPLAYED value of each site). */
+  private readonly checks: PredictionCheck[] = [];
 
   constructor(run: MysteryRun, o: MysteryAnalyticsOptions = {}) {
     this.run = run;
@@ -413,6 +422,19 @@ export class MysteryAnalytics {
     }
   }
 
+  /**
+   * Analytics v2: the HUD searched a site whose probability it displayed just before (public forecast, display rounding)
+   * and the result is known. One entry per site check; the results screen counts them ("N of M right").
+   */
+  notePredictionCheck(c: PredictionCheck): void {
+    if (!Number.isFinite(c.pct) || this.checks.some((x) => x.siteId === c.siteId && x.site === c.site && x.t === c.t)) return;
+    this.checks.push({ ...c });
+  }
+
+  get predictionChecks(): readonly PredictionCheck[] {
+    return this.checks;
+  }
+
   get adviceRecords(): readonly AdviceRecord[] {
     return this.advice;
   }
@@ -439,8 +461,11 @@ export class MysteryAnalytics {
     }));
     return {
       descriptive,
-      diagnostic: { ...diag, top: topCauses(diag.causes, 3), topPattern: diag.patterns[0] ?? null, reasons: failureReasons(diag) },
-      predictive: { label: card.resultsLabel, source: card.source, series: [...this.series], detections: detectionTimes(events), card },
+      diagnostic: {
+        ...diag, top: topCauses(diag.causes, 3), topPattern: diag.patterns[0] ?? null, reasons: failureReasons(diag),
+        pointsLost: result?.outcome === 'finished' ? pointsLostItems(events, result.scoreBreakdown ?? null, { initialStance: first?.stance }) : [],
+      },
+      predictive: { label: card.resultsLabel, source: card.source, series: [...this.series], detections: detectionTimes(events), card, checks: this.checks.map((c) => ({ ...c })) },
       prescriptive: { engine: ENGINE_LABEL, rows, summary: summariseAdvice(this.advice) },
     };
   }

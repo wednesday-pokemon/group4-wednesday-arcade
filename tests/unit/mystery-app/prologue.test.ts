@@ -7,7 +7,7 @@ import {
   type PrologueAction, type PrologueState,
 } from '../../../src/app/mystery/prologue.ts';
 import { CASES, POISONED_ARCHIVE } from '../../../src/mystery/data/cases.ts';
-import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
+import { FIXED_SOLUTIONS as CASE_SOLUTIONS } from '../mystery/fixedSolutions.ts';
 
 const SILENT_EVIDENCE = POISONED_ARCHIVE;
 import { draftOffer } from '../../../src/mystery/draft.ts';

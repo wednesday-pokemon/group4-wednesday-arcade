@@ -4,8 +4,10 @@
 //     → test autopilot (stealthy) with advanceTime until the accusation → evidence board (case title, statements,
 //     notes, no "points to / explains", focus trap, Esc inert) → suspect → cite evidence (≥ 1 required) → confirm →
 //     results (verdict copy, cited evidence in the result, "What really happened" once the answer key loads).
-//     Case 01 accuses the culprit with exactly the three clues (case_solved), case 02 the culprit with weak evidence
-//     (honest "Right suspect" copy), case 03 an innocent (wrong suspect). A run the bot loses (DNF) is retried.
+//     The murderer is random per session; the local-demo fixture `&culprit=` forces it. Default: archive / barry accuses
+//     the culprit with exactly the three clues (case_solved), crypt / thornhill the culprit with weak evidence (honest
+//     "Right suspect" copy), signal / galpin an innocent (wrong suspect). MURDERERS=all plays all 9 case × murderer
+//     scenarios (plans rotate). A run the bot loses (DNF) is retried.
 //  R. reveal controls: Esc skips to the final state, a second Esc continues; reduced motion shows the final state at
 //     once; layout at 1366×768, 1920×1080 and 360×740 (nothing off-screen horizontally, Begin reachable).
 // Usage: E2E_URL=http://localhost:5231 node tests/e2e/mystery-cases.mjs   (PARTS=CR default; CASES=poisoned_archive,…)
@@ -21,26 +23,41 @@ const AUTOPILOT_OBJECT = process.env.AUTOPILOT_ARG === 'object';
 const MAX_ATTEMPTS = Number(process.env.ATTEMPTS ?? 3);
 mkdirSync(OUT, { recursive: true });
 
-// Test-side knowledge only (the answer keys of docs/MYSTERY_CASES.md); the app never ships these before the accusation.
-const CASES = [
+// Test-side knowledge only: the case files and the murderer this test FORCES (local demo `&culprit=` fixture).
+const CASE_FILES = [
   {
-    id: 'poisoned_archive', number: '01', title: 'The Poisoned Archive', culprit: 'thornhill',
+    id: 'poisoned_archive', number: '01', title: 'The Poisoned Archive',
     clues: ['falsified_transfer', 'botanical_residue', 'access_ledger'], notes: ['note_drain_mud', 'note_keys_jangling'],
-    plan: 'solve',
   },
   {
-    id: 'crypt_last_witness', number: '02', title: 'The Crypt’s Last Witness', culprit: 'isaac',
+    id: 'crypt_last_witness', number: '02', title: 'The Crypt’s Last Witness',
     clues: ['sabotaged_gate', 'tunnel_access_record', 'equipment_match'], notes: ['note_archive_boxes', 'note_bell_rope'],
-    plan: 'weak_evidence',
   },
   {
-    id: 'midnight_signal', number: '03', title: 'The Midnight Signal', culprit: 'barry',
+    id: 'midnight_signal', number: '03', title: 'The Midnight Signal',
     clues: ['falsified_patrol_log', 'alarm_override', 'watchtower_signal'], notes: ['note_greenhouse_light', 'note_archive_door'],
-    plan: 'wrong_suspect',
   },
 ];
-const NAMES = { thornhill: 'Marilyn Thornhill', isaac: 'Isaac Night', barry: 'Barry Dort' };
-const SUSPECT_WORDS = ['Marilyn', 'Thornhill', 'Isaac', 'Night', 'Barry', 'Dort'];
+const SUSPECTS = ['thornhill', 'galpin', 'barry'];
+const PLANS = ['solve', 'weak_evidence', 'wrong_suspect'];
+const CASES = process.env.MURDERERS === 'all'
+  ? CASE_FILES.flatMap((f, i) => SUSPECTS.map((culprit, j) => ({ ...f, culprit, plan: PLANS[(i + j) % 3] })))
+  : [
+    { ...CASE_FILES[0], culprit: 'barry', plan: 'solve' },
+    { ...CASE_FILES[1], culprit: 'thornhill', plan: 'weak_evidence' },
+    { ...CASE_FILES[2], culprit: 'galpin', plan: 'wrong_suspect' },
+  ];
+const NAMES = { thornhill: 'Marilyn Thornhill', galpin: 'Françoise Galpin', barry: 'Barry Dort' };
+const SUSPECT_WORDS = ['Marilyn', 'Thornhill', 'Françoise', 'Galpin', 'Barry', 'Dort'];
+
+/** The 3D "how it happened" cutscene between the case reveal and the prologue: hooded killer, no suspect named. */
+async function skipMurder(page, caseId = null) {
+  await page.waitForSelector('[data-testid="screen-murder"]', { timeout: 30000 });
+  if (caseId) assert((await page.getAttribute('[data-testid="screen-murder"]', 'data-case')) === caseId, `murder cutscene shows case ${caseId}`);
+  const text = await page.textContent('[data-testid="screen-murder"]');
+  for (const w of ['Thornhill', 'Marilyn', 'Galpin', 'Françoise', 'Barry', 'Dort']) assert(!text.includes(w), `cutscene names no suspect (${w})`);
+  await page.click('[data-testid="btn-murder-skip"]');
+}
 
 const errors = [];
 const assert = (c, m) => {
@@ -146,8 +163,8 @@ async function autopilotToAccusation(page, label) {
 
 async function caseFlow(c) {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const label = `${c.number}${attempt > 1 ? `#${attempt}` : ''}`;
-    const page = await freshPage(undefined, `?mode=mystery&case=${c.id}`);
+    const label = `${c.number}-${c.culprit}${attempt > 1 ? `#${attempt}` : ''}`;
+    const page = await freshPage(undefined, `?mode=mystery&case=${c.id}&culprit=${c.culprit}`);
     try {
       const done = await caseAttempt(page, c, label);
       if (done) return;
@@ -175,7 +192,8 @@ async function caseAttempt(page, c, label) {
   assert((await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))) === 'btn-case-begin', `${label}: Begin focused on ready`);
   await page.click(tid('btn-case-begin'));
 
-  // ---- prologue → tutorial → playing
+  // ---- murder cutscene → prologue → tutorial → playing
+  await skipMurder(page, c.id);
   await page.waitForSelector(tid('screen-prologue'), { timeout: 30000 });
   await page.click(tid('btn-prologue-skip'));
   await expectTutorial(page, label);
@@ -322,6 +340,7 @@ async function partR() {
   assert(!(await page.$(tid('btn-case-skip'))), 'R: Skip button gone on the final state');
   assert(await page.isVisible(tid('btn-case-begin')), 'R: Begin shown after skip');
   await page.keyboard.press('Escape');
+  await skipMurder(page);
   await page.waitForSelector(tid('screen-prologue'), { timeout: 15000 });
   await page.context().close();
 
@@ -332,6 +351,7 @@ async function partR() {
   assert((await phaseOf(page)) === 'ready', 'R: Skip button jumps to the final state');
   await page.waitForTimeout(650);
   await page.keyboard.press('Enter');
+  await skipMurder(page);
   await page.waitForSelector(tid('screen-prologue'), { timeout: 15000 });
   await page.context().close();
 

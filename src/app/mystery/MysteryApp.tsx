@@ -28,6 +28,8 @@ import { ThingNarrator } from '../../ui/mystery/ThingNarrator.tsx';
 import { ThingPrologue } from '../../ui/mystery/ThingPrologue.tsx';
 import { Nickname } from '../../ui/screens/Nickname.tsx';
 import { Splash } from '../../ui/screens/Splash.tsx';
+import { HowToPlay } from '../../ui/mystery/HowToPlay.tsx';
+import { MurderCutscene } from '../../ui/mystery/MurderCutscene.tsx';
 import { serverRunResult } from '../../lib/supabase/mysteryWire.ts';
 import { resetVisitorSettings } from '../settings.ts';
 import { useTestHooks } from '../testHooks.ts';
@@ -51,7 +53,8 @@ import { HomeBoard } from '../../ui/mystery/leaderboard/HomeLeaderboard.tsx';
 import { createLocalBoardFeed, UNAVAILABLE_LIVE_FEED } from '../../ui/mystery/leaderboard/localFeed.ts';
 import { liveBoardFeed, localEntries, rankOf } from '../../ui/mystery/leaderboard/model.ts';
 import { breakdownOf, rankChipView, type RankChipView } from '../../ui/mystery/leaderboard/scoreView.ts';
-import { CASE_IDS, MYSTERY_RULES_VERSION, type CaseId, type CaseSolution } from '../../mystery/types.ts';
+import { sessionCaseDef } from '../../mystery/caseVariant.ts';
+import { CASE_IDS, MYSTERY_RULES_VERSION, type CaseId, type CaseSolution, type SuspectId } from '../../mystery/types.ts';
 import '../../ui/styles/mystery.css';
 
 const loadPlayView = () => import('./PlayView.tsx');
@@ -77,6 +80,8 @@ export interface MysteryRouteProps {
   skipPrologue?: boolean;
   /** Dev/operator `case=<id>`: force the case of this ephemeral (never persisted) session. */
   caseId?: CaseId | null;
+  /** Local demo TEST FIXTURE `culprit=<id>`: force the murderer of this ephemeral session (never on a LIVE station). */
+  culprit?: SuspectId | null;
 }
 
 export interface MysteryAppProps extends MysteryRouteProps {
@@ -130,7 +135,10 @@ function init(route: MysteryRouteProps, deps: SessionDeps): { state: MysteryFlow
   // Operator reproduction: `?mode=mystery&seed=..` opens that seed's three cards directly (never persisted).
   const skipPrologue = route.skipTutorial || !!route.skipPrologue;
   if (route.seed || route.caseId) {
-    const s = createSession(deps, { ...(route.seed ? { seed: route.seed } : {}), nickname: route.seed ? 'Guest' : '', caseId: route.caseId ?? randomCase() });
+    const s = createSession(deps, {
+      ...(route.seed ? { seed: route.seed } : {}), nickname: route.seed ? 'Guest' : '', caseId: route.caseId ?? randomCase(),
+      ...(route.culprit ? { culprit: route.culprit } : {}),
+    });
     return { state: initialFlow(s, route.skipTutorial, skipPrologue), persist: false, restored: false };
   }
   const { session, restored } = openSession(deps);
@@ -209,20 +217,24 @@ export function MysteryApp({ live = null, ...route }: MysteryAppProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [step, setStep] = useState<{ busy: string | null; error: string | null }>({ busy: null, error: null });
   const [cardsKey, setCardsKey] = useState(0);
+  const [showHowToPlay, setShowHowToPlay] = useState(false);
   const stationId = live ? live.stationId : LOCAL_STATION_ID;
   const tools = live ? <HeaderTools mode="live" connection={liveUi.connection} /> : <HeaderTools mode="local_demo" />;
   const { session } = state;
-  const activeCase = useMemo(() => caseDef(session.caseId), [session.caseId]);
+  // The session's case: every clue sealed, suspects in the session's (seeded) order.
+  const activeCase = useMemo(() => sessionCaseDef(caseDef(session.caseId), session.seed), [session.caseId, session.seed]);
   // The answer key is fetched only once the run has ended (results); never before the accusation.
   const [solution, setSolution] = useState<CaseSolution | null>(null);
   useEffect(() => {
-    if (state.screen !== 'results') return;
+    // LIVE: the murderer is known only from the server's verified reveal; local demo: the session's own draw.
+    const culprit = live ? (liveUi.final.kind === 'verified' ? liveUi.final.reveal?.culprit ?? null : null) : session.culprit ?? null;
+    if (state.screen !== 'results' || !culprit) return;
     let alive = true;
-    void loadCaseSolution(session.caseId).then((s) => alive && setSolution(s), () => alive && setSolution(null));
+    void loadCaseSolution(session.caseId, culprit).then((s) => alive && setSolution(s), () => alive && setSolution(null));
     return () => {
       alive = false;
     };
-  }, [state.screen, session.caseId]);
+  }, [state.screen, session.caseId, session.culprit, live, liveUi.final]);
 
   useEffect(() => {
     if (persist.current) writeSession(deps.storage, session);
@@ -349,7 +361,7 @@ export function MysteryApp({ live = null, ...route }: MysteryAppProps) {
 
   // Fetch the island chunk (three.js + sim) while Thing tells the story, so the tutorial opens without a wait.
   useEffect(() => {
-    if (state.screen === 'case' || state.screen === 'prologue') void loadPlayView();
+    if (state.screen === 'case' || state.screen === 'murder' || state.screen === 'prologue') void loadPlayView();
   }, [state.screen]);
   const shownResult = state.result && live && liveUi.final.kind === 'verified' ? serverRunResult(liveUi.final.result, state.result) : state.result;
 
@@ -417,7 +429,7 @@ export function MysteryApp({ live = null, ...route }: MysteryAppProps) {
   const island = isOnIsland(state.screen);
   return (
     <>
-      {!island && state.screen !== 'results' && state.screen !== 'prologue' && state.screen !== 'case' && (
+      {!island && state.screen !== 'results' && state.screen !== 'prologue' && state.screen !== 'case' && state.screen !== 'murder' && (
         <>
           <div className="scene-backdrop mys-backdrop" aria-hidden="true" />
           <Suspense fallback={null}>
@@ -431,6 +443,7 @@ export function MysteryApp({ live = null, ...route }: MysteryAppProps) {
       {live && island && <LiveSyncChip ui={liveUi} />}
       {live && state.screen === 'results' && <LiveResultBanner final={liveUi.final} />}
       {live && state.screen === 'cards' && <LiveStepNotice busy={step.busy} error={step.error} floating />}
+      {showHowToPlay && state.screen === 'home' && <HowToPlay onClose={() => setShowHowToPlay(false)} />}
     </>
   );
 
@@ -457,6 +470,9 @@ export function MysteryApp({ live = null, ...route }: MysteryAppProps) {
                 footnote="Deliver the egg, name the culprit, stay unseen. ~6 min"
                 startLabel="Open the case"
                 fullscreenHint={false}
+                howToPlay={
+                  <Button variant="secondary" size="lg" onClick={() => setShowHowToPlay(true)} data-testid="btn-how-to-play">How to Play</Button>
+                }
                 onStart={() => {
                   // Kiosk: element fullscreen + keyboard lock from this click (Ctrl may then crouch). Never blocks the flow.
                   void openCaseFullscreen();
@@ -502,6 +518,8 @@ export function MysteryApp({ live = null, ...route }: MysteryAppProps) {
         );
       case 'case':
         return <CaseReveal caseDef={activeCase} tools={tools} onDone={() => dispatch({ type: 'caseRevealed' })} />;
+      case 'murder':
+        return <MurderCutscene caseDef={activeCase} tools={tools} onDone={() => dispatch({ type: 'murderDone' })} />;
       case 'prologue':
         if (!selectedView) return null;
         return (
@@ -524,6 +542,7 @@ export function MysteryApp({ live = null, ...route }: MysteryAppProps) {
                 duo={session.selected}
                 seed={session.seed}
                 caseDef={activeCase}
+                culprit={live ? null : session.culprit ?? null}
                 hideSeed={live !== null}
                 card={selectedView}
                 screen={state.screen}

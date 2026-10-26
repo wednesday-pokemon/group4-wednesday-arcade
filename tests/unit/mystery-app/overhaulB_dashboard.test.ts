@@ -8,7 +8,7 @@ import type { LiveStatus } from '../../../src/app/mystery/records.ts';
 import { createMysteryAnalytics, dashboard } from '../../../src/mystery/analytics/index.ts';
 import { caseWorld } from '../../../src/mystery/data/caseWorlds.ts';
 import { CASES } from '../../../src/mystery/data/cases.ts';
-import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
+import { FIXED_SOLUTIONS as CASE_SOLUTIONS } from '../mystery/fixedSolutions.ts';
 import { playEpisode } from '../../../src/mystery/episode.ts';
 import type { BoardStation } from '../../../src/lib/supabase/mysteryDashboardFeed.ts';
 import { KpiRibbon, StationLiveCard } from '../../../src/ui/mystery/MysteryDashboard.tsx';

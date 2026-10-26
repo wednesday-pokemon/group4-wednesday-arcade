@@ -8,7 +8,7 @@ import { playEpisode } from '../../../src/mystery/episode.ts';
 import { drawLayout } from '../../../src/mystery/layout.ts';
 import { round1, scoreFor } from '../../../src/mystery/scoring.ts';
 import type { BotOptions } from '../../../src/mystery/bot.ts';
-import { CASE_IDS, type CaseId, type Duo, type MapDef, type StampedEvent } from '../../../src/mystery/types.ts';
+import { CASE_IDS, type CaseId, type Duo, type MapDef, type StampedEvent, type SuspectId } from '../../../src/mystery/types.ts';
 import { CASE, fixtureMap, neutralRegistries } from './helpers.ts';
 import { fixtureWorldMap, WORLD_TUNING } from './worldFixture.ts';
 
@@ -28,6 +28,9 @@ const PROFILES: BotOptions[] = [
   { profile: 'stealthy', useAbilities: true, startDelayMaxS: 0 },
   { profile: 'careless', useAbilities: true },
 ];
+
+/** The murderers the pins were captured with (before the murderer was randomized per session). */
+const PINNED: Record<CaseId, SuspectId> = { poisoned_archive: 'thornhill', crypt_last_witness: 'galpin', midnight_signal: 'barry' };
 
 export function hashEvents(events: unknown): string {
   return createHash('sha256').update(JSON.stringify(events)).digest('hex').slice(0, 16);
@@ -63,10 +66,10 @@ export function regressionHashes(view: (ev: StampedEvent[]) => unknown = (ev) =>
   DUOS.forEach((duo, i) => {
     PROFILES.forEach((o, j) => {
       const seed = `reg-${i}-${j}`;
-      const fx = playEpisode(duo, seed, o, { map: fixtureMap(), caseDef: CASE, registries: neutralRegistries() });
+      const fx = playEpisode(duo, seed, o, { map: fixtureMap(), caseDef: CASE, registries: neutralRegistries() }, PINNED[CASE.id]);
       out[`fixture:${duo.characterId}+${duo.pokemonId}:${o.profile}`] = hashEvents(view(fx.events));
       const wm = fixtureWorldMap();
-      const wf = playEpisode(duo, seed, o, { map: wm, layout: drawLayout(wm.world!, seed), caseDef: CASE, tuning: WORLD_TUNING });
+      const wf = playEpisode(duo, seed, o, { map: wm, layout: drawLayout(wm.world!, seed), caseDef: CASE, tuning: WORLD_TUNING }, PINNED[CASE.id]);
       out[`world:${duo.characterId}+${duo.pokemonId}:${o.profile}`] = hashEvents(view(wf.events));
     });
   });
@@ -75,7 +78,7 @@ export function regressionHashes(view: (ev: StampedEvent[]) => unknown = (ev) =>
     DUOS.slice(0, 2).forEach((duo, i) => {
       const seed = `reg-${caseId}-${i}`;
       const map = withoutCrackstone(caseId);
-      const ep = playEpisode(duo, seed, PROFILES[i % 2], { map, layout: drawLayout(map.world!, seed), caseDef: CASES[caseId] });
+      const ep = playEpisode(duo, seed, PROFILES[i % 2], { map, layout: drawLayout(map.world!, seed), caseDef: CASES[caseId] }, PINNED[caseId]);
       out[`case:${caseId}:${duo.characterId}+${duo.pokemonId}`] = hashEvents(view(ep.events));
     });
   }
@@ -88,7 +91,7 @@ export function caseHashes(): Record<string, string> {
   for (const caseId of CASE_IDS) {
     DUOS.forEach((duo, i) => {
       const seed = `final-${caseId}-${i}`;
-      const ep = playEpisode(duo, seed, PROFILES[i % 2], { caseDef: CASES[caseId] });
+      const ep = playEpisode(duo, seed, PROFILES[i % 2], { caseDef: CASES[caseId] }, PINNED[caseId]);
       out[`${caseId}:${duo.characterId}+${duo.pokemonId}`] = hashEvents(ep.events);
     });
   }

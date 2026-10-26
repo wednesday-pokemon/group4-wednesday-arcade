@@ -15,7 +15,7 @@ import {
 import { CASE_IDS } from '../../functions/_shared/mystery/types.ts';
 import { scoreFor } from '../../functions/_shared/mystery/scoring.ts';
 import type { GameEvent, StampedEvent } from '../../../src/mystery/types.ts';
-import { playEpisode } from '../../../src/mystery/episode.ts';
+import { episodeCulprit, playEpisode } from '../../../src/mystery/episode.ts';
 import { CASES } from '../../../src/mystery/data/cases.ts';
 import type { BotProfile } from '../../../src/mystery/bot.ts';
 
@@ -36,9 +36,10 @@ describe('real sim episodes are accepted and re-verified by the server rules', (
     for (const [ci, caseId] of CASE_IDS.entries()) {
       const serverCase = data.cases[caseId];
       expect(CASES[caseId].version, `${caseId}: sim CaseDef version == server registry version`).toBe(serverCase.version);
-      const kase = resolveCase(caseId, serverCase.version);
       for (let i = 0; i < SEEDS_PER_CASE; i++) {
         const seed = seedFor(ci, i);
+        // the server judges with the session's stored murderer — here the episode's own (seeded) one
+        const kase = resolveCase(caseId, serverCase.version, data, episodeCulprit(seed));
         const duo = computeOffer(seed).cards[i % 3];
         const ctx = rulesContext(seed, kase.caseDef, egg);
         for (const profile of PROFILES) {

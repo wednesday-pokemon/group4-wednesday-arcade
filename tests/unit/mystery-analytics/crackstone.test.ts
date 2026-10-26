@@ -8,7 +8,7 @@ import { crackstoneTargetable } from '../../../src/mystery/abilities.ts';
 import { Bot } from '../../../src/mystery/bot.ts';
 import { encounterSpawnsFor } from '../../../src/mystery/director.ts';
 import { CASES } from '../../../src/mystery/data/cases.ts';
-import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
+import { FIXED_SOLUTIONS as CASE_SOLUTIONS } from '../mystery/fixedSolutions.ts';
 import { MysteryRun } from '../../../src/mystery/run.ts';
 import { CASE_IDS, type CaseId, type Duo, type StampedEvent } from '../../../src/mystery/types.ts';
 import { pathLength } from '../../../src/mystery/nav.ts';

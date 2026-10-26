@@ -3,7 +3,9 @@ import {
   citableEvidence, evidenceSupports, mentionCounts, sanitizeEvidence, solutionMatches, suspectLinks, verdictFor,
 } from '../../../src/mystery/caseLogic.ts';
 import { CASES } from '../../../src/mystery/data/cases.ts';
-import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
+import { FIXED_SOLUTIONS as CASE_SOLUTIONS } from './fixedSolutions.ts';
+import { CASE_VARIANTS } from '../../../src/mystery/data/solutions.ts';
+import { withClueContent } from '../../../src/mystery/caseVariant.ts';
 import { compareResults, round1, scoreFor, type RankEntry } from '../../../src/mystery/scoring.ts';
 import { CASE_IDS, SUSPECT_IDS, type ClueId, type Verdict } from '../../../src/mystery/types.ts';
 
@@ -78,7 +80,7 @@ for (const caseId of CASE_IDS) {
     });
 
     it('mentionCounts (answer-free): the culprit leads only once every clue is in', () => {
-      const all = mentionCounts(def, clues);
+      const all = mentionCounts(withClueContent(def, CASE_VARIANTS[caseId][sol.culprit].clues), clues); // the clues as read
       expect(all[sol.culprit]).toBe(3);
       for (const s of SUSPECT_IDS.filter((x) => x !== sol.culprit)) expect(all[s]).toBe(1);
       expect(mentionCounts(def, [])).toEqual({ thornhill: 0, galpin: 0, barry: 0 });

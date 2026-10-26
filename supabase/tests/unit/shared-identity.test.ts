@@ -57,9 +57,9 @@ describe('shared module copies are identical to their sources', () => {
     const binding = readFileSync(join(SHARED, 'mystery-registry.generated.ts'), 'utf8');
     const dataPresent = ['nightshades.ts', 'partners.ts', 'cases.ts', 'solutions.ts'].every((f) => existsSync(join(ROOT, 'src/mystery/data', f)));
     expect(dataPresent, 'the three-case data + answer keys are present').toBe(true);
-    expect(binding.includes('cases: CASES, solutions: CASE_SOLUTIONS')).toBe(dataPresent);
+    expect(binding.includes('cases: CASES, variants: CASE_VARIANTS')).toBe(dataPresent);
     expect(binding).toContain("import { CASES } from './mystery/data/cases.ts';");
-    expect(binding).toContain("import { CASE_SOLUTIONS } from './mystery/data/solutions.ts';");
+    expect(binding).toContain("import { CASE_VARIANTS } from './mystery/data/solutions.ts';");
     expect(binding, 'the deleted single-case registry must not be bound any more').not.toContain('SILENT_EVIDENCE');
     expect(binding.includes('DEFAULT_TUNING.egg')).toBe(existsSync(join(ROOT, 'src/mystery/config.ts')));
   });

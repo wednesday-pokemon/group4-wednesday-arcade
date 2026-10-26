@@ -5,7 +5,9 @@
 // stored ones are counted as duplicates and ignored. Gaps in seq are allowed (the client may drop cosmetic events such
 // as footstep noise); back-filling below lastSeq is not.
 // 200 -> { sessionId, accepted, duplicates, lastSeq, lastT, eventCount, terminal, progress, forecastsInserted,
-//          recommendationsUpserted, forecastsDropped, recommendationsDropped }
+//          recommendationsUpserted, forecastsDropped, recommendationsDropped, clues }
+//   clues = the session murderer's clue texts for every clue the SERVER has recorded as found ({} before the first);
+//           an unfound clue's text never leaves the server (the browser shows it sealed until this ack).
 // Analytics records are best-effort: an invalid forecast / recommendation is dropped and counted (warn log
 // `mystery_analytics_dropped`), never a rejection — a rejected append would leave the visitor's run unverified.
 // 422 EVENT_REJECTED { seq, rule } (order/rule violation; whole batch rejected, nothing stored)
@@ -14,11 +16,12 @@ import { requireCaller, requireStation } from '../_shared/auth.ts';
 import { adminClient, callRpc } from '../_shared/db.ts';
 import { HttpError } from '../_shared/errors.ts';
 import { readJson, serve } from '../_shared/http.ts';
-import { loadEventsBySeq, loadMysterySession } from '../_shared/mystery-db.ts';
+import { loadEventsBySeq, loadMysterySession, sessionCulprit } from '../_shared/mystery-db.ts';
 import { applyBatch, progressFromRow, progressSummary, splitResend } from '../_shared/mystery-events.ts';
 import {
-  PLAYER_MAX_HP, requireData, requireEggRules, resolveCase, rulesContext, sessionRulesVersion,
+  PLAYER_MAX_HP, culpritDraw, requireData, requireEggRules, resolveCase, revealedClues, rulesContext, sessionRulesVersion,
 } from '../_shared/mystery-rules.ts';
+import type { ClueId } from '../_shared/mystery/types.ts';
 import { MAX_APPEND_BYTES, parseMysteryAppend } from '../_shared/mystery-validation.ts';
 
 const MAX_ATTEMPTS = 3;
@@ -40,6 +43,9 @@ serve('mystery-append-events', async (req, ctx) => {
     const progress = progressFromRow(row.progress);
     const resent = body.events.filter((e) => e.seq <= row.last_seq).map((e) => e.seq);
     const { duplicates, fresh } = splitResend(body.events, row.last_seq, await loadEventsBySeq(admin, row.id, resent));
+    // Texts of the FOUND clues only, from the session's own murderer (one extra RPC, only once a clue is found).
+    const reveal = async (found: readonly ClueId[]) => found.length === 0 ? {} : revealedClues(
+      resolveCase(row.case_id, row.case_version, data, await sessionCulprit(admin, row.id, culpritDraw(row.case_id, row.case_version))), found);
     const ack = (extra: Record<string, unknown>) => ({
       sessionId: row.id, accepted: 0, duplicates, lastSeq: row.last_seq, lastT: Number(row.last_t),
       eventCount: row.event_count, terminal: progress.terminal?.type ?? null, progress: progressSummary(progress),
@@ -48,7 +54,13 @@ serve('mystery-append-events', async (req, ctx) => {
 
     // Pure resend of already-stored events: acknowledge without writing (works even after finalization).
     if (fresh.length === 0 && body.forecasts.length === 0 && body.recommendations.length === 0) {
-      return { body: ack({}), replay: duplicates > 0 };
+      let clues = {};
+      try {
+        clues = await reveal(progress.cluesFound);
+      } catch {
+        // an outdated case version still acknowledges a pure resend (it just cannot reveal)
+      }
+      return { body: ack({ clues }), replay: duplicates > 0 };
     }
     if (row.status === 'offered') throw new HttpError('NOT_SELECTED', 'Select a duo before sending gameplay events');
     if (row.status !== 'playing') {
@@ -77,6 +89,7 @@ serve('mystery-append-events', async (req, ctx) => {
           accepted: fresh.length, lastSeq: out.lastSeq, lastT: out.lastT, eventCount: out.eventCount,
           terminal: out.terminal ?? null, progress: progressSummary(next),
           forecastsInserted: out.forecastsInserted, recommendationsUpserted: out.recommendationsUpserted,
+          clues: await reveal(next.cluesFound),
         }),
       };
     } catch (err) {

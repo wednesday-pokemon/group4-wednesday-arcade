@@ -17,7 +17,7 @@ import { computeResult, requireData, resolveCase } from '../../functions/_shared
 import { FORECAST_TARGETS, parseForecast, parseMysteryAppend } from '../../functions/_shared/mystery-validation.ts';
 import { CASE_WORLDS } from '../../functions/_shared/mystery/data/caseWorlds.ts';
 import { scoreFor } from '../../functions/_shared/mystery/scoring.ts';
-import { CASE_IDS } from '../../functions/_shared/mystery/types.ts';
+import { CASE_IDS, SUSPECT_IDS } from '../../functions/_shared/mystery/types.ts';
 
 /** These tests pin the LEGACY mystery-v3.1 rules (v3.1 history stays verifiable/readable); v4 lives in mystery-v4.test.ts. */
 const V31 = 'mystery-v3.1' as const;
@@ -348,7 +348,7 @@ describe('case worlds and case versions (server view)', () => {
     for (const caseId of CASE_IDS) {
       const v = data.cases[caseId].version;
       expect(v, `${caseId}: the overhaul bumped the case content version`).toBeGreaterThanOrEqual(2);
-      expect(data.solutions[caseId].version, caseId).toBe(v);
+      for (const s of SUSPECT_IDS) expect(data.variants[caseId][s].solution.version, `${caseId}/${s}`).toBe(v);
       expect(resolveCase(caseId, v).caseDef.version).toBe(v);
       expect(code(() => resolveCase(caseId, v === 1 ? 2 : v - 1)), `${caseId} v${v}`).toBe('CASE_OUTDATED:');
     }

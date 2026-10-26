@@ -4,7 +4,7 @@
 // outcome, verdict, correct, cited evidence (sanitized), deductionCorrect, egg tier/points, active time and score with
 // the shared scoring + caseLogic modules and its OWN answer key for the session's case (client claims: audit only).
 // 201 -> { sessionId, result: MysteryResultView, rank, reveal }      (first finalization; rank null for DNF / test)
-//        reveal = { culprit, resolution } of the session's case for a finished run (post-accusation), null for a DNF
+//        reveal = { culprit, resolution } of the session's case + murderer for a finished run (post-accusation), null for a DNF
 // 200 + x-idempotent-replay -> the SAME stored result + reveal (every later call, whatever the body)
 // 409 CASE_OUTDATED (the session was created for another version of its case: cannot be verified)
 // 409 RUN_NOT_FINISHED (no finish/dnf event stored yet: flush events first) | NOT_SELECTED | SESSION_CLOSED
@@ -13,11 +13,11 @@ import { adminClient, callRpc } from '../_shared/db.ts';
 import { HttpError } from '../_shared/errors.ts';
 import { readJson, serve } from '../_shared/http.ts';
 import {
-  loadMysterySession, loadRank, loadResult, loadRuleEvents, resultView, type MysteryResultRow,
+  loadMysterySession, loadRank, loadResult, loadRuleEvents, resultView, sessionCulprit, type MysteryResultRow,
 } from '../_shared/mystery-db.ts';
 import { applyBatch, initialProgress, progressFromRow, ruleFingerprint } from '../_shared/mystery-events.ts';
 import {
-  PLAYER_MAX_HP, caseReveal, computeResult, requireData, requireEggRules, resolveCase, rulesContext, sessionRulesVersion,
+  PLAYER_MAX_HP, caseReveal, computeResult, culpritDraw, requireData, requireEggRules, resolveCase, rulesContext, sessionRulesVersion,
 } from '../_shared/mystery-rules.ts';
 import { MAX_FINALIZE_BYTES, parseMysteryFinalize } from '../_shared/mystery-validation.ts';
 
@@ -37,7 +37,7 @@ serve('mystery-finalize', async (req, ctx) => {
       result: resultView(row),
       rank: row.outcome === 'finished' && !row.is_test ? await loadRank(admin, row.session_id, row.rules_version) : null,
       // only now (the run is finished and stored) may the answer of the session's case leave the server
-      reveal: caseReveal(resolveCase(row.case_id, undefined), row.outcome),
+      reveal: caseReveal(resolveCase(row.case_id, undefined, undefined, await sessionCulprit(admin, row.session_id, culpritDraw(row.case_id, row.case_version))), row.outcome),
     },
   });
 
@@ -55,7 +55,8 @@ serve('mystery-finalize', async (req, ctx) => {
 
     const data = requireData();
     const egg = requireEggRules();
-    const kase = resolveCase(row.case_id, row.case_version, data);
+    // the session's own murderer (stored at creation; drawn now only for a session created before murderers were drawn)
+    const kase = resolveCase(row.case_id, row.case_version, data, await sessionCulprit(admin, row.id, culpritDraw(row.case_id, row.case_version)));
     const rulesVersion = sessionRulesVersion(row.rules_version); // v3.1 sessions keep the v3.1 formula
     const rules = rulesContext(row.seed, kase.caseDef, egg, PLAYER_MAX_HP, rulesVersion);
     // Re-validate the stored rule events from scratch (independent of the incremental append-time state).

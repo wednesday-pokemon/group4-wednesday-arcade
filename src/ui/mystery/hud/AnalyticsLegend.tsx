@@ -13,9 +13,11 @@ export const LEGEND_CHIPS: readonly { id: 'desc' | 'diag' | 'pred' | 'presc'; ic
 
 export function AnalyticsLegend({ variant, className }: { variant: 'onboarding' | 'pause' | 'board'; className?: string }) {
   return (
-    <p className={`alegend alegend--${variant}${className ? ` ${className}` : ''}`} data-testid={`analytics-legend-${variant}`} aria-label="The four analytics: what happened, why, what's likely, what to do">
-      {LEGEND_CHIPS.map((c) => (
-        <span key={c.id} className={`alegend__chip alegend__chip--${c.id}`}>
+    <p className={`alegend alegend--${variant}${className ? ` ${className}` : ''}`} data-testid={`analytics-legend-${variant}`} aria-label="The four analytics: 1 what happened, 2 why, 3 what's likely, 4 what to do">
+      {LEGEND_CHIPS.map((c, i) => (
+        <span key={c.id} className={`alegend__chip alegend__chip--${c.id}`} data-layer={c.id}>
+          {/* analytics v2: the same number as the HUD's layer badge (1 LOG · 2 WHY · 3 Odds · 4 ADVICE) */}
+          <span className="alegend__n" aria-hidden="true">{i + 1}</span>
           <Icon name={c.icon} />
           {c.text}
         </span>

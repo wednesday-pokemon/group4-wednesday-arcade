@@ -419,6 +419,27 @@ export interface CaseSolution {
   resolution: string;
 }
 
+/**
+ * The culprit-specific content of one clue (SECRET, lives with the answer keys in data/solutions.ts). Public ClueDefs
+ * ship sealed (text = CLUE_SEALED_TEXT, mentions []); the session's variant is merged in once the clue is found
+ * (LIVE: the server returns it with the append ack; local demo: loaded with the variant at run start).
+ */
+export interface ClueContent {
+  text: string;
+  short: string;
+  meaning: string;
+  mentions: SuspectId[];
+  deduction: string;
+  /** Thing's line when the clue is found (ClueDef.thing.found). */
+  found: string;
+}
+
+/** One of the 9 case × culprit scenarios (answer key + the evidence that supports it). */
+export interface CaseVariant {
+  solution: CaseSolution;
+  clues: Partial<Record<ClueId, ClueContent>>;
+}
+
 /** The visitor's one-shot accusation: a suspect (or null = leave unsolved) and the evidence ids they cite. */
 export interface Accusation { suspectId: SuspectId | null; evidence: string[] }
 

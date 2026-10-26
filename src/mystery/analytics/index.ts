@@ -68,3 +68,9 @@ export { slurpRiskFrom, type SlurpRiskPart } from './slurpModel.ts';
 export { cabinetDoorPhase } from './prescriptive.ts';
 export { isWeemsAction } from './dashboard.ts';
 export { ENEMY_TITLE, LIFECYCLE_LOG, WHO as ENEMY_WHO, isSlurpThreat } from './liveMessages.ts';
+// ---- analytics v2: layer links (advice source, alternatives, prediction check-backs, advice scorecard, points lost)
+export {
+  sourceTag, alternativesOf, alternativesLine, ALT_LABEL, predictionRight, checkBackLine, predictionSummary, adviceScorecard, pointsLostLines, pointsLostItems, lostPts,
+  type PredictionSummary, type AdviceScoreInput, type PointsLostItem,
+} from './insights.ts';
+export { oddsSource } from './prescriptive.ts';

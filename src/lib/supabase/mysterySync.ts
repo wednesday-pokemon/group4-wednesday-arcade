@@ -74,6 +74,8 @@ export interface UploaderDeps {
   intervalMs?: number;
   backoffMs?: number[];
   onStatus?: (s: SyncStatus) => void;
+  /** Every accepted append ack (e.g. the found clues' texts the server releases). */
+  onAck?: (ack: MysteryAppendAck) => void;
 }
 
 const STOPPED: readonly SyncState[] = ['unverified', 'closed', 'reset'];
@@ -225,6 +227,7 @@ export class MysteryUploader {
         this.sent++;
         const ack = await this.deps.api.append(this.deps.sessionId, batch);
         this.deps.source.ackBatch(batch);
+        this.deps.onAck?.(ack);
         this.conflicts = 0;
         this.set({ state: 'live', lastSeq: ack.lastSeq, terminal: ack.terminal ?? this.status_.terminal, failures: 0 });
       } catch (err) {

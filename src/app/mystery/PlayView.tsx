@@ -11,7 +11,7 @@
 //     continues to the results. Losing pointer lock never pauses during it.
 // Browser defaults (Tab focus, Space/arrow scroll, F fullscreen hotkey…) are suppressed for game keys; M reaches mute.
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject } from 'react';
-import type { Accusation, CaseDef, Duo, RoomId } from '../../mystery/types.ts';
+import type { Accusation, CaseDef, Duo, RoomId, SuspectId } from '../../mystery/types.ts';
 import { Button } from '../../ui/components/Button.tsx';
 import type { DuoCardView } from '../../ui/mystery/duoView.ts';
 import type { PublicMapState } from '../../ui/mystery/map/mapData.ts';
@@ -52,6 +52,8 @@ export interface PlayViewProps {
   caseDef: CaseDef;
   /** LIVE station: never expose the seed in debug output. */
   hideSeed?: boolean;
+  /** LOCAL DEMO murderer (never set on a LIVE station). */
+  culprit?: SuspectId | null;
   card: DuoCardView;
   screen: MysteryScreen;
   overlay: MysteryOverlay;
@@ -92,6 +94,7 @@ export default function PlayView(p: PlayViewProps) {
     duo: p.duo,
     seed: p.seed,
     caseDef: p.caseDef,
+    culprit: p.culprit ?? null,
     hideSeed: p.hideSeed,
     tutorial: p.tutorial,
     paused,

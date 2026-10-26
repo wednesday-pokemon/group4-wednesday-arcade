@@ -3,6 +3,7 @@
 // plus the operator-reset watch, the ~2 s heartbeat for Laptop 1 and a tiny UI store (sync chip, verification state).
 // React-free (MysteryApp reads it through LiveStationHandle / LiveRunContext); integration-tested against the fake
 // server in tests/integration/mystery*.test.ts.
+import { revealClues } from '../../mystery/caseVariant.ts';
 import type { MysteryAnalytics } from '../../mystery/analytics/index.ts';
 import type { HeartbeatAnalytics } from '../../mystery/analytics/live.ts';
 import type { Duo } from '../../mystery/types.ts';
@@ -246,7 +247,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
   }
 
   const hooks: LiveRunHooks = {
-    runStarted(_run: MysteryRunLike, analytics: MysteryAnalytics) {
+    runStarted(liveSimRun: MysteryRunLike, analytics: MysteryAnalytics) {
       stopRun();
       if (!current || current.status !== 'playing') {
         // No verified session behind this run (should not happen in live mode): play on, clearly unverified.
@@ -266,6 +267,10 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
           if (run?.uploader !== uploader) return;
           setUi({ sync: s.state, syncReason: s.reason });
           if (s.state === 'reset') handleReset();
+        },
+        // The server releases the murderer's text of each clue only once it has recorded the clue as found.
+        onAck: (ack) => {
+          if (run?.uploader === uploader) revealClues(liveSimRun.caseDef, ack.clues);
         },
       });
       run = { uploader, analytics, sessionId };

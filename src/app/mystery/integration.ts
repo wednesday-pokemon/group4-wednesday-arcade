@@ -7,7 +7,7 @@ import { caseById, POISONED_ARCHIVE } from '../../mystery/data/cases.ts';
 import { NIGHTSHADES } from '../../mystery/data/nightshades.ts';
 import { PARTNERS } from '../../mystery/data/partners.ts';
 import { buildCard, draftOffer } from '../../mystery/draft.ts';
-import type { CaseDef, CaseId, CaseSolution, Duo, DuoCard, DuoOffer, MapDef, NightshadeDef, NightshadeId, PokemonPartnerDef } from '../../mystery/types.ts';
+import type { CaseDef, CaseId, CaseSolution, ClueContent, ClueId, Duo, DuoCard, DuoOffer, MapDef, NightshadeDef, NightshadeId, PokemonPartnerDef, SuspectId } from '../../mystery/types.ts';
 import type { MysteryRunCtor, MysterySceneCtor } from './runTypes.ts';
 
 /** 'preview' only exists in sessions stored before the draft landed; openSession() upgrades those (same seed). */
@@ -34,7 +34,7 @@ export function partnerDef(id: PokemonId): PokemonPartnerDef {
   return PARTNERS[id];
 }
 
-/** The PUBLIC definition of the session's assigned case (no answer inside). */
+/** The PUBLIC definition of the session's assigned case (no answer inside; every clue sealed). */
 export function caseDef(id: CaseId = POISONED_ARCHIVE.id): CaseDef {
   return caseById(id);
 }
@@ -44,9 +44,19 @@ export function caseDef(id: CaseId = POISONED_ARCHIVE.id): CaseDef {
  * the dynamic import keeps data/solutions.ts out of every chunk the visitor loads before that. In LIVE mode the server
  * recomputes the verdict from its own copy, so this only drives the local view and its analytics.
  */
-export async function loadCaseSolution(id: CaseId): Promise<CaseSolution> {
+export async function loadCaseSolution(id: CaseId, culprit: SuspectId): Promise<CaseSolution> {
   const { caseSolution } = await import('../../mystery/data/solutions.ts');
-  return caseSolution(id);
+  return caseSolution(id, culprit);
+}
+
+/**
+ * LOCAL DEMO only (no server to keep the secret): the session murderer's clue texts, loaded when the run starts and
+ * merged into the run's case clue by clue as they are found. LIVE never calls this — the server releases each found
+ * clue's text with its append ack and keeps the murderer until finalize.
+ */
+export async function loadLocalClueContents(id: CaseId, culprit: SuspectId): Promise<Partial<Record<ClueId, ClueContent>>> {
+  const { caseVariant } = await import('../../mystery/data/solutions.ts');
+  return caseVariant(id, culprit).clues;
 }
 
 export async function loadRunCtor(): Promise<MysteryRunCtor> {

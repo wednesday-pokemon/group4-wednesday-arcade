@@ -8,7 +8,7 @@ import {
 } from '../../functions/_shared/mystery-events.ts';
 import {
   PLAYER_MAX_HP, assertValidOffer, caseReveal, caseVersions, computeOffer, computeResult, expectedEggTier, requireData, requireEggRules,
-  resolveCase, rulesContext, type SessionCase,
+  resolveCase, revealedClues, rulesContext, type SessionCase,
 } from '../../functions/_shared/mystery-rules.ts';
 import {
   parseForecast, parseMysteryAppend, parseMysteryCreate, parseMysteryFinalize, parseMysteryGet, parseMysterySelect,
@@ -16,7 +16,7 @@ import {
 } from '../../functions/_shared/mystery-validation.ts';
 import { parseAdminReset } from '../../functions/_shared/validation.ts';
 import { round1, scoreFor } from '../../functions/_shared/mystery/scoring.ts';
-import { CASE_IDS, CLUE_IDS, type CaseId, type DuoOffer } from '../../functions/_shared/mystery/types.ts';
+import { CASE_IDS, CLUE_IDS, SUSPECT_IDS, type CaseId, type DuoOffer } from '../../functions/_shared/mystery/types.ts';
 
 /** These tests pin the LEGACY mystery-v3.1 rules (v3.1 history stays verifiable/readable); v4 lives in mystery-v4.test.ts. */
 const V31 = 'mystery-v3.1' as const;
@@ -378,7 +378,8 @@ describe('server offer (shared draftOffer)', () => {
   it('the registry binds all three cases with matching answer keys; versions per case', () => {
     const data = requireData();
     expect(Object.keys(data.cases).sort()).toEqual([...CASE_IDS].sort());
-    expect(Object.keys(data.solutions).sort()).toEqual([...CASE_IDS].sort());
+    expect(Object.keys(data.variants).sort()).toEqual([...CASE_IDS].sort());
+    for (const id of CASE_IDS) expect(Object.keys(data.variants[id]).sort(), id).toEqual([...SUSPECT_IDS].sort());
     const versions = caseVersions();
     for (const id of CASE_IDS) expect(versions[id]).toBe(data.cases[id].version);
     expect(new Set(CASE_IDS.flatMap((id) => data.cases[id].clues.map((c) => c.id)))).toEqual(new Set(CLUE_IDS));
@@ -387,8 +388,16 @@ describe('server offer (shared draftOffer)', () => {
     expect(code(() => resolveCase('silent_evidence', 1))).toBe('INTERNAL:');
     expect(code(() => resolveCase('midnight_signal', 99))).toBe('CASE_OUTDATED:');
     const data = requireData();
-    const broken = { ...data, solutions: { ...data.solutions, crypt_last_witness: data.solutions.midnight_signal } };
+    const broken = { ...data, variants: { ...data.variants, crypt_last_witness: data.variants.midnight_signal } };
     expect(code(() => resolveCase('crypt_last_witness', undefined, broken))).toBe('MISCONFIGURED:');
+    // a variant filed under the wrong murderer is refused too
+    const swapped = { ...data, variants: { ...data.variants, midnight_signal: { ...data.variants.midnight_signal, barry: data.variants.midnight_signal.galpin } } };
+    expect(code(() => resolveCase('midnight_signal', undefined, swapped, 'barry'))).toBe('MISCONFIGURED:');
+    // the session's murderer picks the variant; its found clue texts are released, unfound ones never
+    const k = resolveCase('midnight_signal', undefined, data, 'galpin');
+    expect(k.solution.culprit).toBe('galpin');
+    expect(Object.keys(revealedClues(k, ['alarm_override']))).toEqual(['alarm_override']);
+    expect(revealedClues(k, [])).toEqual({});
     expect(HTTP_STATUS.CASE_OUTDATED).toBe(409);
   });
   it('caseReveal: culprit + resolution only for a finished run', () => {

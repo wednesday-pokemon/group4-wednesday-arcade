@@ -1,4 +1,4 @@
-# Three cases — integration contract (rules `mystery-v4`, case content version 3; history below)
+# Three cases — integration contract (rules `mystery-v4`, case content version 4; history below)
 
 Single source of truth for the three-case feature. Shared types: `src/mystery/types.ts` (`CaseId`, `CaseDef`,
 `ClueDef`, `CaseNoteDef`, `CaseSolution`, `Accusation`, `RunResult.caseId/caseVersion/evidence/deductionCorrect`).
@@ -9,7 +9,32 @@ Home → nickname → three random duo cards (choose one) → **case-file reveal
 skippable, reduced motion) → **Thing's case-specific prologue** → tutorial → investigation → egg → Iago Tower →
 **accusation = suspect + cited evidence** (one shot) → results (case resolution) + analytics.
 
-## Content version 3 (final 2026-10-24) — current
+## Randomized murderer — content version 4 (2026-10-26) — current
+- Any of **thornhill / galpin / barry** can be guilty in any case: 9 case × murderer scenarios. Each scenario is a
+  `CaseVariant` in `data/solutions.ts` (`CASE_VARIANTS[caseId][suspectId]` = answer key + its own three `ClueContent`s,
+  rewritten per murderer around that suspect's access, not a name swap). `CaseDef.version` = `CaseSolution.version` = 4.
+- Public `cases.ts` ships every clue **sealed** (`text` = `CLUE_SEALED_TEXT`, no `mentions`, no takeaway): titles,
+  places, prompts, suspect statements, notes and prologues are the same for every murderer.
+  `src/mystery/caseVariant.ts` merges a found clue's content into the run's own case copy (`revealClues`) and seeds the
+  suspect display order per session (`suspectOrder`, PRF `suspect-order:<id>`).
+- Assigned once per session, never rerolled. LIVE: `mystery-create-session` draws it with crypto RNG (independent of
+  the seed the browser holds) into `mystery_session_secrets` (RLS on, NO client grant; `mystery_assign_culprit` is
+  idempotent, so a replay / refresh / retry keeps the stored one). LOCAL DEMO: drawn into the local session
+  (`session.culprit`); `/?mode=mystery&case=…&culprit=…` forces it (test fixture, never on a station).
+- Clue text release. LIVE: the browser sends the `clue_found` at once (`flushNow('clue')`); the append ack carries
+  `clues` = the murderer's texts of the clues the SERVER has recorded as found, and the clue card refreshes when the
+  text arrives ("Reading the evidence…" until then). Unfound clue texts and the murderer never leave the server before
+  finalize (the finalize `reveal`). LOCAL DEMO: loaded with the variant at run start (dynamic import) and revealed per
+  found clue.
+- Accusation: R3 already requires all three clues, so the READ clues name exactly one suspect in all three
+  (`provisionalCulprit`); the app judges the accusation locally with that variant and LIVE replaces it with the
+  server's verified result. The server always recomputes verdict / correct / score with its own variant.
+- Sessions created under case version 3 keep their fixed murderer (01 thornhill · 02 galpin · 03 barry) and get 409
+  CASE_OUTDATED for new events, as before. Migration: `20261026000100_mystery_culprits.sql`.
+- Tests: `tests/unit/mystery/{cases,caseVariant,caseRuns,caseSecrecy}.test.ts` (all 9 scenarios: invariants, one answer
+  each, not name-swapped, bot-solvable per murderer, secrecy); e2e `MURDERERS=all node tests/e2e/mystery-cases.mjs`.
+
+## Content version 3 (final 2026-10-24) — superseded by version 4
 - Rules version `mystery-v4` (types.ts). `CaseDef.version` = `CaseSolution.version` = **3** for all three cases.
 - Suspects in every case: **Marilyn Thornhill** (archivist, `thornhill`), **Françoise Galpin** (visiting historian
   restoring the crypt — a role invented for this story, `galpin`), **Barry Dort** (night guard, `barry`). Isaac Night is
@@ -81,7 +106,7 @@ results/analytics can tell "right suspect, weak evidence" from "wrong suspect".
   `links` (what it proves / whom it clears), innocents' explanations and the resolution live ONLY in
   `data/solutions.ts` (`CaseSolution`).
 - Browser code must NEVER import `data/solutions.ts` (or `src/mystery/episode.ts`, which does) statically. The app
-  loads it with `loadCaseSolution(caseId)` (`src/app/mystery/integration.ts`, dynamic import) only after the visitor
+  loads it with `loadCaseSolution(caseId, culprit)` (`src/app/mystery/integration.ts`, dynamic import) only after the visitor
   committed the accusation (and for results). Test: `tests/unit/mystery/caseSecrecy.test.ts`.
 - No UI, debug output (`render_game_to_text`), Thing line, hint, prologue or case-file reveal names a culprit or shows a
   "points to / explains" link before the accusation. The live seed is never exposed in debug output.

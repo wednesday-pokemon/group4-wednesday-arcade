@@ -47,7 +47,8 @@ describe('no character / Pokémon branches in analytics', () => {
 
 describe('answer-key secrecy of the analytics layer', () => {
   it('only the node-only episode simulator imports data/solutions.ts; the public API never reaches it', () => {
-    const importers = files(ROOT).filter((f) => /from '[^']*data\/solutions(\.ts)?'/.test(readFileSync(f, 'utf8')));
+    // the answer keys arrive through src/mystery/episode.ts (episodeCase: the seeded murderer's variant), node-only
+    const importers = files(ROOT).filter((f) => /from '[^']*(data\/solutions|\.\.\/episode)(\.ts)?'/.test(readFileSync(f, 'utf8')));
     expect(importers.map((f) => f.replace(/\\/g, '/'))).toEqual(['src/mystery/analytics/episodes.ts']);
     for (const f of files(ROOT)) {
       if (f.endsWith('episodes.ts')) continue;

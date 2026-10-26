@@ -40,7 +40,7 @@ import {
   type ParsedEvent,
 } from '../../supabase/functions/_shared/mystery-events.ts';
 import {
-  caseReveal, caseVersions, computeOffer, computeResult, requireData, requireEggRules, resolveCase, rulesContext,
+  caseReveal, caseVersions, computeOffer, computeResult, drawCulprit, requireData, requireEggRules, resolveCase, revealedClues, rulesContext,
 } from '../../supabase/functions/_shared/mystery-rules.ts';
 import { fromRpcEnvelope } from '../../supabase/functions/_shared/errors.ts';
 import { buildMysteryBoardServices, buildMysteryStationServices } from '../../src/lib/supabase/mysteryLive.ts';
@@ -50,10 +50,11 @@ import { createMysteryAnalytics, type MysteryAnalytics } from '../../src/mystery
 import { Bot } from '../../src/mystery/bot.ts';
 import { MysteryRun } from '../../src/mystery/run.ts';
 import { caseById } from '../../src/mystery/data/cases.ts';
-import { CASE_SOLUTIONS } from '../../src/mystery/data/solutions.ts';
+import { caseSolution } from '../../src/mystery/data/solutions.ts';
+import { provisionalCulprit, sessionCaseDef } from '../../src/mystery/caseVariant.ts';
 import { CASE_IDS, MYSTERY_RULES_VERSION, type MysteryRulesVersion } from '../../src/mystery/types.ts';
 import { scoreV4 } from '../../src/mystery/scoring.ts';
-import type { Accusation, CaseId, Duo, DuoCard } from '../../src/mystery/types.ts';
+import type { Accusation, CaseId, Duo, DuoCard, SuspectId } from '../../src/mystery/types.ts';
 import type { GameBackend } from '../../src/lib/backend.ts';
 import { createSupabase, type LiveConfig } from '../../src/lib/supabase/client.ts';
 import { buildLiveServices } from '../../src/lib/supabase/liveServices.ts';
@@ -344,6 +345,12 @@ export class FakeSupabaseServer {
   readonly mysteryCaseBags = new Map<StationId, { bag: CaseId[]; last: CaseId | null }>();
   /** Test hook: the next creates get these cases (in order) INSTEAD of a bag draw (the bag is not touched). */
   readonly nextMysteryCases: CaseId[] = [];
+  /** mystery_session_secrets: the murderer drawn per session (server only; never in any pre-finalize response). */
+  readonly mysteryCulprits = new Map<string, SuspectId>();
+  /** Test hook: the next creates draw these murderers (in order) instead of a random one. */
+  readonly nextMysteryCulprits: SuspectId[] = [];
+  /** RNG of the murderer draw (Edge Function: crypto). Seeded per server for reproducible tests. */
+  mysteryCulpritRandom: () => number = seededRandom(0xc01f);
   /** The rules version mystery-create-session writes (the deployed bundle's MYSTERY_RULES_VERSION). */
   mysteryRulesVersion: MysteryRulesVersion = MYSTERY_RULES_VERSION;
   /** RNG of the bag shuffle (SQL: random()). Seeded per server for reproducible tests. */
@@ -589,6 +596,13 @@ export class FakeSupabaseServer {
   }
 
   /** private.mystery_draw_case: pop the station's bag; refill with a fresh permutation never starting with `last`. */
+  /** The stored murderer (sessions created before the draw existed get one now, like mystery_assign_culprit). */
+  mysteryCulpritOf(sessionId: string): SuspectId {
+    let c = this.mysteryCulprits.get(sessionId);
+    if (!c) this.mysteryCulprits.set(sessionId, (c = drawCulprit(this.mysteryCulpritRandom)));
+    return c;
+  }
+
   mysteryDrawCase(stationId: StationId): CaseId {
     const st = this.mysteryCaseBags.get(stationId) ?? { bag: [], last: null };
     if (st.bag.length === 0) {
@@ -677,6 +691,8 @@ export class FakeSupabaseServer {
           abandoned_reason: null, created_at: createdAt, created_ms: this.clock, finalized_at: null,
         };
         this.mysterySessions.set(id, s);
+        // ---- RPC mystery_assign_culprit (idempotent; a replay above returns before reaching it, keeping the stored one)
+        this.mysteryCulprits.set(id, this.nextMysteryCulprits.shift() ?? drawCulprit(this.mysteryCulpritRandom));
         this.mysteryOffers.set(id, wire(offer.cards));
         this.mysteryEvents.set(id, new Map());
         this.mysteryForecasts.set(id, new Map());
@@ -733,13 +749,15 @@ export class FakeSupabaseServer {
         });
         // Pure resend of already-stored events: acknowledge without writing (works even after finalization).
         if (fresh.length === 0 && body.forecasts.length === 0 && body.recommendations.length === 0) {
-          return { body: ack({}), replay: duplicates > 0 };
+          const found = progress.cluesFound;
+          return { body: ack({ clues: found.length ? revealedClues(resolveCase(s.case_id, undefined, data, this.mysteryCulpritOf(s.id)), found) : {} }), replay: duplicates > 0 };
         }
         if (s.status === 'offered') throw new HttpError('NOT_SELECTED', 'Select a duo before sending gameplay events');
         if (s.status !== 'playing') {
           throw new HttpError('SESSION_CLOSED', `Session is ${s.status}`, { status: s.status, abandonedReason: s.abandoned_reason });
         }
-        const next = applyBatch(progress, fresh, rulesContext(s.seed, resolveCase(s.case_id, s.case_version, data).caseDef, egg));
+        const kase = resolveCase(s.case_id, s.case_version, data, this.mysteryCulpritOf(s.id));
+        const next = applyBatch(progress, fresh, rulesContext(s.seed, kase.caseDef, egg));
         // ---- RPC mystery_append_events (the optimistic last_seq check always holds: one JS turn, no concurrency)
         if (s.event_count + fresh.length > 20_000) this.rpcFail({ ok: false, error: 'TOO_MANY_EVENTS', message: 'session event budget (20000) exhausted' });
         const receivedAt = this.tick();
@@ -785,7 +803,7 @@ export class FakeSupabaseServer {
         return {
           body: ack({
             accepted: fresh.length, lastSeq: s.last_seq, lastT: s.last_t, eventCount: s.event_count, terminal: s.terminal_type,
-            progress: progressSummary(next), forecastsInserted: fc, recommendationsUpserted: rc,
+            progress: progressSummary(next), forecastsInserted: fc, recommendationsUpserted: rc, clues: revealedClues(kase, next.cluesFound),
           }),
         };
       }
@@ -799,7 +817,7 @@ export class FakeSupabaseServer {
             sessionId: s.id,
             result: this.mysteryResultView(r),
             rank: r.outcome === 'finished' && !r.is_test ? (this.mysteryLeaderboard(r.rules_version as MysteryRulesVersion).find((x) => x.session_id === s.id)?.rank ?? null) : null,
-            reveal: caseReveal(resolveCase(r.case_id, undefined), r.outcome as 'finished' | 'dnf'),
+            reveal: caseReveal(resolveCase(r.case_id, undefined, undefined, this.mysteryCulpritOf(s.id)), r.outcome as 'finished' | 'dnf'),
           }),
         });
         if (s.status === 'finished' || s.status === 'dnf') {
@@ -811,7 +829,7 @@ export class FakeSupabaseServer {
         if (s.status !== 'playing') throw new HttpError('SESSION_CLOSED', `Session is ${s.status}`, { status: s.status, abandonedReason: s.abandoned_reason });
         const data = requireData();
         const egg = requireEggRules();
-        const kase = resolveCase(s.case_id, s.case_version, data);
+        const kase = resolveCase(s.case_id, s.case_version, data, this.mysteryCulpritOf(s.id));
         const rules = rulesContext(s.seed, kase.caseDef, egg);
         // Re-validate the stored rule events from scratch (independent of the incremental append-time state).
         const ruleEvents: ParsedEvent[] = [...this.mysteryEvents.get(s.id)!.values()]
@@ -1454,7 +1472,8 @@ export async function driveRun(
   },
 ): Promise<{ run: MysteryRun; analytics: MysteryAnalytics }> {
   // the kiosk plays the case the SERVER assigned (LiveSessionData.caseId)
-  const run = new MysteryRun({ duo: session.selected!, seed: session.seed, tutorial: false, caseDef: caseById(session.caseId) });
+  // ... sealed, in the session's suspect order; the found clues' texts arrive with the append acks (liveRun onAck)
+  const run = new MysteryRun({ duo: session.selected!, seed: session.seed, tutorial: false, caseDef: sessionCaseDef(caseById(session.caseId), session.seed) });
   const real = createMysteryAnalytics(run, {
     sessionId: session.sessionId, stationId: opts.stationId, offered: session.offer.cards.map((c) => ({ characterId: c.characterId, pokemonId: c.pokemonId })),
   });
@@ -1476,9 +1495,11 @@ export async function driveRun(
   }
   if (run.status === 'accusing') {
     controller.hooks.flushNow('deposit');
-    // the app loads the answer key only now (loadCaseSolution after the visitor committed)
+    opts.timers.advance(2000);
+    await settle(8); // the last found clue's text arrives with this ack
+    // the app loads the answer key only now, for the murderer the READ clues imply (the server's verdict decides)
     const accusation = opts.accusation ? opts.accusation(run, bot.accusation()) : bot.accusation();
-    real.frame(run, run.accuse(accusation, CASE_SOLUTIONS[run.caseDef.id]));
+    real.frame(run, run.accuse(accusation, caseSolution(run.caseDef.id, provisionalCulprit(run.caseDef, run.cluesFound, accusation.suspectId))));
   }
   controller.hooks.runEnded(run, analytics);
   return { run, analytics };

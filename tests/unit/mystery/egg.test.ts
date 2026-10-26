@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_TUNING } from '../../../src/mystery/config.ts';
 import { eggTierForSeed, EGG_TIERS } from '../../../src/mystery/scoring.ts';
 import type { MysteryRun } from '../../../src/mystery/run.ts';
-import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
+import { FIXED_SOLUTIONS as CASE_SOLUTIONS } from './fixedSolutions.ts';
 import { CASE, hold, makeRun, place } from './helpers.ts';
 
 function carrying(): MysteryRun {

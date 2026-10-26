@@ -7,7 +7,7 @@ import {
   CaseReveal, caseFiles, filePose, REVEAL_PHASES, REVEAL_SOUNDS, REVEAL_TOTAL_MS, revealPhaseAt, type RevealPhase,
 } from '../../../src/ui/mystery/CaseReveal.tsx';
 import { CASES } from '../../../src/mystery/data/cases.ts';
-import { CASE_SOLUTIONS } from '../../../src/mystery/data/solutions.ts';
+import { FIXED_SOLUTIONS as CASE_SOLUTIONS } from '../mystery/fixedSolutions.ts';
 import type { CaseDef } from '../../../src/mystery/types.ts';
 
 const ALL_CASES = Object.values(CASES);

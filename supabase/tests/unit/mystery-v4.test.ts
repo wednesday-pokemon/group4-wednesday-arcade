@@ -427,7 +427,7 @@ describe('v4 computeResult = shared scoreV4 from validated progress (FINAL_CONTR
     }
   });
 
-  it('every case: accusing its culprit (Galpin in Case 02) earns the +300; Isaac Night is not a suspect any more', () => {
+  it('every case: accusing its culprit earns the +300 (any suspect can be it); Isaac Night is not a suspect any more', () => {
     for (const caseId of CASE_IDS) {
       const kase = resolveCase(caseId, data.cases[caseId].version);
       const ctx = rulesContext(SEED, kase.caseDef, egg, PLAYER_MAX_HP, V4);
@@ -449,7 +449,8 @@ describe('v4 computeResult = shared scoreV4 from validated progress (FINAL_CONTR
       }
       expect(kase.caseDef.suspects.map((s) => s.id).sort(), caseId).toEqual([...SUSPECT_IDS].sort());
     }
-    expect(data.solutions.crypt_last_witness.culprit, "Case 02's culprit is Françoise Galpin").toBe('galpin');
+    // randomized murderer: every suspect (Galpin included) is the murderer of one variant of every case
+    for (const id of CASE_IDS) for (const s of SUSPECT_IDS) expect(data.variants[id][s].solution.culprit, `${id}/${s}`).toBe(s);
     // an unknown suspect id (e.g. the retired 'isaac') is refused by the validator
     const ctx = rulesContext(SEED, data.cases.crypt_last_witness, egg, PLAYER_MAX_HP, V4);
     const t = ctx.expectedTier!;
@@ -603,7 +604,7 @@ describe('drift guards: server enums == synced types.ts == SQL CHECKs', () => {
   it('every case is at content version ≥ 3 (final wave) with a matching answer key', () => {
     for (const caseId of CASE_IDS) {
       expect(data.cases[caseId].version, caseId).toBeGreaterThanOrEqual(3);
-      expect(data.solutions[caseId].version, caseId).toBe(data.cases[caseId].version);
+      for (const s of SUSPECT_IDS) expect(data.variants[caseId][s].solution.version, `${caseId}/${s}`).toBe(data.cases[caseId].version);
     }
   });
 

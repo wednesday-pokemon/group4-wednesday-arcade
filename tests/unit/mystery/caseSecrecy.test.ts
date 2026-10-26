@@ -141,7 +141,7 @@ describe('case secrecy: no browser module statically reaches the answer keys', (
   });
 
   it('the bot (also loaded by the app autopilot) and caseLogic never import the answer keys', () => {
-    for (const f of ['mystery/bot.ts', 'mystery/caseLogic.ts', 'mystery/run.ts', 'mystery/defaults.ts', 'mystery/data/cases.ts']) {
+    for (const f of ['mystery/bot.ts', 'mystery/caseLogic.ts', 'mystery/caseVariant.ts', 'mystery/run.ts', 'mystery/defaults.ts', 'mystery/data/cases.ts']) {
       expect(chainToSecret(join(SRC, f)), f).toBeNull();
     }
   });
@@ -151,7 +151,7 @@ describe('case secrecy: no browser module statically reaches the answer keys', (
     for (const f of roots) {
       const rel = norm(f);
       const text = readFileSync(f, 'utf8');
-      if (text.includes('CASE_SOLUTIONS')) offenders.push(`${rel}: mentions CASE_SOLUTIONS`);
+      for (const name of ['CASE_SOLUTIONS', 'CASE_VARIANTS']) if (text.includes(name)) offenders.push(`${rel}: mentions ${name}`);
       const statics = staticEdges(f).map(norm).filter((p) => SECRET.includes(p));
       if (statics.length) offenders.push(`${rel}: static import of ${statics.join(', ')}`);
       const dyn = dynamicSpecifiers(f).map((s) => resolveSpecifier(f, s)).filter((p): p is string => !!p).map(norm).filter((p) => SECRET.includes(p));

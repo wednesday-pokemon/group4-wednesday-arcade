@@ -62,7 +62,7 @@ describe('DescriptiveService — exact counts', () => {
       found: [{ clueId: 'falsified_transfer', t: 6 }], count: 1, total: 3,
       missing: [
         { clueId: 'botanical_residue', title: 'Restricted Botanical Residue' },
-        { clueId: 'access_ledger', title: 'Archive and Greenhouse Access Ledger' },
+        { clueId: 'access_ledger', title: 'Porter’s Door Ledger' },
       ],
     });
     expect(r.accusation).toEqual({ kind: 'wrong_suspect', evidenceCount: 1 });
@@ -374,7 +374,7 @@ describe('case-rule failure reasons', () => {
     const d = diagnoseCaseReasons(dnf, { caseId: 'midnight_signal' });
     expect(d.map((x) => x.code)).toEqual(['dnf_before_accusation', 'missed_clue', 'missed_clue', 'missed_clue']);
     expect(d.slice(1).map((x) => x.ref)).toEqual(ids('midnight_signal'));
-    expect(d[1].text).toContain('Rewritten Patrol Log');
+    expect(d[1].text).toContain('Night Logbook');
     // failure reasons for the results panel = case reasons + stealth mistakes
     const rep = diagnoseSession(dnf, { caseId: 'midnight_signal' });
     expect(failureReasons(rep).map((x) => x.code)).toEqual(['dnf_before_accusation', 'missed_clue', 'missed_clue', 'missed_clue', 'catch', 'dnf_second_catch']);
@@ -396,14 +396,14 @@ describe('case-rule failure reasons', () => {
     ];
     const a = diagnoseCaseReasons([], { caseId: 'poisoned_archive', result: records[0].result });
     expect(a.map((x) => x.code)).toEqual(['weak_evidence', 'missed_clue']);
-    expect(a[1].text).toContain('Archive and Greenhouse Access Ledger');
+    expect(a[1].text).toContain('Porter’s Door Ledger');
     const agg = aggregateDiagnostics(records);
     expect(agg.unsolvedRuns).toBe(3);
     const by = Object.fromEntries(agg.caseFailures.map((c) => [c.ref ? `${c.code}:${c.ref}` : c.code, c]));
     expect(by.weak_evidence.count).toBe(1);
     expect(by.wrong_suspect.count).toBe(1);
     expect(by.not_accused.count).toBe(1);
-    expect(by['missed_clue:access_ledger']).toMatchObject({ count: 1, caseId: 'poisoned_archive', text: 'Missed “Archive and Greenhouse Access Ledger” (Case 01)' });
+    expect(by['missed_clue:access_ledger']).toMatchObject({ count: 1, caseId: 'poisoned_archive', text: 'Missed “Porter’s Door Ledger” (Case 01)' });
     expect(JSON.stringify(agg.caseFailures)).not.toMatch(/thornhill|galpin|isaac|barry/i);
   });
 

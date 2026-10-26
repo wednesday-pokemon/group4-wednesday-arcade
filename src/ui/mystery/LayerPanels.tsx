@@ -5,7 +5,9 @@
 // then the stealth causes. Shown after the accusation only; nothing here names a suspect.
 // Final wave (UX_FINAL §6): the descriptive tiles are TIME · CLUES · SEEN · HITS · HINTS · EGG — Seen / Hits / Hints are
 // the run's RULE-event counts (RunResult.detections / hits / hintsUsed); "—" when the run does not carry them.
+import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 import type { DiagnosticItem, ResultsAnalytics, TimelineMark } from '../../mystery/analytics/index.ts';
+import { adviceScorecard, lostPts, predictionSummary } from '../../mystery/analytics/insights.ts';
 import { ABILITY_KEY_LABEL, type RunResult } from '../../mystery/types.ts';
 import { ThingSigil } from '../components/ThingSigil.tsx';
 import { Icon, type IconName } from '../Icon.tsx';
@@ -122,15 +124,91 @@ function caseRows(r: ResultsAnalytics): DiagnosticItem[] {
   return [...outcome, { ...missed[0]!, text, evidenceSeq: missed[0]!.evidenceSeq }];
 }
 
+/**
+ * Analytics v2: the panel shows case reasons, then "Why you lost points" (≤ 5 one-line items, biggest first), then the
+ * stealth causes + pattern. Its height depends on the screen and the case text below, so whole rows that would not fit
+ * are dropped (pattern first, then causes, then the smallest points-lost items, cases last) — the panel never clips.
+ * `data-drop` ranks the order (lower = dropped first); SSR / tests render every row.
+ */
+export function diagnosticDropRanks(nCases: number, nLost: number, nCauses: number, pattern: boolean): { cases: number[]; lost: number[]; causes: number[]; pattern: number | null } {
+  return {
+    pattern: pattern ? 0 : null,
+    causes: Array.from({ length: nCauses }, (_, i) => 1 + (nCauses - 1 - i)),
+    lost: Array.from({ length: nLost }, (_, i) => 100 + (nLost - 1 - i)),
+    cases: Array.from({ length: nCases }, (_, i) => 200 + (nCases - 1 - i)),
+  };
+}
+
+/** Layout effect in the browser, plain effect under SSR (static markup in tests renders every row). */
+const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
+/** Drops `[data-drop]` rows (lowest rank first) until the content ends inside the layer panel; refits on resize. */
+function useFitRows(ref: RefObject<HTMLDivElement | null>, key: string): void {
+  useIsoLayoutEffect(() => {
+    const root = ref.current;
+    const panel = root?.closest<HTMLElement>('.layer-panel');
+    if (!root || !panel) return;
+    const fit = () => {
+      const els = [...root.querySelectorAll<HTMLElement>('[data-drop]')];
+      for (const e of els) e.style.display = '';
+      const head = root.querySelector<HTMLElement>('.lp-lost__head');
+      if (head) head.style.display = '';
+      const limit = () => panel.getBoundingClientRect().bottom - (parseFloat(getComputedStyle(panel).paddingBottom) || 0) + 0.5;
+      const bottom = () => Math.max(0, ...[...root.children].flatMap((c) => [c, ...c.querySelectorAll<HTMLElement>('li, p')])
+        .filter((x) => (x as HTMLElement).style.display !== 'none').map((x) => x.getBoundingClientRect().bottom));
+      for (const e of els.sort((a, b) => Number(a.dataset.drop) - Number(b.dataset.drop))) {
+        if (bottom() <= limit()) break;
+        e.style.display = 'none';
+      }
+      if (head) head.style.display = root.querySelector('.lp-row--lost:not([style*="none"])') ? '' : 'none';
+    };
+    fit();
+    // refit once the web fonts are in (the first pass may run with fallback metrics) and whenever the panel resizes
+    let alive = true;
+    void document.fonts?.ready.then(() => alive && fit());
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => fit()) : null;
+    ro?.observe(panel);
+    window.addEventListener('resize', fit);
+    return () => {
+      alive = false;
+      ro?.disconnect();
+      window.removeEventListener('resize', fit);
+    };
+  }, [ref, key]);
+}
+
 function Diagnostic({ r }: { r: ResultsAnalytics }) {
   const d = r.diagnostic;
   const end = Math.max(1, r.descriptive.activeTimeS, ...d.timeline.map((m) => m.t));
   const cases = caseRows(r);
-  const room = Math.max(1, 4 - cases.length);
-  const causes = d.top.slice(0, d.topPattern ? Math.max(0, room - 1) : room);
-  const rows = [...cases, ...causes, ...(d.topPattern && causes.length < room ? [d.topPattern] : [])].slice(0, 4);
+  const lost = (d.pointsLost ?? []).slice(0, 5);
+  let rows: DiagnosticItem[];
+  let after: DiagnosticItem[] = [];
+  if (lost.length === 0) {
+    const room = Math.max(1, 4 - cases.length);
+    const causes = d.top.slice(0, d.topPattern ? Math.max(0, room - 1) : room);
+    rows = [...cases, ...causes, ...(d.topPattern && causes.length < room ? [d.topPattern] : [])].slice(0, 4);
+  } else {
+    rows = cases.slice(0, 2);
+    after = [...d.top.slice(0, 3), ...(d.topPattern ? [d.topPattern] : [])];
+  }
+  // drop ranks over everything shown (rows = cases + causes [+ pattern] without points lost)
+  const all = [...rows, ...after];
+  const isCase = (it: DiagnosticItem) => it.kind === 'case';
+  const causeItems = all.filter((it) => !isCase(it) && it.kind !== 'pattern');
+  const ranks = diagnosticDropRanks(all.filter(isCase).length, lost.length, causeItems.length, all.some((it) => it.kind === 'pattern'));
+  const rankOf = (it: DiagnosticItem) => it.kind === 'pattern' ? ranks.pattern! : isCase(it) ? ranks.cases[all.filter(isCase).indexOf(it)]! : ranks.causes[causeItems.indexOf(it)]!;
+  const ref = useRef<HTMLDivElement>(null);
+  useFitRows(ref, `${all.map((it) => it.code + it.t).join('|')}#${lost.map((x) => x.text).join('|')}`);
+  const row = (it: DiagnosticItem) => (
+    <li key={`${it.kind}-${it.t}-${it.code}`} className="lp-row" data-kind={it.kind} data-drop={rankOf(it)}>
+      <span className={`lp-badge lp-badge--${it.kind}`}>{it.kind === 'cause' ? 'Cause' : it.kind === 'case' ? 'Case' : '≈ Pattern'}</span>
+      {/* the service's text already starts with the m:ss time */}
+      <span className="lp-row__text">{it.text}</span>
+    </li>
+  );
   return (
-    <div className="lp-diag">
+    <div className="lp-diag" ref={ref}>
       <svg className="lp-timeline" viewBox="0 0 380 40" preserveAspectRatio="none" role="img" aria-label="Timeline of this run" data-testid="diag-timeline">
         <line x1="0" y1="20" x2="380" y2="20" className="lp-axis" />
         {d.timeline.map((m) => {
@@ -142,18 +220,26 @@ function Diagnostic({ r }: { r: ResultsAnalytics }) {
             : <rect key={m.seq} x={x - 1} y={8} width={2} height={24} className={`lp-m lp-m--${g.cls}`} />;
         })}
       </svg>
-      {rows.length === 0 ? (
+      {rows.length === 0 && lost.length === 0 && after.length === 0 ? (
         <p className="lp-line text-2">Case solved and no Hyde alerts were caused this run.</p>
       ) : (
-        <ul className="lp-rows">
-          {rows.map((it) => (
-            <li key={`${it.kind}-${it.t}-${it.code}`} className="lp-row" data-kind={it.kind}>
-              <span className={`lp-badge lp-badge--${it.kind}`}>{it.kind === 'cause' ? 'Cause' : it.kind === 'case' ? 'Case' : '≈ Pattern'}</span>
-              {/* the service's text already starts with the m:ss time */}
-              <span className="lp-row__text">{it.text}</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          {rows.length > 0 && <ul className="lp-rows">{rows.map(row)}</ul>}
+          {lost.length > 0 && (
+            <div data-testid="points-lost" aria-label="Why you lost points">
+              <p className="lp-lost__head">Why you lost points</p>
+              <ul className="lp-rows lp-rows--lost">
+                {lost.map((x, i) => (
+                  <li key={`${i}-${x.text}`} className="lp-row lp-row--lost" data-kind="points" data-drop={ranks.lost[i]}>
+                    <span className="lp-badge lp-badge--pts num">{lostPts(x.pts)}</span>
+                    <span className="lp-row__text">{x.text}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {after.length > 0 && <ul className="lp-rows">{after.map(row)}</ul>}
+        </>
       )}
     </div>
   );
@@ -166,7 +252,7 @@ function Predictive({ r }: { r: ResultsAnalytics }) {
   const y = (v: number) => 86 - v * 80;
   const pts = p.series.map((s) => `${x(s.t).toFixed(1)},${y(s.p).toFixed(1)}`).join(' ');
   return (
-    <div className="lp-pred">
+    <div className={`lp-pred${p.checks?.length ? ' has-checks' : ''}`}>
       <svg className="lp-spark" viewBox="0 0 380 90" preserveAspectRatio="none" role="img" aria-label="Detection risk over the run" data-testid="pred-sparkline">
         <rect x="0" y={y(1)} width="380" height={y(0.66) - y(1)} className="lp-band-high" />
         <text x="4" y={y(1) + 11} className="lp-band-label">High</text>
@@ -175,12 +261,26 @@ function Predictive({ r }: { r: ResultsAnalytics }) {
         {p.detections.map((t, i) => <path key={i} d={`M${x(t)} ${y(0) + 2} l0 -10`} className="lp-tick" />)}
       </svg>
       <p className="lp-label" data-testid="pred-label">{p.label}</p>
+      <PredictionScore r={r} />
     </div>
+  );
+}
+
+/** Analytics v2: how the DISPLAYED odds of the searched sites held up ("Thing's predictions: 3 of 4 right"). */
+function PredictionScore({ r }: { r: ResultsAnalytics }) {
+  const s = predictionSummary(r.predictive.checks);
+  if (!s) return null;
+  return (
+    <p className="lp-line lp-score" data-testid="results-predictions" title="Right = shown ≥ 50% and found, or < 50% and empty">
+      {s.text}{s.calibration && <span className="lp-score__cal"> · {s.calibration}</span>}
+    </p>
   );
 }
 
 function Prescriptive({ r }: { r: ResultsAnalytics }) {
   const p = r.prescriptive;
+  // analytics v2: compact scorecard from the follow-up records (after, never "because"); none → the summary sentence
+  const score = adviceScorecard(p.summary);
   return (
     <div className="lp-presc">
       {p.rows.length > 0 && (
@@ -194,7 +294,11 @@ function Prescriptive({ r }: { r: ResultsAnalytics }) {
           ))}
         </ul>
       )}
-      <p className="lp-line" data-testid="presc-summary">{p.summary.text}</p>
+      {score ? (
+        <p className="lp-line lp-score" data-testid="results-advice-card"><span className="lp-score__k">Thing&rsquo;s advice</span> {score}</p>
+      ) : (
+        <p className="lp-line" data-testid="presc-summary">{p.summary.text}</p>
+      )}
       <p className="lp-engine">Advice from a {p.engine}.</p>
     </div>
   );
