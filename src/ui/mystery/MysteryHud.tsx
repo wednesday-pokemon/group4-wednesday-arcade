@@ -12,6 +12,7 @@ import { crackChip, directorChip, hydeChip, type ThreatChipView } from '../../ap
 import { TALLY_COPY } from '../../app/mystery/hud/tally.ts';
 import { Icon } from '../Icon.tsx';
 import { ClueCard } from './hud/ClueCard.tsx';
+import { LayerBadge } from './hud/LayerBadge.tsx';
 import { Compass } from './hud/Compass.tsx';
 import { Minimap } from './hud/Minimap.tsx';
 import { OddsPanel } from './hud/OddsPanel.tsx';
@@ -241,7 +242,7 @@ function VitalsPanel({ hud, tutorial }: { hud: MysteryHudModel; tutorial: boolea
   const seg = Math.round(hud.noise.level * 10);
   return (
     <section className="mhud-panel mhud-vitals" aria-label="Your condition" data-testid="hud-vitals">
-      <Icon name="barChart" className="mhud-vitals__layer" />
+      <span className="mhud-vitals__layer"><LayerBadge layer="desc" /></span>
       <div className={`mhud-bar mhud-bar--hp${low ? ' is-low' : ''}`}>
         <span className="caps">HP</span>
         <span className="mhud-bar__track"><span className="mhud-bar__fill" style={{ width: `${hpPct}%` }} /></span>

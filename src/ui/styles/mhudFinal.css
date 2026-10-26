@@ -172,8 +172,13 @@
 .mhud-right .mhud-keystrip { width: 16rem; margin-left: -2rem; }
 
 /* ---------- §1b Vitals (272×100 at 16,652): Tally row 3; layer edge + icon ---------- */
-.mhud-vitals { min-height: 6.25rem; border-top: 2px solid var(--c-layer-desc); }
-.mhud-vitals__layer { position: absolute; top: -0.55rem; right: 0.75rem; width: 1.1rem; height: 1.1rem; padding: 1px 2px; color: var(--c-layer-desc); background: var(--c-hud); border-radius: var(--r-sm); }
+.mhud-vitals { width: 18rem; min-height: 6.25rem; border-top: 2px solid var(--c-layer-desc); }
+/* HP row: the bar flexes so "Caught ○○" always fits inside the panel (the fixed 7.5 rem track overflowed it) */
+.mhud-vitals .mhud-bar { grid-template-columns: 2.6rem minmax(3rem, 1fr) auto auto; }
+/* the panel's layer badge (1 · Descriptive) sits INSIDE the panel at the right of the NOISE row (free space), never
+   across the border; the panel is 1 rem wider than v2 so "Caught ○○" no longer runs past its right edge */
+.mhud-vitals__layer { position: absolute; right: 0.6rem; top: 50%; transform: translateY(-50%); display: flex; line-height: 0; pointer-events: none; }
+.mhud-vitals__layer .mhud-layer { margin-right: 0; }
 .mhud-tally { display: flex; align-items: center; gap: 0.55rem; height: 1.5rem; font-size: var(--fs-xs); color: var(--c-text); white-space: nowrap; }
 .mhud-tally__head { font-size: var(--fs-xs); color: var(--c-text-muted); }
 .mhud-tally__item { display: inline-flex; align-items: center; gap: 0.2rem; }
