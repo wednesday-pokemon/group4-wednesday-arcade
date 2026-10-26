@@ -1,4 +1,4 @@
-// `/?mode=terminal&station=station_a|station_b` — the mystery journey as a LIVE station kiosk.
+// `/?mode=terminal&station=station_a|station_b|station_c` — the mystery journey as a LIVE station kiosk.
 // Boot: Supabase configured? → station sign-in gate (the shared StationGate; station account bound to THIS station)
 // → MysteryApp with the live controller (server-issued session / offer / verified result). Unconfigured or
 // unreachable live mode never falls back silently: the gate offers an explicit "Play LOCAL DEMO (unverified)".

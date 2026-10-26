@@ -27,7 +27,7 @@ import {
   browserOnline, connectionFrom, openManagedChannel, type ChannelPhase, type ManagedChannel, type OnlineSource, type RealtimeHost,
 } from './realtime.ts';
 
-export const BOARD_STATIONS: readonly StationId[] = ['station_a', 'station_b'];
+export const BOARD_STATIONS: readonly StationId[] = ['station_a', 'station_b', 'station_c'];
 
 export interface BoardStation {
   stationId: StationId;

@@ -15,7 +15,7 @@
 //                                                the previous v3.0 real-time rowing journey (kept reachable);
 //                                                `mode=play` is an alias
 //   /?legacy=1                                   legacy v2.5 decision race, LOCAL DEMO
-//   /?mode=terminal&station=station_a|station_b  MYSTERY station kiosk (mystery-v3.1), LIVE when .env is configured:
+//   /?mode=terminal&station=station_a|station_b|station_c  MYSTERY station kiosk (mystery-v3.1), LIVE when .env is configured:
 //                                                station sign-in gate → server-issued session/offer → verified result;
 //                                                the gate offers an explicit LOCAL DEMO when live is unavailable
 //   /?mode=terminal&station=..&legacy=1          legacy v2.5 race terminal (live when configured)
@@ -84,7 +84,7 @@ export function parseRoute(search: string): Route {
     if (isStationId(station)) {
       return params.get('legacy') === '1' ? { kind: 'terminal', stationId: station, forceLocal: false } : { kind: 'mystery_station', stationId: station };
     }
-    return { kind: 'invalid', message: `Unknown station "${station}". Use station_a or station_b.` };
+    return { kind: 'invalid', message: `Unknown station "${station}". Use station_a, station_b or station_c.` };
   }
   return { kind: 'invalid', message: `Unknown mode "${mode}". Use mode=mystery, mode=rowing, mode=terminal or mode=dashboard.` };
 }
@@ -96,5 +96,6 @@ function isNightshadeId(v: string | null): v is NightshadeId {
 export function stationLabel(stationId: StationId | 'local' | null): string {
   if (stationId === 'station_a') return 'Station A';
   if (stationId === 'station_b') return 'Station B';
+  if (stationId === 'station_c') return 'Station C';
   return 'Demo station';
 }

@@ -100,9 +100,16 @@ function LiveBoard({ services }: { services: MysteryBoardServices }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [scope, setScope] = useState<CaseScope>('all');
   useEffect(() => services.feed.subscribe(setSnap), [services]);
+  // Spectator: one player in focus at a time (tabs, or keys 1 / 2 / 3).
+  const [focus, setFocus] = useState(0);
   useHotkeys((key) => {
     if (key === 'escape' && drawerOpen) {
       setDrawerOpen(false);
+      return true;
+    }
+    const n = ['1', '2', '3'].indexOf(key);
+    if (n >= 0 && !drawerOpen) {
+      setFocus(n);
       return true;
     }
   });
@@ -158,9 +165,7 @@ function LiveBoard({ services }: { services: MysteryBoardServices }) {
       )}
 
       <div className="mdash__grid mdash__grid--cases mdash__grid--live" data-scope={agg.scope}>
-        {(snap?.stations ?? []).map((s, i) => (
-          <StationLiveCard key={s.stationId} view={liveStationView(s, now)} area={i === 0 ? 'mdash-a1' : 'mdash-a2'} testId={`station-live-${s.stationId}`} />
-        ))}
+        {snap && snap.stations.length > 0 && <PlayerSwitcher stations={snap.stations} now={now} focus={focus} onFocus={setFocus} />}
         {!snap && <section className="mdash-card mdash-a1"><p className="text-2">Connecting…</p></section>}
         <Standings rows={standingRows} loaded={snap?.loaded ?? false} scope={caseScope} />
 
@@ -177,6 +182,31 @@ function LiveBoard({ services }: { services: MysteryBoardServices }) {
       </div>
       {drawerOpen && <OperatorDrawer services={services.drawerServices} onClose={() => setDrawerOpen(false)} />}
     </main>
+  );
+}
+
+/** Three player tabs (status at a glance) above the focused player's live card. */
+function PlayerSwitcher({ stations, now, focus, onFocus }: { stations: BoardStation[]; now: number; focus: number; onFocus: (i: number) => void }) {
+  const i = Math.min(focus, stations.length - 1);
+  const views = stations.map((s) => liveStationView(s, now));
+  const current = stations[i]!;
+  return (
+    <div className="mdash-a12 mdash-players" data-testid="player-switcher">
+      <div className="mdash-players__tabs" role="tablist" aria-label="Players">
+        {views.map((v, k) => (
+          <button
+            key={stations[k]!.stationId} type="button" role="tab" aria-selected={k === i}
+            className={`mdash-players__tab${k === i ? ' is-on' : ''}${v.chasing ? ' is-chase' : ''}`}
+            onClick={() => onFocus(k)} data-testid={`player-tab-${stations[k]!.stationId}`} data-phase={v.lost ? 'lost' : v.phase}
+          >
+            <kbd className="kcap">{k + 1}</kbd>
+            <span className="mdash-players__name">Player {k + 1}{v.nickname ? ` · ${v.nickname}` : ''}</span>
+            <span className="mdash-players__state">{v.chasing ? 'Chased!' : v.phaseText}</span>
+          </button>
+        ))}
+      </div>
+      <StationLiveCard key={current.stationId} view={views[i]!} area="mdash-players__card" testId={`station-live-${current.stationId}`} />
+    </div>
   );
 }
 

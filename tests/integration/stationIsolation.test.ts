@@ -25,7 +25,7 @@ describe('A03 station isolation (concurrent terminals, real engine)', () => {
     const stop = dashboard.services.dashboard.subscribe((s) => snaps.push(s));
     await settle();
 
-    const seen: Record<StationId, SessionView[]> = { station_a: [], station_b: [] };
+    const seen: Record<StationId, SessionView[]> = { station_a: [], station_b: [], station_c: [] };
     const nick = (st: StationId, i: number) => `${st === 'station_a' ? 'Alpha' : 'Bravo'} ${i}`;
     const run = async (st: StationId, page: typeof a, seed: number) => {
       const rand = lcg(seed);
@@ -58,11 +58,11 @@ describe('A03 station isolation (concurrent terminals, real engine)', () => {
     for (const snap of snaps) {
       for (const card of snap.stations) {
         const st = card.stationId as StationId;
-        if (card.sessionId) expect(ids[st].has(card.sessionId)).toBe(true);
+        if (card.sessionId) expect(ids[st as 'station_a' | 'station_b'].has(card.sessionId)).toBe(true); // station_c stays idle here
         if (card.nickname) expect(card.nickname.startsWith(st === 'station_a' ? 'Alpha' : 'Bravo')).toBe(true);
       }
       for (const r of [...snap.leaderboard, ...snap.defeated]) {
-        expect(ids[r.stationId as StationId].has(r.sessionId)).toBe(true);
+        expect(ids[r.stationId as 'station_a' | 'station_b'].has(r.sessionId)).toBe(true);
       }
     }
 
@@ -77,8 +77,8 @@ describe('A03 station isolation (concurrent terminals, real engine)', () => {
       if (r.status === 'completed') expect(r.finalScore).toBe(s.state.finalScore);
     }
     for (const card of last.stations) {
-      const lastOwn = server.sessionsOf(card.stationId as StationId).at(-1)!;
-      expect(card.sessionId).toBe(lastOwn.id);
+      const lastOwn = server.sessionsOf(card.stationId as StationId).at(-1);
+      expect(card.sessionId ?? null).toBe(lastOwn?.id ?? null); // station_c played nothing here: stays empty
     }
     stop();
   });
@@ -103,7 +103,7 @@ describe('A03 station isolation (concurrent terminals, real engine)', () => {
     const server = new FakeSupabaseServer();
     const a = await terminal(server, 'station_a');
     const b = await terminal(server, 'station_b');
-    const events: Record<StationId, string[]> = { station_a: [], station_b: [] };
+    const events: Record<StationId, string[]> = { station_a: [], station_b: [], station_c: [] };
     a.services.subscribeStation((e) => events.station_a.push(e.type));
     b.services.subscribeStation((e) => events.station_b.push(e.type));
     await settle();

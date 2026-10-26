@@ -143,7 +143,7 @@ if (-not $found) { Out-Check 'FAIL' 'Browser' 'no Chrome/Edge found' 'Install Ch
 # ---- 7b. Page zoom in the kiosk profiles (launch-kiosk.ps1 profiles). Ctrl+wheel / Ctrl+= by a visitor persists per host.
 $kioskRoot = Join-Path $env:LOCALAPPDATA 'RavenIslandKiosk'
 if (-not (Test-Path -LiteralPath $kioskRoot)) { Write-Host '[INFO] Browser zoom: no kiosk profile yet (launch the role once, then re-run this check)' -ForegroundColor DarkGray }
-foreach ($role in @('station_a', 'station_b', 'dashboard')) {
+foreach ($role in @('station_a', 'station_b', 'station_c', 'dashboard')) {
   $prefs = Join-Path $kioskRoot ($role + '\Default\Preferences')
   if (-not (Test-Path -LiteralPath $prefs)) { continue }
   $text = ''

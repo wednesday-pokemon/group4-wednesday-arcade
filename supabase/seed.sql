@@ -2,7 +2,8 @@
 -- core migration because `supabase db push` does not run this file. Idempotent.
 insert into public.stations (id, label) values
   ('station_a', 'Station A'),
-  ('station_b', 'Station B')
+  ('station_b', 'Station B'),
+  ('station_c', 'Station C')
 on conflict (id) do nothing;
 
 insert into public.station_status (station_id, label)

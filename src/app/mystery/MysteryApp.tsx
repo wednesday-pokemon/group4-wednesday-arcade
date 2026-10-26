@@ -59,7 +59,7 @@ import '../../ui/styles/mystery.css';
 
 const loadPlayView = () => import('./PlayView.tsx');
 const PlayView = lazy(loadPlayView);
-/** LOCAL DEMO station identity (live stations are station_a / station_b). */
+/** LOCAL DEMO station identity (live stations are station_a / station_b / station_c). */
 const LOCAL_STATION_ID = 'local';
 const HomeBackdrop = lazy(() => import('./HomeBackdrop.tsx'));
 

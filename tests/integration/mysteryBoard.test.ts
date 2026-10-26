@@ -51,7 +51,7 @@ describe('mystery live board', () => {
     const stop = board.services.feed.subscribe((s) => snaps.push(s));
     await settle();
     expect(snaps.at(-1)!.loaded).toBe(true);
-    expect(snaps.at(-1)!.stations.map((s) => s.row?.status)).toEqual(['idle', 'idle']);
+    expect(snaps.at(-1)!.stations.map((s) => s.row?.status)).toEqual(['idle', 'idle', 'idle']);
 
     const a = await kiosk(server, 'station_a');
     const b = await kiosk(server, 'station_b');
@@ -60,7 +60,7 @@ describe('mystery live board', () => {
     b.controller.menuStatus(status('station_b', 'name'));
     await settle();
     let last = snaps.at(-1)!;
-    expect(last.stations.map((s) => [s.heartbeat?.phase, s.signalLost])).toEqual([['name', false], ['name', false]]);
+    expect(last.stations.map((s) => [s.heartbeat?.phase, s.signalLost])).toEqual([['name', false], ['name', false], [undefined, false]]); // station_c idle
 
     const dnf = await play(server, b, 'station_b', MYSTERY_DNF_SEED, 'Bravo Bo', 'careless', MYSTERY_DNF_CASE);
     const fin = await play(server, a, 'station_a', MYSTERY_FINISH_SEED, 'Alpha Al', 'stealthy', 'crypt_last_witness');

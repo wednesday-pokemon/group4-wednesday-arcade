@@ -100,6 +100,7 @@ export function OperatorDrawer({ services, onClose }: { services: AppServices; o
               <>
                 <Button variant="danger" icon="reset" onClick={() => setPending({ kind: 'reset', stationId: 'station_a' })} data-testid="btn-reset-a">Reset Station A</Button>
                 <Button variant="danger" icon="reset" onClick={() => setPending({ kind: 'reset', stationId: 'station_b' })} data-testid="btn-reset-b">Reset Station B</Button>
+                <Button variant="danger" icon="reset" onClick={() => setPending({ kind: 'reset', stationId: 'station_c' })} data-testid="btn-reset-c">Reset Station C</Button>
               </>
             ) : (
               <>

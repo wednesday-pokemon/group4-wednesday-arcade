@@ -124,7 +124,7 @@ describe('LIVE dashboard feed against the fake project', () => {
     await settle();
     expect(snaps.at(-1)!.connection).toBe('connected');
     expect(snaps.at(-1)!.mode).toBe('live');
-    expect(snaps.at(-1)!.stations.map((s) => s.status)).toEqual(['idle', 'idle']);
+    expect(snaps.at(-1)!.stations.map((s) => s.status)).toEqual(['idle', 'idle', 'idle']);
 
     const terminal = openPage(server, 'station_a');
     await terminal.services.auth.signIn(stationCredentials('station_a').email, stationCredentials('station_a').password);
@@ -220,7 +220,7 @@ describe('LIVE dashboard feed against the fake project', () => {
     const before = server.restRequests.length;
     await vi.advanceTimersByTimeAsync(1000);
     expect(server.restRequests.length).toBeGreaterThan(before); // polled
-    expect(snaps.at(-1)!.stations).toHaveLength(2);
+    expect(snaps.at(-1)!.stations).toHaveLength(3);
     dashboard.online.set(false);
     expect(snaps.at(-1)!.connection).toBe('offline');
   });

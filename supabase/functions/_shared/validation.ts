@@ -187,7 +187,7 @@ export function sanitizeNote(raw: string): string {
 export function parseAdminReset(raw: unknown): AdminResetBody {
   const body = asObject(raw);
   onlyKeys(body, ['stationId', 'reason', 'actionId', 'scope']);
-  if (!isStationId(body.stationId)) invalid('stationId', 'stationId must be "station_a" or "station_b"');
+  if (!isStationId(body.stationId)) invalid('stationId', 'stationId must be "station_a", "station_b" or "station_c"');
   if (typeof body.reason !== 'string' || body.reason.length > 400) invalid('reason', 'reason must be a short string');
   const note = sanitizeNote(body.reason);
   if (note.length < 3 || note.length > 200) invalid('reason', 'reason must be 3-200 characters');

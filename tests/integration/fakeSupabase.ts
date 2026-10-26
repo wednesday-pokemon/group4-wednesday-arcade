@@ -311,7 +311,7 @@ function seededRandom(seed: number): () => number {
   };
 }
 
-const LABELS: Record<StationId, string> = { station_a: 'Station A', station_b: 'Station B' };
+const LABELS: Record<StationId, string> = { station_a: 'Station A', station_b: 'Station B', station_c: 'Station C' };
 
 export class FakeSupabaseServer {
   readonly realtime = new FakeRealtime();
@@ -361,8 +361,8 @@ export class FakeSupabaseServer {
 
   constructor(opts: { origin?: string } = {}) {
     this.origin = opts.origin ?? FAKE_URL;
-    for (const id of ['station_a', 'station_b'] as const) this.stationRows.set(id, this.idleRow(id, null, 0));
-    for (const id of ['station_a', 'station_b'] as const) this.mysteryStationRows.set(id, this.mysteryIdleRow(id, null, 0));
+    for (const id of ['station_a', 'station_b', 'station_c'] as const) this.stationRows.set(id, this.idleRow(id, null, 0));
+    for (const id of ['station_a', 'station_b', 'station_c'] as const) this.mysteryStationRows.set(id, this.mysteryIdleRow(id, null, 0));
     this.addUser({ id: '00000000-0000-4000-8000-00000000000a', email: 'station-a@regatta.test', password: 'pw-A-123456789', role: 'station', stationId: 'station_a' });
     this.addUser({ id: '00000000-0000-4000-8000-00000000000b', email: 'station-b@regatta.test', password: 'pw-B-123456789', role: 'station', stationId: 'station_b' });
     this.addUser({ id: '00000000-0000-4000-8000-0000000000ff', email: 'ops@regatta.test', password: 'pw-O-123456789', role: 'operator', stationId: null });

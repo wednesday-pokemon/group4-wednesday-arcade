@@ -51,5 +51,5 @@ export function isLegIndex(x: unknown): x is LegIndex {
 }
 
 export function isStationId(x: unknown): x is StationId {
-  return x === 'station_a' || x === 'station_b';
+  return x === 'station_a' || x === 'station_b' || x === 'station_c';
 }

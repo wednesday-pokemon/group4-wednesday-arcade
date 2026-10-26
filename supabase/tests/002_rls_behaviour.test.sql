@@ -74,7 +74,7 @@ from unnest(array['stations', 'app_users', 'sessions', 'session_secrets', 'leg_r
 select throws_ok('select id from public.sessions', '42501', null, 'anon cannot read sessions');
 select throws_ok('select seed from public.session_secrets', '42501', null, 'anon cannot read session_secrets');
 select throws_ok('select id from public.leg_results', '42501', null, 'anon cannot read leg_results');
-select is((select count(*)::int from public.station_status), 2, 'anon reads both station_status rows');
+select is((select count(*)::int from public.station_status), 3, 'anon reads all three station_status rows');
 select lives_ok('select * from public.verified_leaderboard', 'anon reads verified_leaderboard');
 select throws_ok($$select public.commit_session_transition('11111111-1111-4111-8111-111111111111', 1, 'evil_action_1', 'abandon', '{}', '{}', null, '{}')$$,
   '42501', null, 'anon cannot execute commit_session_transition');

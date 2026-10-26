@@ -13,7 +13,7 @@ export type EggTier = 'none' | 'common' | 'rare' | 'legendary';
 export type SessionStatus = 'in_progress' | 'completed' | 'dnf' | 'abandoned';
 export type SessionPhase = 'awaiting_route' | 'awaiting_egg' | 'complete';
 export type DnfReason = 'second_catch' | 'hp_depleted';
-export type StationId = 'station_a' | 'station_b';
+export type StationId = 'station_a' | 'station_b' | 'station_c';
 
 export type CharacterId =
   | 'wednesday' | 'enid' | 'bianca' | 'xavier' | 'ajax' | 'yoko'

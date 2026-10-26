@@ -22,7 +22,7 @@ interface Profile {
 }
 
 function stationName(id: StationId | null): string {
-  return id === 'station_a' ? 'Station A' : id === 'station_b' ? 'Station B' : 'no station';
+  return id === 'station_a' ? 'Station A' : id === 'station_b' ? 'Station B' : id === 'station_c' ? 'Station C' : 'no station';
 }
 
 /** Why `profile` may not use a page scoped to `scope` (null = dashboard), or null when it may. */

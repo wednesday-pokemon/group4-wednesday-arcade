@@ -27,7 +27,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('station_a', 'station_b', 'dashboard')]
+  [ValidateSet('station_a', 'station_b', 'station_c', 'dashboard')]
   [string]$Role,
 
   # Where dist/ is served. Default: $env:RAVEN_BASE_URL, else http://localhost:4173 (scripts\kiosk\serve-dist.cmd).

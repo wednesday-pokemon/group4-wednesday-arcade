@@ -118,7 +118,7 @@ select ok(exists (select 1 from pg_constraint where conname = 'mystery_offered_d
 select ok(exists (select 1 from pg_constraint where conname = 'mystery_results_pkey'), 'one mystery_results row per session');
 select ok(exists (select 1 from pg_indexes where indexname = 'mystery_sessions_one_open_per_station_idx'), 'one open mystery session per station');
 select ok(exists (select 1 from pg_indexes where indexname = 'mystery_events_one_terminal_idx'), 'at most one finish/dnf event per session');
-select is((select count(*)::int from public.mystery_station_status), 2, 'mystery_station_status has a row per station');
+select is((select count(*)::int from public.mystery_station_status), 3, 'mystery_station_status has a row per station (A, B, C)');
 select ok(not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename in (
     'mystery_sessions', 'mystery_events', 'mystery_offered_duos', 'mystery_forecasts', 'mystery_recommendations', 'mystery_session_actions')),
   'raw mystery tables are never published to Realtime');
@@ -132,7 +132,7 @@ from unnest(array['mystery_sessions', 'mystery_offered_duos', 'mystery_events', 
 select throws_ok('delete from public.mystery_results', '42501', null, 'anon cannot DELETE mystery_results');
 select throws_ok('update public.mystery_station_status set score = 999', '42501', null, 'anon cannot UPDATE mystery_station_status');
 select throws_ok('select seed from public.mystery_sessions', '42501', null, 'anon cannot read mystery seeds/sessions');
-select is((select count(*)::int from public.mystery_station_status), 2, 'anon reads both mystery station rows');
+select is((select count(*)::int from public.mystery_station_status), 3, 'anon reads all three mystery station rows');
 select lives_ok('select * from public.mystery_standings', 'anon reads mystery_standings');
 select throws_ok($$select public.mystery_finalize_session('a1111111-1111-4111-8111-111111111111', 'station_a', 1, '{}', '{}')$$,
   '42501', null, 'anon cannot execute mystery_finalize_session');

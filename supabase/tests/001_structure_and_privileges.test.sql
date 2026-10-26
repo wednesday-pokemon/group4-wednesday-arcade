@@ -103,7 +103,7 @@ select ok(exists (select 1 from pg_constraint where conname = 'session_actions_s
   'unique (session_id, action_id) on session_actions');
 select ok(exists (select 1 from pg_constraint where conname = 'leg_results_session_leg_key'),
   'unique (session_id, leg_index) on leg_results');
-select is((select count(*)::int from public.stations), 2, 'two stations seeded');
+select is((select count(*)::int from public.stations), 3, 'three stations seeded (A, B, C)');
 
 select * from finish();
 rollback;

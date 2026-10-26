@@ -86,7 +86,7 @@ describe('request validation', () => {
     expect(code(() => parseFinishSession({ sessionId: SID, actionId: ACT, reason: 'operator_reset' }))).toBe('INVALID_INPUT:422:reason');
     const admin = parseAdminReset({ stationId: 'station_b', reason: ' kid left\n<script>', actionId: ACT });
     expect(admin.reason).toBe('kid left script');
-    expect(code(() => parseAdminReset({ stationId: 'station_c', reason: 'stuck', actionId: ACT }))).toBe('INVALID_INPUT:422:stationId');
+    expect(code(() => parseAdminReset({ stationId: 'station_d', reason: 'stuck', actionId: ACT }))).toBe('INVALID_INPUT:422:stationId');
   });
   it('parses JSON text defensively', () => {
     expect(parseJsonText('')).toEqual({});
