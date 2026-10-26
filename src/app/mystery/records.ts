@@ -1,0 +1,117 @@
+// LOCAL DEMO persistence for the Laptop 1 mystery dashboard (until the Supabase deploy provides the live feed):
+//  - 'raven.mystery.records': finished / DNF sessions as analytics SessionRecords (events thinned exactly like the
+//    upload, capped at MAX_RECORDS newest), plus the nickname and end time for the standings;
+//  - 'raven.mystery.live': this station's live status (phase, duo, clues, egg, HP, Hyde, risk, advice), refreshed ~1 Hz.
+// Pure functions over an injected Storage so they are unit-testable. Never stores seeds or who was accused.
+import { thinForUpload } from '../../mystery/analytics/telemetry.ts';
+import type { SessionRecord } from '../../mystery/analytics/types.ts';
+import type { CaseId, CrackstoneMode, Duo, HydeMode, MysteryRulesVersion } from '../../mystery/types.ts';
+import { MYSTERY_RULES_VERSION } from '../../mystery/types.ts';
+
+export const RECORDS_KEY = 'raven.mystery.records';
+export const LIVE_KEY = 'raven.mystery.live';
+export const MAX_RECORDS = 200;
+
+type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null;
+
+export interface StoredRecord {
+  record: SessionRecord;
+  nickname: string;
+  stationId: string;
+  endedAt: string;
+  /** Scoring rules the run was played under (mystery-v4 boards never mix versions). Absent on older records. */
+  rulesVersion?: MysteryRulesVersion;
+}
+
+export function loadRecords(storage: Store): StoredRecord[] {
+  try {
+    const raw = storage?.getItem(RECORDS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as StoredRecord[]).filter((r) => r && typeof r === 'object' && r.record && Array.isArray(r.record.events)) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Thin + strip a record for storage (no seeds, no accusation details). */
+export function compactRecord(r: SessionRecord): SessionRecord {
+  const events = thinForUpload(r.events).map((e) => (e.type === 'accusation' && e.suspectId !== null ? { ...e, suspectId: 'redacted' as never, evidence: [] } : e));
+  return { ...r, events };
+}
+
+/** Adds (or replaces, by sessionId) a record, keeping the newest MAX_RECORDS. Shrinks further if the quota is hit. */
+export function appendRecord(storage: Store, rec: StoredRecord, max = MAX_RECORDS): StoredRecord[] {
+  // keep the rules version on the stored record (explicit, else the result's, else the current rules)
+  const rulesVersion = rec.rulesVersion ?? (rec.record.result as { rulesVersion?: MysteryRulesVersion } | null | undefined)?.rulesVersion ?? MYSTERY_RULES_VERSION;
+  const next = [...loadRecords(storage).filter((r) => r.record.sessionId !== rec.record.sessionId), { ...rec, rulesVersion, record: compactRecord(rec.record) }].slice(-max);
+  let keep = next;
+  for (;;) {
+    try {
+      storage?.setItem(RECORDS_KEY, JSON.stringify(keep));
+      return keep;
+    } catch {
+      if (keep.length <= 1) return keep;
+      keep = keep.slice(Math.ceil(keep.length / 4)); // quota: drop the oldest quarter and retry
+    }
+  }
+}
+
+export function clearRecords(storage: Store): void {
+  try {
+    storage?.removeItem(RECORDS_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export type LivePhase = 'idle' | 'name' | 'duo' | 'tutorial' | 'investigating' | 'carrying' | 'accusing' | 'results' | 'dnf';
+
+export interface LiveStatus {
+  stationId: string;
+  phase: LivePhase;
+  nickname: string;
+  duo: Duo | null;
+  /** The session's assigned case (public; never the answer). */
+  caseId?: CaseId | null;
+  clues: number;
+  egg: { state: string; tier: string | null; security: number } | null;
+  hp: number | null;
+  catches: number | null;
+  hydeMode: HydeMode | null;
+  risk: { p: number; label: string } | null;
+  advice: { text: string; followed: boolean | null } | null;
+  activeTimeS: number | null;
+  updatedAt: number;
+  /** Joseph Crackstone (UX_ENEMIES §8; optional — older stations omit it): in this case? his public MODE (never his position). */
+  crackstonePresent?: boolean;
+  crackstoneMode?: CrackstoneMode | null;
+  /** Chase onsets per enemy (frontend, UX_ENEMIES §8 "Chases H2 · C1"; optional). */
+  chasesHyde?: number;
+  chasesCrack?: number;
+}
+
+export function writeLive(storage: Store, s: LiveStatus): void {
+  try {
+    storage?.setItem(LIVE_KEY, JSON.stringify(s));
+  } catch {
+    // ignore
+  }
+}
+
+export function readLive(storage: Store): LiveStatus | null {
+  try {
+    const raw = storage?.getItem(LIVE_KEY);
+    return raw ? (JSON.parse(raw) as LiveStatus) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function browserStorage(): Store {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}

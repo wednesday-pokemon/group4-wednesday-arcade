@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-pt/
+.env
+.env.local
+*.log
+test-results/
+playwright-report/
+output/
+supabase/.temp/
+.vscode/
+data/synthetic/
+
+# client documents: kept local, not for the public repo
+/Escape_from_Raven_Island_*.pdf

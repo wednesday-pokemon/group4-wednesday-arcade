@@ -1,0 +1,196 @@
+{
+  "source": "https://pokemon-3d-api.onrender.com/v1/pokemon",
+  "fetchedAt": "2026-10-21T14:34:35.764Z",
+  "note": "Community Pokémon 3D API models (github.com/Pokemon-3D-api/assets, MIT pipeline; models originate from Sketchfab). Pokémon designs © Nintendo / Creatures Inc. / GAME FREAK inc. / The Pokémon Company — used for a non-commercial school event; clear rights before any public use (D-36).",
+  "models": {
+    "94": {
+      "file": "94.glb",
+      "dexId": 94,
+      "species": "gengar",
+      "form": "regular",
+      "name": "Gengar",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/94.glb",
+      "bytes": 47372,
+      "sha256": "14f689ea8609d9669504b7fb4b4a97c7a50bf997ae9bdc3df3101901d33b13ef"
+    },
+    "200": {
+      "file": "200.glb",
+      "dexId": 200,
+      "species": "misdreavus",
+      "form": "regular",
+      "name": "Misdreavus",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/200.glb",
+      "bytes": 137348,
+      "sha256": "3ff9955771873cc584030560ce3e4e2f934d8d5930ac423d4743d0652211287e"
+    },
+    "302": {
+      "file": "302.glb",
+      "dexId": 302,
+      "species": "sableye",
+      "form": "regular",
+      "name": "Sableye",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/302.glb",
+      "bytes": 377180,
+      "sha256": "287a6bbc93834da962c3fe5a52410bfd683183498b04d2bbc40cef505fcd5121"
+    },
+    "426": {
+      "file": "426.glb",
+      "dexId": 426,
+      "species": "drifblim",
+      "form": "regular",
+      "name": "Drifblim",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/426.glb",
+      "bytes": 18148,
+      "sha256": "4828ae2a8f55789e7d77b87580bbd7c3018e31c78ba8e7870b4202d28f1584ff"
+    },
+    "477": {
+      "file": "477.glb",
+      "dexId": 477,
+      "species": "dusknoir",
+      "form": "regular",
+      "name": "Dusknoir",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/477.glb",
+      "bytes": 19360,
+      "sha256": "8504395ed16b457af2bcc8e2fa52ec90dd1d17eb6958a028c55f3c0ec8256120"
+    },
+    "478": {
+      "file": "478.glb",
+      "dexId": 478,
+      "species": "froslass",
+      "form": "regular",
+      "name": "Froslass",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/478.glb",
+      "bytes": 89136,
+      "sha256": "66353086f5aff42db99e35fbc351c96e0298ca38d9bf2ead117a4f16bdc51efb"
+    },
+    "593": {
+      "file": "593.glb",
+      "dexId": 593,
+      "species": "jellicent",
+      "form": "regular",
+      "name": "Jellicent",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/593.glb",
+      "bytes": 18248,
+      "sha256": "43dc6d2d12d28a0b8206fc6d4e2725a65d23b8fcccd1a1da7ba967321be5c421"
+    },
+    "609": {
+      "file": "609.glb",
+      "dexId": 609,
+      "species": "chandelure",
+      "form": "regular",
+      "name": "Chandelure",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/609.glb",
+      "bytes": 18428,
+      "sha256": "bcd2dbdbdd3bf4f18ac7d37e7c7cefcbd6f6461787cdc2bf052cd000f4836f34"
+    },
+    "681": {
+      "file": "681.glb",
+      "dexId": 681,
+      "species": "aegislash",
+      "form": "regular",
+      "name": "Aegislash",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/681.glb",
+      "bytes": 82092,
+      "sha256": "fdd70dee1d0ff63cd0c6055065473f8e4622a7b7ca2d8897e66f4c9e7219bfe2"
+    },
+    "709": {
+      "file": "709.glb",
+      "dexId": 709,
+      "species": "trevenant",
+      "form": "regular",
+      "name": "Trevenant",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/709.glb",
+      "bytes": 90648,
+      "sha256": "908dc7a81b44525a30d470062d25013f2f83b9181deaed7c81d947a83a1e5a1d"
+    },
+    "724": {
+      "file": "724.glb",
+      "dexId": 724,
+      "species": "decidueye",
+      "form": "regular",
+      "name": "Decidueye",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/724.glb",
+      "bytes": 166068,
+      "sha256": "44870fe921506ae3180b8be5e15f337e62ed9c697f7a5ac2aff1d03d172e8440"
+    },
+    "781": {
+      "file": "781.glb",
+      "dexId": 781,
+      "species": "dhelmise",
+      "form": "regular",
+      "name": "Dhelmise",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/781.glb",
+      "bytes": 26980,
+      "sha256": "4f35eb5ff385860a2fcc0d13725b406571d1632a89f8ae0e65a106d194565167"
+    },
+    "887": {
+      "file": "887.glb",
+      "dexId": 887,
+      "species": "dragapult",
+      "form": "regular",
+      "name": "Dragapult",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/887.glb",
+      "bytes": 691716,
+      "sha256": "c8d96655fff9b9a0c5516ddb319c0b921478465f42626227bb17476055be6761"
+    },
+    "902": {
+      "file": "902.glb",
+      "dexId": 902,
+      "species": "basculegion",
+      "form": "regular",
+      "name": "Basculegion",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/902.glb",
+      "bytes": 280496,
+      "sha256": "39f051712b7420d5926363e18505622ae70ded21e9067c5eb30db8141b604fd7"
+    },
+    "937": {
+      "file": "937.glb",
+      "dexId": 937,
+      "species": "ceruledge",
+      "form": "regular",
+      "name": "Ceruledge",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/937.glb",
+      "bytes": 26888,
+      "sha256": "1fc1b606bcead86fdb681c353e36f0204fe8823445ab9a2af2e3320aeb87968f"
+    },
+    "1000": {
+      "file": "1000.glb",
+      "dexId": 1000,
+      "species": "gholdengo",
+      "form": "regular",
+      "name": "Gholdengo",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/regular/1000.glb",
+      "bytes": 10923232,
+      "sha256": "c02bb652f647881cfd7a2187b3108f6857d85f4ef7110d09dc5a366e0a5ab73f"
+    },
+    "105-alolan": {
+      "file": "105-alolan.glb",
+      "dexId": 105,
+      "species": "marowak",
+      "form": "alolan",
+      "name": "Alolan Marowak",
+      "sourceUrl": "https://raw.githubusercontent.com/Pokemon-3D-api/assets/main/models/opt/alolan/105.glb",
+      "bytes": 31204,
+      "sha256": "2648d2bad8d15c1ede881f763f7f188d09201c6221089f4610810caa5bef7c28"
+    }
+  },
+  "partners": {
+    "gengar": "94",
+    "alolan_marowak": "105-alolan",
+    "misdreavus": "200",
+    "sableye": "302",
+    "dusknoir": "477",
+    "drifblim": "426",
+    "froslass": "478",
+    "jellicent": "593",
+    "chandelure": "609",
+    "aegislash": "681",
+    "trevenant": "709",
+    "dhelmise": "781",
+    "decidueye": "724",
+    "dragapult": "887",
+    "basculegion": "902",
+    "ceruledge": "937",
+    "gholdengo": "1000"
+  }
+}

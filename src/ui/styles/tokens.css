@@ -1,0 +1,153 @@
+/* Design tokens — UX_SPEC §1 with the THEME.md font override (Cinzel display, Alegreya Sans body). */
+@import '@fontsource/cinzel/600.css';
+@import '@fontsource/cinzel/700.css';
+@import '@fontsource/alegreya-sans/400.css';
+@import '@fontsource/alegreya-sans/500.css';
+@import '@fontsource/alegreya-sans/700.css';
+
+/* Fluid root: 16px at 1366x768, 22.5px at 1920x1080; min() guards short/narrow windows. */
+html { font-size: clamp(15px, min(1.1713vw, 2.0833vh), 22.5px); }
+
+:root {
+  /* Surfaces */
+  --c-bg: #0b1020;
+  --c-surface-1: #161a3a;
+  --c-surface-2: #232857;
+  --c-hud: rgba(11, 16, 32, 0.86);
+  --c-scrim: rgba(6, 9, 20, 0.72);
+  --c-border: #2e3366;
+  --c-border-strong: #6b6aa8;
+
+  /* Text */
+  --c-text: #f3ecdc;
+  --c-text-2: #d4cbb5;
+  --c-text-muted: #a49fbf;
+  --c-ink: #0b1020;
+  /* Nevermore: Deadly Secrets wordmark only — cool "ghost-silver", distinct from the warm --c-text body ivory. */
+  --c-title-silver: #e3e2f2;
+
+  /* Accent & semantic */
+  --c-accent: #8b7cf6;
+  --c-accent-text: #b3a8ff;
+  --c-accent-soft: rgba(139, 124, 246, 0.16);
+  --c-lantern: #f5b04c;
+  --c-lantern-soft: rgba(245, 176, 76, 0.16);
+  --c-success: #6fd6a0;
+  --c-warning: #f5b04c;
+  --c-danger: #ff7b7b;
+  --c-danger-soft: rgba(255, 123, 123, 0.14);
+
+  /* Eggs */
+  --c-egg-none: #a49fbf;
+  --c-egg-common: #efe6cc;
+  --c-egg-rare: #4fd8e8;
+  --c-egg-legendary: #f2c94c;
+
+  /* Overhaul HUD encoding (UX_OVERHAUL): red = the Hyde only · lantern = objective · violet = clues · ivory = the egg ·
+     cyan = prediction. Layer colours tag the four analytics in Thing's stack. */
+  --c-hyde: #e5484d;
+  --c-hyde-text: #ff8a8a;
+  --c-predict: #5cc0e6;
+  --c-layer-desc: #d4cbb5;
+  --c-layer-diag: #b3a8ff;
+  --c-layer-pred: #5cc0e6;
+  --c-layer-presc: #6fd6a0;
+  /* Enemy contract (UX_ENEMIES §0): Joseph Crackstone = sickly witch-light green (not teal: cyan-mint is prediction /
+     success / the rare egg). 12.2:1 on --c-bg; greyscale luminance .63 vs the Hyde red's .22. */
+  --c-crack: #a8e063;
+  --c-crack-text: #c4ef8a;
+  --c-crack-soft: rgba(168, 224, 99, 0.14);
+  /* Final (UX_FINAL §0): Slurp = orchid (7.0:1 / 10.9:1 on --c-bg); Principal Weems = pale ice, only inside her frame. */
+  --c-slurp: #d77be0;
+  --c-slurp-text: #eeb0f3;
+  --c-slurp-soft: rgba(215, 123, 224, 0.14);
+  --c-weems: #cfe0ff;
+  --c-weems-text: #e4edff;
+  --c-weems-glow: rgba(150, 190, 255, 0.45);
+  --font-weems: 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif;
+  --c-map-void: #070a14;
+  --c-map-ground: #121733;
+  --c-map-room: #1b2046;
+  --c-map-wall: #6b6aa8;
+  --c-map-water: #0d1d33;
+
+  /* Weather */
+  --c-wx-clear: #d9d4f2;
+  --c-wx-currents: #5cc0e6;
+  --c-wx-fog: #b8b3cc;
+
+  /* Typography (override: Cinzel / Alegreya Sans) */
+  --font-display: 'Cinzel', 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif;
+  --font-body: 'Alegreya Sans', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Cascadia Mono', Consolas, 'Courier New', monospace;
+
+  --fs-xs: clamp(14px, 0.9375rem, 21px);
+  --fs-sm: clamp(15px, 1.0625rem, 24px);
+  --fs-md: clamp(17px, 1.1875rem, 27px);
+  --fs-lg: clamp(21px, 1.5rem, 34px);
+  --fs-xl: clamp(28px, 2rem, 45px);
+  --fs-2xl: clamp(38px, 2.75rem, 62px);
+  --fs-3xl: clamp(58px, 4.25rem, 96px);
+  --fs-hero: clamp(80px, 6rem, 135px);
+  --lh-tight: 1.05; --lh-snug: 1.25; --lh-body: 1.4;
+  --fw-light: 300; --fw-regular: 400; --fw-semi: 600; --fw-bold: 700; --fw-black: 700;
+  --tracking-caps: 0.08em;
+
+  /* Spacing */
+  --sp-1: 0.25rem; --sp-2: 0.5rem; --sp-3: 0.75rem; --sp-4: 1rem;
+  --sp-5: 1.5rem; --sp-6: 2rem; --sp-7: 3rem; --sp-8: 4rem;
+  --page-pad: 1.5rem;
+  --gutter: 1rem;
+
+  /* Radii */
+  --r-sm: 4px; --r-md: 8px; --r-lg: 14px; --r-pill: 999px;
+
+  /* Elevation & glow */
+  --shadow-1: 0 2px 8px rgba(3, 5, 15, 0.5);
+  --shadow-2: 0 12px 32px rgba(3, 5, 15, 0.65), 0 0 0 1px rgba(139, 124, 246, 0.12);
+  --glow-accent: 0 0 0 1px rgba(139, 124, 246, 0.6), 0 0 20px rgba(139, 124, 246, 0.3);
+  --glow-lantern: 0 0 24px rgba(245, 176, 76, 0.4);
+  --glow-rare: 0 0 28px rgba(79, 216, 232, 0.45);
+  --glow-legendary: 0 0 36px rgba(242, 201, 76, 0.55);
+
+  /* Focus */
+  --c-focus: #f5b04c;
+  --focus-ring: 0 0 0 3px var(--c-bg), 0 0 0 6px var(--c-focus);
+
+  /* Motion */
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 300ms;
+  --dur-reveal: 700ms;
+  --stagger: 40ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* Layers */
+  --z-canvas: 0; --z-scrim: 10; --z-hud: 20; --z-overlay: 30; --z-modal: 40; --z-toast: 50;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-1: 0ms; --dur-2: 0ms; --dur-3: 0ms; --dur-reveal: 0ms; --stagger: 0ms; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+  }
+}
+.reduced-motion { --dur-1: 0ms; --dur-2: 0ms; --dur-3: 0ms; --dur-reveal: 0ms; --stagger: 0ms; }
+.reduced-motion *, .reduced-motion *::before, .reduced-motion *::after {
+  animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important;
+}
+
+.high-contrast {
+  --c-bg: #000; --c-surface-1: #000; --c-surface-2: #111; --c-hud: #000; --c-scrim: rgba(0, 0, 0, 0.95);
+  --c-border: #fff; --c-border-strong: #fff;
+  --c-text: #fff; --c-text-2: #fff; --c-text-muted: #e6e6e6; --c-title-silver: #fff;
+  --c-accent: #c4b8ff; --c-accent-text: #d9d2ff; --c-lantern: #ffc766; --c-focus: #ffff00;
+  --c-success: #8cf0b8; --c-danger: #ff9a9a;
+  --c-predict: #8fe3ff; --c-layer-pred: #8fe3ff; --c-hyde-text: #ffb4b4;
+  --c-crack: #c8ff80; --c-crack-text: #e0ffb8;
+  --c-slurp: #f0a8f5; --c-slurp-text: #ffd6ff; --c-weems: #fff; --c-weems-text: #fff;
+  --shadow-1: none; --shadow-2: none; --glow-accent: none; --glow-lantern: none; --glow-rare: none; --glow-legendary: none;
+}
+.high-contrast .panel, .high-contrast .card { border-width: 2px; }

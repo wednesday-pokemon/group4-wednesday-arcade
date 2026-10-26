@@ -1,0 +1,389 @@
+/* Overhaul HUD (UX_OVERHAUL §1–§9, §11). Boxes in rem from the 1366×768 spec (1rem = 16 px there; the fluid root in
+   tokens.css scales ×1.406 at 1920×1080, so the layout is identical in rem). Panels α ≥ .86; text ≥ 14 px (fs-xs). */
+
+/* ---------- shell ---------- */
+.mhud { position: absolute; inset: 0; pointer-events: none; z-index: var(--z-hud); font-family: var(--font-body); color: var(--c-text); }
+.mhud .kcap, kbd.kcap {
+  display: inline-grid; place-items: center; min-width: 1.6em; padding: 0.05em 0.35em; border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-sm); font: var(--fw-bold) 0.85em/1.25 var(--font-body); color: var(--c-text); background: var(--c-surface-2);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.45); opacity: 1;
+}
+.mhud-panel { position: absolute; background: var(--c-hud); border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--shadow-1); }
+@keyframes mhud-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* centred elements keep their translateX(-50%) while rising in */
+@keyframes mhud-rise-c { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes mhud-slide { from { opacity: 0; transform: translateX(-1rem); } to { opacity: 1; transform: none; } }
+
+/* ---------- 1 ObjectivePanel (16,16 · 288×84) ---------- */
+.mhud-objective { top: 1rem; left: 1rem; width: 18rem; height: 5.25rem; padding: 0.45rem 0.75rem; display: grid; grid-template-rows: auto auto auto; align-content: center; gap: 0.2rem; }
+.mhud-objective__text { font: var(--fw-semi) var(--fs-md) / 1.15 var(--font-display); color: var(--c-lantern); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mhud-objective__text.is-long { font-size: 0.95rem; letter-spacing: -0.01em; }
+.mhud-objective__clues { display: flex; align-items: center; gap: 0.35rem; font-size: var(--fs-xs); color: var(--c-text-2); }
+.mhud-objective__count { margin-left: 0.15rem; font-weight: var(--fw-bold); }
+.mhud-clue { display: inline-grid; place-items: center; width: 1.375rem; height: 1.375rem; border: 1.5px dashed var(--c-text-muted); border-radius: 4px; transform: rotate(45deg) scale(0.8); color: var(--c-text-muted); }
+.mhud-clue .icon { transform: rotate(-45deg); width: 0.85rem; height: 0.85rem; }
+.mhud-clue.is-on { border-style: solid; border-color: var(--c-lantern); color: var(--c-lantern); background: var(--c-lantern-soft); }
+.mhud-clue.is-new { animation: mhud-pip 600ms var(--ease-out); }
+@keyframes mhud-pip { 50% { transform: rotate(45deg) scale(1.15); box-shadow: 0 0 12px var(--c-lantern); } }
+.mhud-egg { display: flex; align-items: center; gap: 0.35rem; font-size: var(--fs-xs); color: var(--c-text-2); white-space: nowrap; min-width: 0; }
+.mhud-egg .icon { color: var(--c-egg-common); flex: none; }
+.mhud-egg--dropped { color: var(--c-warning); }
+.mhud-egg--dropped .icon { color: var(--c-warning); }
+.mhud-egg__sec { width: 4rem; height: 6px; border-radius: var(--r-pill); background: var(--c-surface-2); overflow: hidden; flex: none; }
+.mhud-egg__sec > span { display: block; height: 100%; background: var(--c-egg-common); }
+.mhud-egg__sec.is-low > span { background: repeating-linear-gradient(90deg, var(--c-warning) 0 5px, rgba(245, 176, 76, 0.45) 5px 8px); }
+.mhud-egg__heavy { color: var(--c-text-muted); }
+.tier-gem { width: 0.6rem; height: 0.6rem; transform: rotate(45deg); background: var(--c-egg-common); flex: none; }
+.tier-gem--rare { background: var(--c-egg-rare); }
+.tier-gem--legendary { background: var(--c-egg-legendary); }
+.tier--rare { color: var(--c-egg-rare); }
+.tier--legendary { color: var(--c-egg-legendary); }
+
+/* ---------- 2 ClueCard (16,112 · 400×≤132) ---------- */
+.mhud-cluecard {
+  position: absolute; top: 7rem; left: 1rem; width: 25rem; padding: 0.4rem 0.8rem 0.45rem 3.6rem;
+  background: rgba(11, 16, 32, 0.92); border: 1px solid var(--c-lantern); border-left-width: 4px; border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1), var(--glow-lantern); animation: mhud-slide var(--dur-2) var(--ease-out);
+  transition: transform var(--dur-3) var(--ease-in-out), opacity var(--dur-3) ease-in;
+}
+.mhud-cluecard.is-leaving { transform: translate(-5rem, -6rem) scale(0.2); opacity: 0; }
+.mhud-cluecard__icon { position: absolute; left: 0.85rem; top: 0.75rem; width: 1.9rem; height: 1.9rem; display: grid; place-items: center; transform: rotate(45deg); border: 1.5px solid var(--c-lantern); background: var(--c-lantern-soft); color: var(--c-lantern); border-radius: 4px; }
+.mhud-cluecard__icon .icon { transform: rotate(-45deg); width: 1.1rem; height: 1.1rem; }
+.mhud-cluecard__kicker { font-size: var(--fs-xs); font-weight: var(--fw-bold); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--c-lantern); line-height: 1.15; }
+.mhud-cluecard__title { font: var(--fw-bold) var(--fs-md) / 1.15 var(--font-display); text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mhud-cluecard__title.is-long { font-size: var(--fs-sm); letter-spacing: -0.01em; }
+/* short + meaning wrap (≤ 2 lines each by the copy budgets: short ≤ 90, meaning ≤ 60) — never ellipsized */
+.mhud-cluecard__short { font-size: var(--fs-sm); line-height: 1.15; margin-top: 0.05rem; }
+.mhud-cluecard__meaning { font-size: var(--fs-xs); line-height: 1.12; color: var(--c-text-2); margin-top: 0.1rem; }
+.mhud-cluecard__meaning strong { color: var(--c-accent-text); font-style: italic; }
+
+/* ---------- 3 Compass (451,12 · 464×36) ---------- */
+.mhud-compass {
+  position: absolute; top: 0.75rem; left: 50%; transform: translateX(-50%); width: 29rem; height: 2.25rem;
+  background: var(--c-hud); border: 1px solid var(--c-border); border-radius: var(--r-sm); overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(245, 176, 76, 0.3), inset 0 -1px 0 rgba(245, 176, 76, 0.3);
+}
+.mhud-compass canvas { display: block; width: 100%; height: 100%; -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 2rem, #000 calc(100% - 2rem), transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 2rem, #000 calc(100% - 2rem), transparent 100%); }
+
+/* ---------- 4 HydeStatus pill (475,56 · 416×40) ---------- */
+.mhud-pill {
+  position: absolute; top: 3.5rem; left: 50%; transform: translateX(-50%); width: 26rem; height: 2.5rem; padding: 0 0.75rem;
+  display: grid; grid-template-columns: 13.75rem 1fr; align-items: center; background: var(--c-hud); border: 1px solid var(--c-border);
+  border-radius: var(--r-pill); box-shadow: var(--shadow-1);
+}
+.mhud-pill__state { display: flex; align-items: center; gap: 0.45rem; font-size: var(--fs-sm); font-weight: var(--fw-bold); white-space: nowrap; min-width: 0; }
+.mhud-pill__word { letter-spacing: 0.02em; overflow: hidden; text-overflow: ellipsis; }
+.mhud-pill__risk { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 0.4rem; align-items: center; padding-left: 0.65rem; border-left: 1px solid var(--c-border-strong); font-size: var(--fs-xs); line-height: 1.1; color: var(--c-text-2); min-width: 0; }
+.mhud-pill__risk > .icon { grid-row: span 2; color: var(--c-predict); }
+.mhud-pill__risk-text { white-space: nowrap; color: var(--c-text); }
+.mhud-pill__src { color: var(--c-text-muted); white-space: nowrap; }
+.mhud-pill[data-mode='CHASE'] .mhud-pill__risk-text { color: var(--c-hyde-text); font-weight: var(--fw-bold); }
+.mhud-pill__suspicion { position: absolute; left: 1.25rem; right: 1.25rem; bottom: 2px; height: 3px; border-radius: var(--r-pill); background: rgba(35, 40, 87, 0.8); overflow: hidden; }
+.mhud-pill__suspicion > span { display: block; height: 100%; background: var(--c-text-muted); transition: width var(--dur-2) linear; }
+.mhud-pill__effect {
+  position: absolute; top: 100%; left: 50%; transform: translateX(-50%); min-width: 8.75rem; height: 1.375rem; padding: 0 0.6rem; display: grid; place-items: center;
+  font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--c-success); background: var(--c-hud); border: 1px solid var(--c-success); border-top: 0; border-radius: 0 0 var(--r-md) var(--r-md); white-space: nowrap;
+}
+.mhud-pill[data-mode='DORMANT'] { grid-template-columns: 1fr; justify-items: center; border: 1.5px dotted var(--c-border-strong); }
+.mhud-pill[data-mode='DORMANT'] .mhud-pill__state { color: var(--c-text-2); }
+.mhud-pill[data-mode='INVESTIGATE_SOUND'] { border: 2px dashed var(--c-warning); }
+.mhud-pill[data-mode='INVESTIGATE_SOUND'] .mhud-pill__word, .mhud-pill[data-mode='SEARCH'] .mhud-pill__word { color: var(--c-warning); }
+.mhud-pill[data-mode='INVESTIGATE_SOUND'] .mhud-pill__suspicion > span, .mhud-pill[data-mode='SEARCH'] .mhud-pill__suspicion > span { background: var(--c-warning); }
+.mhud-pill[data-mode='SEARCH'] { border: 2px solid var(--c-warning); }
+.mhud-pill[data-mode='CHASE'] { border: 3px solid var(--c-hyde); box-shadow: var(--shadow-1), 0 0 18px rgba(229, 72, 77, 0.5); }
+.mhud-pill[data-mode='CHASE'] .mhud-pill__word { color: var(--c-hyde-text); }
+.mhud-pill[data-mode='CHASE'] .mhud-pill__suspicion > span { background: var(--c-hyde); }
+.mhud-pill[data-mode='COOLDOWN'] { border: 2px dotted var(--c-accent); }
+.pip-claw { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 50%; border: 2px solid var(--c-text-muted); vertical-align: middle; }
+.pip-claw.is-on { background: var(--c-hyde); border-color: #ff9a9a; }
+
+/* ---------- 5 transient centre-top: pointer-lock hint (y128) + toasts ---------- */
+/* during onboarding the Hyde pill is absent and the step banner sits at y140: the hint takes the pill's slot */
+.mhud.is-tutorial .mhud-lockhint { top: 3.6rem; }
+.mhud-lockhint { position: absolute; top: 8rem; left: 50%; transform: translateX(-50%); padding: 0.2rem 0.8rem; font-size: var(--fs-xs); color: var(--c-lantern); background: var(--c-hud); border: 1px solid var(--c-lantern); border-radius: var(--r-pill); white-space: nowrap; }
+.mtoast { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.45rem 0.8rem; background: var(--c-hud); border: 1px solid var(--c-border); border-radius: var(--r-md); font-size: var(--fs-sm); animation: mhud-rise var(--dur-2) var(--ease-out); }
+.mtoast strong { display: block; }
+.mtoast__sub { display: block; font-size: var(--fs-xs); color: var(--c-text-2); }
+.mtoast--danger { border-color: var(--c-hyde); }
+.mtoast--danger .icon { color: var(--c-hyde-text); }
+.mtoast--success { border-color: var(--c-success); }
+.mtoast--lantern { border-color: var(--c-lantern); }
+.mtoast--lantern .icon { color: var(--c-lantern); }
+.mhud-toast { position: absolute; top: 9.5rem; left: 50%; transform: translateX(-50%); max-width: 30rem; animation-name: mhud-rise-c; }
+
+/* ---------- 6–8 right column: Minimap ⌀224 · Odds 224×≤176 · KeyStrip ---------- */
+.mhud-right { position: absolute; top: 1rem; right: 1rem; width: 14rem; display: grid; gap: 0.5rem; justify-items: stretch; }
+.mhud-minimap { position: relative; width: 14rem; height: 14rem; }
+.mhud-minimap__canvas { display: block; width: 100%; height: 100%; border-radius: 50%; }
+.mhud-minimap__chip {
+  position: absolute; left: 50%; bottom: -0.625rem; transform: translateX(-50%); max-width: 13rem; padding: 0.05rem 0.6rem; font-size: var(--fs-xs); line-height: 1.3;
+  color: var(--c-text); background: var(--c-hud); border: 1px solid var(--c-border-strong); border-radius: var(--r-pill); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mhud-right .mhud-panel { position: relative; }
+/* never clip: the source line is part of the estimate (§7.7); rows are compact so 4 rows + footer ≈ 176 px */
+.mhud-odds { margin-top: 0.5rem; padding: 0.3rem 0.6rem 0.3rem; display: grid; gap: 0.2rem; }
+.mhud-odds__title { display: flex; align-items: center; gap: 0.3rem; font-size: var(--fs-xs); font-weight: var(--fw-bold); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--c-text-muted); line-height: 1.1; }
+.mhud-odds__title .icon { width: 0.9rem; height: 0.9rem; color: var(--c-predict); }
+.mhud-odds__rows { display: grid; gap: 0.1rem; }
+.mhud-odds__row { display: grid; gap: 0; font-size: var(--fs-xs); line-height: 1.02; }
+.mhud-odds__name { display: flex; align-items: center; gap: 0.35rem; min-width: 0; color: var(--c-text-2); }
+.mhud-odds__label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mhud-odds__tag { flex: none; min-width: 2.75rem; padding: 0 0.25rem; text-align: center; font-weight: var(--fw-bold); letter-spacing: 0.05em; text-transform: uppercase; color: var(--c-text-muted); border: 1px solid var(--c-border-strong); border-radius: var(--r-sm); }
+.mhud-odds__row.is-top .mhud-odds__label { color: var(--c-text); font-weight: var(--fw-bold); }
+.mhud-odds__line { display: grid; grid-template-columns: 3.5rem 2.6rem 1fr; align-items: center; gap: 0.4rem; }
+.mhud-odds__bar { height: 6px; border-radius: var(--r-pill); background: var(--c-surface-2); overflow: hidden; }
+.mhud-odds__bar > span { display: block; height: 100%; background: var(--c-predict); transition: width 600ms var(--ease-out); }
+.mhud-odds__row.is-hyde .mhud-odds__bar > span { background: repeating-linear-gradient(45deg, rgba(229, 72, 77, 0.85) 0 3px, rgba(229, 72, 77, 0.55) 3px 5px); }
+.mhud-odds__pct { text-align: right; font-weight: var(--fw-bold); color: var(--c-text); font-variant-numeric: tabular-nums; }
+.mhud-odds__row.is-fact .mhud-odds__pct { font-weight: var(--fw-regular); color: var(--c-text-2); text-align: left; grid-column: 2 / 4; }
+.mhud-odds__band { color: var(--c-text-muted); white-space: nowrap; }
+.mhud-odds__delta { color: var(--c-predict); white-space: nowrap; font-weight: var(--fw-bold); }
+.mhud-odds__src { display: grid; font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1.1; border-top: 1px solid var(--c-border); padding-top: 0.15rem; }
+.mhud-keystrip { margin-top: 0; }
+.klegend--strip { display: flex; justify-content: space-between; gap: 0.25rem; padding: 0.15rem 0.4rem; height: 1.625rem; align-items: center; font-size: var(--fs-xs); color: var(--c-text-2); background: var(--c-hud); border: 1px solid var(--c-border); border-radius: var(--r-pill); }
+.klegend--strip .klegend__item { display: inline-flex; align-items: center; gap: 0.25rem; white-space: nowrap; }
+.klegend--strip .kcap { font-size: 0.8125rem; }
+.klegend__item.is-cooling { color: var(--c-text-muted); }
+.klegend__cd { color: var(--c-text-muted); }
+
+/* ---------- 9 InteractPrompt / ExamineToast (centred, y512, ≤480×44) ---------- */
+.mhud-prompt, .mhud-examine { position: absolute; top: 32rem; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; gap: 0.25rem; max-width: 30rem; }
+.mhud-prompt__row { display: flex; align-items: center; gap: 0.6rem; height: 2.75rem; padding: 0 0.9rem 0 0.25rem; font-size: var(--fs-md); background: var(--c-hud); border: 1px solid var(--c-lantern); border-radius: var(--r-pill); white-space: nowrap; }
+.mhud-prompt__cap { position: relative; display: grid; place-items: center; width: 2.5rem; height: 2.5rem; }
+.mhud-prompt__cap svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.mhud-prompt__ring-bg { fill: none; stroke: var(--c-surface-2); stroke-width: 3; }
+.mhud-prompt__ring { fill: none; stroke: var(--c-lantern); stroke-width: 3; stroke-linecap: round; }
+.mhud-prompt__cap .kcap { position: relative; }
+.mhud-prompt__warn { padding: 0.1rem 0.6rem; font-size: var(--fs-xs); color: var(--c-warning); background: var(--c-hud); border-radius: var(--r-sm); white-space: nowrap; }
+.mhud-examine { animation: mhud-rise-c var(--dur-2) var(--ease-out); }
+.mhud-examine__row { display: flex; align-items: center; gap: 0.55rem; min-height: 2.75rem; padding: 0.3rem 1rem 0.3rem 0.8rem; font-size: var(--fs-sm); background: var(--c-hud); border: 1px solid var(--c-border-strong); border-radius: var(--r-md); }
+.mhud-examine__row .icon { color: var(--c-text-2); flex: none; }
+.mhud-examine__head { display: block; font-size: var(--fs-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--c-lantern); }
+.mhud-examine--passage .mhud-examine__row, .mhud-examine--switch .mhud-examine__row { border-color: var(--c-lantern); }
+.mhud-examine--passage .icon, .mhud-examine--switch .icon { color: var(--c-lantern); }
+.mhud-examine__odds { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.1rem 0.6rem; font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--c-predict); background: var(--c-hud); border-radius: var(--r-sm); }
+.mhud-reticle { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: var(--c-text); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7); }
+
+/* ---------- 10–11 captions + ThingStack (x 403–963, bottom 16) ---------- */
+.mhud-bottom { position: absolute; left: 50%; bottom: 1rem; width: 35rem; transform: translateX(-50%); display: grid; gap: 0.25rem; }
+.mhud-captions { display: grid; gap: 0.2rem; justify-items: center; }
+.mhud-caption { max-width: 35rem; padding: 0.1rem 0.6rem; font-size: var(--fs-sm); line-height: 1.35; font-style: italic; background: rgba(5, 7, 15, 0.86); border-radius: var(--r-sm); animation: fade-in var(--dur-2) ease-out; }
+.mhud-caption--warn { color: #ffd59a; }
+.mhud-caption--danger { color: #ffb4b4; }
+.mhud-caption--good { color: #b8f0d2; }
+.mhud-caption__dir { font-style: normal; color: var(--c-lantern); }
+.captions-large .mhud-caption { font-size: var(--fs-lg); }
+.mhud-stack { display: grid; gap: 0.25rem; justify-items: start; min-height: 0; }
+.mhud-log {
+  display: inline-flex; align-items: center; gap: 0.45rem; height: 1.75rem; padding: 0 0.75rem 0 0.55rem; max-width: 35rem;
+  background: var(--c-hud); border: 1px solid var(--c-border); border-radius: var(--r-pill); animation: mhud-rise var(--dur-2) var(--ease-out); white-space: nowrap;
+}
+.mhud-log .icon { color: var(--c-layer-desc); width: 1rem; height: 1rem; flex: none; }
+.mhud-log__tag { font-size: var(--fs-xs); font-weight: var(--fw-bold); letter-spacing: var(--tracking-caps); color: var(--c-layer-desc); }
+.mhud-log__text { font-size: var(--fs-sm); color: var(--c-text-2); overflow: hidden; text-overflow: ellipsis; }
+.mhud-card {
+  display: grid; grid-template-columns: 1fr; gap: 0.05rem; min-height: 3.25rem; max-height: 4.5rem; width: 35rem; padding: 0.35rem 0.85rem;
+  background: rgba(11, 16, 32, 0.9); border: 1px solid var(--c-border); border-left: 3px solid var(--c-layer-diag); border-radius: var(--r-md);
+  box-shadow: var(--shadow-1); animation: mhud-rise var(--dur-2) var(--ease-out); align-content: center;
+}
+.mhud-card__head { display: inline-flex; align-items: center; gap: 0.3rem; font-size: var(--fs-xs); font-weight: var(--fw-bold); letter-spacing: var(--tracking-caps); text-transform: uppercase; line-height: 1.15; color: var(--c-layer-diag); }
+.mhud-card__head .icon { width: 0.95rem; height: 0.95rem; }
+.mhud-card__head.is-hyde { color: var(--c-hyde-text); }
+.mhud-card__head.is-power { color: var(--c-success); }
+.mhud-card__head.is-egg { color: var(--c-lantern); }
+.mhud-card__head.is-investigation { color: var(--c-accent-text); }
+.mhud-card__head.is-pattern { color: var(--c-text-muted); }
+.mhud-card__text { font-size: var(--fs-sm); line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mhud-card--why.is-pattern { border-left-style: dashed; }
+.mhud-card--advice { grid-template-columns: 2rem 1fr; column-gap: 0.6rem; border-left-color: var(--c-layer-presc); }
+.mhud-card--advice > .thing-sigil { grid-row: span 3; align-self: center; }
+.mhud-card--advice .mhud-card__head { color: var(--c-layer-presc); }
+.mhud-card--advice .mhud-card__text { font-size: var(--fs-md); font-weight: var(--fw-semi); }
+.mhud-card__why { font-size: var(--fs-xs); color: var(--c-text-2); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- 12 Vitals (16, bottom 16 · 272×76) ---------- */
+.mhud-vitals { left: 1rem; bottom: 1rem; width: 17rem; min-height: 4.75rem; padding: 0.45rem 0.75rem; display: grid; gap: 0.3rem; align-content: center; }
+.mhud-bar { display: grid; grid-template-columns: 2.6rem 7.5rem auto 1fr; align-items: center; gap: 0.45rem; font-size: var(--fs-xs); }
+.mhud-bar .caps, .mhud-noise .caps { font-size: var(--fs-xs); color: var(--c-text-muted); }
+.mhud-bar__track { height: 8px; border-radius: var(--r-pill); background: var(--c-surface-2); overflow: hidden; }
+.mhud-bar__fill { display: block; height: 100%; border-radius: inherit; transition: width var(--dur-1) linear; background: var(--c-success); }
+.mhud-bar--hp.is-low .mhud-bar__fill { background: repeating-linear-gradient(90deg, var(--c-warning) 0 6px, rgba(245, 176, 76, 0.5) 6px 9px); }
+.mhud-bar__value { font-weight: var(--fw-bold); }
+.mhud-caught { justify-self: end; display: inline-flex; align-items: center; gap: 0.2rem; color: var(--c-text-2); white-space: nowrap; }
+.mhud-noise { display: grid; grid-template-columns: 2.6rem auto 1fr; align-items: center; gap: 0.45rem; font-size: var(--fs-xs); }
+.mhud-noise__segs { display: inline-flex; gap: 2px; }
+.mhud-noise__segs > span { width: 0.625rem; height: 0.55rem; border-radius: 1px; background: var(--c-surface-2); }
+.mhud-noise__segs > span.is-on { background: var(--c-accent-text); }
+.mhud-noise__segs > span.is-hot { background: var(--c-warning); }
+.mhud-noise__word { font-weight: var(--fw-bold); color: var(--c-text-2); white-space: nowrap; }
+.mhud-noise--silent .mhud-noise__word { color: var(--c-text-2); }
+.mhud-noise--loud .mhud-noise__word { color: var(--c-warning); }
+.mhud-noise__radius { font-weight: var(--fw-regular); color: var(--c-text-muted); }
+.is-noise-focus .mhud-vitals { border-color: var(--c-lantern); box-shadow: var(--shadow-1), 0 0 0 2px var(--c-lantern); }
+.mhud-hidden { display: inline-flex; align-items: center; gap: 0.3rem; font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--c-role-stealth, #9cc3d0); }
+.mhud-hidden.is-close { color: var(--c-warning); }
+
+/* ---------- 13 Abilities Q / R (right 16, bottom 16 · 288×112) ---------- */
+.mhud-abilities { position: absolute; right: 1rem; bottom: 1rem; width: 18rem; display: grid; gap: 0.5rem; }
+.mhud-ability { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0.65rem; height: 3.25rem; padding: 0 0.7rem 0 0.35rem; background: var(--c-hud); border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--shadow-1); }
+.mhud-ability__ring { --cd: 100%; position: relative; display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border-radius: 50%; background: conic-gradient(var(--c-lantern) var(--cd), var(--c-surface-2) 0); }
+.mhud-ability__ring img { width: 2.375rem; height: 2.375rem; border-radius: 50%; object-fit: cover; object-position: 50% 20%; background: #10142e; }
+.mhud-ability.is-cooling .mhud-ability__ring img { filter: grayscale(0.8) brightness(0.6); }
+.mhud-ability__key { position: absolute; right: -0.4rem; bottom: -0.3rem; font-size: var(--fs-xs) !important; }
+.mhud-ability__text { display: grid; line-height: 1.15; min-width: 0; }
+.mhud-ability__name { display: flex; align-items: center; font-weight: var(--fw-bold); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mhud-ability__state { font-size: var(--fs-xs); color: var(--c-text-2); }
+.mhud-ability.is-ready .mhud-ability__state { color: var(--c-lantern); font-weight: var(--fw-bold); }
+.mhud-ability.is-active { border-color: var(--c-accent-text); }
+.mhud-ability.is-active .mhud-ability__ring { background: conic-gradient(var(--c-accent-text) 100%, transparent 0); }
+.mhud-ability[data-denied] { animation: deny-shake 260ms ease-out; }
+.mhud-ability[data-denied] .mhud-ability__state { color: var(--c-warning); }
+@keyframes deny-shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+.reduced-motion .mhud-ability[data-denied] { animation: none; border-color: var(--c-warning); }
+
+/* ---------- 14 edges (unchanged look) ---------- */
+.mhud-mist { position: absolute; inset: 0; opacity: 0; transition: opacity 1s ease-out; }
+.mhud-mist[data-mode='SEARCH'] { opacity: 0.35; background: linear-gradient(to top, rgba(140, 10, 20, 0.75), transparent 90px); transition-duration: var(--dur-3); }
+.mhud-mist[data-mode='CHASE'] {
+  opacity: 0.6; transition-duration: var(--dur-2); animation: hyde-pulse 1.2s ease-in-out infinite alternate;
+  background: linear-gradient(to top, rgba(140, 10, 20, 0.75), transparent 150px), linear-gradient(to right, rgba(140, 10, 20, 0.5), transparent 110px), linear-gradient(to left, rgba(140, 10, 20, 0.5), transparent 110px);
+}
+@keyframes hyde-pulse { to { opacity: 0.85; } }
+.reduced-motion .mhud-mist[data-mode='CHASE'] { animation: none; }
+.mhud-vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 50%, transparent 45%, rgba(5, 7, 15, 0.75) 100%); }
+.mhud-catch-flash { position: absolute; inset: 0; box-shadow: inset 0 0 140px 40px rgba(229, 72, 77, 0.8); animation: catch-flash 400ms ease-out forwards; }
+@keyframes catch-flash { from { opacity: 1; } to { opacity: 0; } }
+.mhud-edge { position: absolute; width: 2rem; height: 2rem; display: grid; place-items: center; color: var(--c-warning); filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.8)); }
+.mhud-edge .icon { width: 2rem; height: 2rem; stroke-width: 3; }
+.mhud-edge.is-chase { color: var(--c-hyde); }
+
+/* ---------- KeyLegend (controls.tsx) ---------- */
+.klegend--card, .klegend--full { margin: 0; display: grid; }
+.klegend__row { display: grid; grid-template-columns: 7rem 1fr; align-items: center; gap: 0.5rem; min-height: 2rem; }
+.klegend__row dt { display: inline-flex; flex-wrap: wrap; gap: 0.2rem; align-items: center; }
+.klegend__row dd { margin: 0; font-size: var(--fs-sm); color: var(--c-text-2); display: inline-flex; align-items: center; gap: 0.3rem; }
+.klegend__row.is-current dd { color: var(--c-lantern); font-weight: var(--fw-bold); }
+.klegend__row.is-current .kcap { border-color: var(--c-lantern); }
+.klegend__row.is-dim { opacity: 0.5; }
+.klegend--full { grid-template-columns: 1fr 1fr; grid-auto-flow: row; column-gap: 1.25rem; }
+.klegend--inline .kcap { margin-right: 0.15rem; }
+.klegend__sep { color: var(--c-text-muted); }
+
+/* ---------- Onboarding (MysteryTutorial §9) ---------- */
+.mtut { position: absolute; inset: 0; z-index: var(--z-overlay); pointer-events: none; }
+.mtut > * { pointer-events: auto; }
+.mtut__banner { position: absolute; top: 8.75rem; left: 50%; transform: translateX(-50%); width: 44rem; display: grid; justify-items: center; gap: 0.3rem; text-align: center; animation: mhud-rise-c var(--dur-3) var(--ease-out); }
+.mtut__headline { font: var(--fw-bold) var(--fs-xl) / 1.15 var(--font-display); color: var(--c-lantern); text-shadow: 0 2px 12px rgba(0, 0, 0, 0.85), 0 0 2px #000; }
+.mtut__detail { max-width: 40rem; padding: 0.25rem 0.8rem; font-size: var(--fs-sm); color: var(--c-text); background: rgba(11, 16, 32, 0.86); border-radius: var(--r-md); }
+.mtut__banner.is-shrinking { animation: mtut-shrink 450ms var(--ease-in-out) forwards; }
+@keyframes mtut-shrink { from { transform: translateX(-50%); opacity: 1; } to { transform: translate(-75%, -8rem) scale(0.35); opacity: 0; } }
+.reduced-motion .mtut__banner.is-shrinking { animation: none; opacity: 0; }
+.mtut__card { position: absolute; top: 12.5rem; left: 1rem; width: 17.5rem; padding: 0.5rem 0.75rem 0.6rem; display: grid; gap: 0.35rem; background: rgba(11, 16, 32, 0.9); border: 1px solid var(--c-border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-2); }
+.mtut__who { display: flex; align-items: center; gap: 0.5rem; font-size: var(--fs-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--c-accent-text); }
+.mtut__count { margin-left: auto; color: var(--c-text-muted); text-transform: none; letter-spacing: 0; }
+.mtut__card .klegend__row { grid-template-columns: 7.25rem 1fr; min-height: 2rem; }
+.mtut__card .klegend__row dt { flex-wrap: nowrap; }
+.mtut__card .kcap { font-size: 0.8125rem; }
+.mtut__line { font-size: var(--fs-sm); line-height: 1.3; color: var(--c-text); }
+.mtut__skip { justify-self: start; }
+.mtut__check { color: var(--c-lantern); }
+.duo-intro { position: absolute; top: 8.75rem; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 1rem; background: rgba(11, 16, 32, 0.9); border: 1px solid var(--c-border-strong); border-radius: var(--r-lg); animation: mhud-rise-c var(--dur-3) var(--ease-out); }
+.duo-intro img { width: 4rem; height: 4rem; border-radius: 50%; object-fit: cover; object-position: 50% 20%; border: 2px solid var(--c-border-strong); background: var(--c-surface-2); }
+.duo-intro > span { display: grid; gap: 0.2rem; justify-items: start; }
+.duo-intro__name { font-size: var(--fs-lg); color: var(--c-lantern); }
+
+/* ---------- reduced motion (§11): no pulses, slides, flies, tweens; information keeps updating ---------- */
+.reduced-motion .mhud-cluecard, .reduced-motion .mhud-log, .reduced-motion .mhud-card, .reduced-motion .mhud-examine, .reduced-motion .mtut__banner { animation: none; }
+.reduced-motion .mhud-cluecard.is-leaving { transform: none; }
+.reduced-motion .mhud-clue.is-new { animation: none; }
+.reduced-motion .mhud-odds__bar > span { transition: none; }
+
+/* ---------- high contrast ---------- */
+.high-contrast .mhud-panel, .high-contrast .mhud-pill, .high-contrast .mhud-compass, .high-contrast .mhud-card, .high-contrast .mhud-log { background: #000; border-color: #fff; }
+.high-contrast .mhud-odds__bar > span { background: var(--c-predict); }
+
+/* ======================================================================================================================
+   Joseph Crackstone (docs/overhaul/UX_ENEMIES.md) — second enemy. Witch-light green (--c-crack), SQUARED plaque vs the
+   Hyde's round pill, DOUBLE alarm borders vs solid, SEGMENTED meter vs solid: every state reads by shape + border + icon
+   + word in greyscale / deuteranopia. Nothing here renders without him (crackstone: null keeps the centred Hyde pill).
+   ====================================================================================================================== */
+
+/* ---------- §1 threats row (y56): Hyde pill 416×40 (x355) + Crackstone plaque 232×40 (x779–1011), gap 8 ---------- */
+.mhud-threats { position: absolute; top: 3.5rem; left: 50%; transform: translateX(-50%); display: flex; gap: 0.5rem; align-items: flex-start; }
+.mhud-threats > .mhud-pill { position: relative; top: auto; left: auto; transform: none; flex: none; }
+.mhud-pill__stack { display: grid; min-width: 0; line-height: 1; }
+.mhud-pill__kicker { font-size: max(14px, 0.875rem); line-height: 0.95; font-weight: var(--fw-bold); letter-spacing: var(--tracking-caps); color: var(--c-text-muted); }
+.mhud-threats.has-crack .mhud-pill__word { line-height: 1.05; }
+.mhud-crack { width: 14.5rem; grid-template-columns: 1fr; border-radius: var(--r-sm); padding: 0 0.7rem; }
+.mhud-crack .mhud-pill__state { padding-bottom: 3px; }
+.mhud-crack .mhud-pill__state > .icon { flex: none; }
+.mhud-crack .mhud-pill__kicker { line-height: 0.9; }
+.mhud-crack__meter { position: absolute; left: 0.9rem; right: 0.9rem; bottom: 2px; height: 3px; background: rgba(35, 40, 87, 0.8); overflow: hidden; }
+.mhud-crack__meter > span { display: block; height: 100%; background: repeating-linear-gradient(90deg, var(--c-crack) 0 8px, transparent 8px 10px); transition: width var(--dur-2) linear; }
+.mhud-crack .mhud-pill__effect { border-radius: 0 0 var(--r-sm) var(--r-sm); }
+.mhud-crack[data-state='PATROL'] { border: 1px solid var(--c-border); }
+.mhud-crack[data-state='SEES'], .mhud-crack[data-state='INVESTIGATE'], .mhud-crack[data-state='SCAN'] { border: 2px dashed var(--c-crack); }
+.mhud-crack[data-state='SEARCH'] { border: 2px solid var(--c-crack); }
+.mhud-crack[data-state='CHASE'] { border: 3px double var(--c-crack); box-shadow: var(--shadow-1), 0 0 18px rgba(168, 224, 99, 0.45); }
+/* ATTACK: the double border plus a 2 px outer ring (≈ the spec's 5 px double) without shrinking the content box */
+.mhud-crack[data-state='ATTACK'] { border: 3px double var(--c-crack); box-shadow: 0 0 0 2px var(--c-crack), var(--shadow-1), 0 0 18px rgba(168, 224, 99, 0.45); }
+.mhud-crack[data-state='RETURN'] { border: 2px dotted var(--c-border-strong); }
+.mhud-crack[data-state='RETURN'] .mhud-pill__word { color: var(--c-text-2); font-weight: var(--fw-regular); }
+.mhud-crack:is([data-state='SEES'], [data-state='INVESTIGATE'], [data-state='SEARCH'], [data-state='SCAN'], [data-state='CHASE'], [data-state='ATTACK']) .mhud-pill__word,
+.mhud-crack:is([data-state='SEES'], [data-state='INVESTIGATE'], [data-state='SEARCH'], [data-state='SCAN'], [data-state='CHASE'], [data-state='ATTACK']) .mhud-pill__state > .icon { color: var(--c-crack-text); }
+.mhud-crack:is([data-state='SEARCH'], [data-state='SEES'], [data-state='INVESTIGATE'], [data-state='SCAN']) .mhud-pill__word { font-weight: var(--fw-semi); }
+.mhud-crack:is([data-state='CHASE'], [data-state='ATTACK']) .mhud-pill__word { font-weight: var(--fw-bold); }
+
+/* ---------- §2 telegraph banner (400×44, top y124 — below the effect chips, above the keep-clear) ---------- */
+.mhud-banner {
+  position: absolute; top: 7.75rem; left: 50%; transform: translateX(-50%); width: 25rem; min-height: 2.75rem; padding: 0.2rem 0.8rem 0.35rem 0.7rem;
+  display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 0.55rem; overflow: hidden;
+  background: rgba(11, 16, 32, 0.92); border: 1px solid var(--c-border); border-radius: var(--r-sm); box-shadow: var(--shadow-1);
+  animation: mhud-rise-c var(--dur-2) var(--ease-out);
+}
+.mhud-banner > .icon { width: 1.4rem; height: 1.4rem; color: var(--c-text-2); }
+.mhud-banner__text { display: grid; line-height: 1.1; min-width: 0; }
+.mhud-banner__head { font-size: var(--fs-sm); font-weight: var(--fw-bold); letter-spacing: 0.04em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mhud-banner__sub { font-size: var(--fs-xs); color: var(--c-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mhud-banner__bar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(35, 40, 87, 0.8); }
+.mhud-banner__bar > span { display: block; height: 100%; background: var(--c-text-muted); }
+.mhud-banner.is-danger { border: 3px double var(--c-crack); box-shadow: var(--shadow-1), 0 0 18px rgba(168, 224, 99, 0.35); }
+.mhud-banner.is-danger > .icon, .mhud-banner.is-danger .mhud-banner__head { color: var(--c-crack-text); }
+.mhud-banner.is-danger .mhud-banner__sub { color: var(--c-text); }
+.mhud-banner.is-danger .mhud-banner__bar > span { background: var(--c-crack); }
+.mhud-banner.is-calm { border: 1px dashed var(--c-text-muted); }
+.mhud-banner.is-calm .mhud-banner__head { color: var(--c-text-2); }
+.mhud-banner.is-good { border: 1px solid var(--c-success); }
+.mhud-banner.is-good > .icon, .mhud-banner.is-good .mhud-banner__head { color: var(--c-success); }
+.mhud-banner.is-muted { border: 1px solid var(--c-border); }
+.mhud-banner.is-muted .mhud-banner__head { color: var(--c-text-muted); letter-spacing: 0; font-weight: var(--fw-semi); }
+.mhud-curse-flash { position: absolute; inset: 0; box-shadow: inset 0 0 140px 40px rgba(168, 224, 99, 0.55); animation: catch-flash 400ms ease-out forwards; }
+
+/* ---------- Vitals CURSED row (hidden-row slot; stacks above the HIDDEN row when both apply) ---------- */
+.mhud-cursed { display: inline-flex; align-items: center; gap: 0.35rem; justify-self: start; padding: 0.05rem 0.45rem; font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--c-crack-text); border: 1.5px dashed var(--c-crack); border-radius: var(--r-sm); }
+.mhud-cursed .icon { width: 1rem; height: 1rem; }
+
+/* ---------- §4 the one threat-edge chevron + Crackstone's mist ---------- */
+.mhud-edge.is-crack, .mhud-edge.is-crack.is-chase { color: var(--c-crack); }
+.mhud-edge__icon { position: absolute; top: 100%; left: 50%; margin-left: -0.6rem; width: 1.2rem; height: 1.2rem; display: grid; place-items: center; color: var(--c-crack-text); }
+.mhud-edge .mhud-edge__icon .icon { width: 1.2rem; height: 1.2rem; stroke-width: 2; }
+.mhud-mist[data-enemy='crackstone'] { opacity: 0.45; transition-duration: var(--dur-2); animation: none; background: radial-gradient(ellipse at 50% 50%, transparent 52%, rgba(120, 160, 60, 0.35) 100%); }
+
+/* ---------- §5 Odds: the hat row (stippled crack bar) ---------- */
+.mhud-odds__hat { display: inline-grid; place-items: center; flex: none; width: 1.1rem; color: var(--c-crack); }
+.mhud-odds__hat .icon { width: 1rem; height: 1rem; }
+.mhud-odds__row.is-crack .mhud-odds__bar > span { background: radial-gradient(circle, var(--c-crack) 0.8px, transparent 1.3px) 0 0 / 3px 3px, rgba(168, 224, 99, 0.55); }
+.mhud-odds__row.is-crack .mhud-odds__label { color: var(--c-text-2); }
+
+/* ---------- §6 ThingStack headword ---------- */
+.mhud-card__head.is-crack { color: var(--c-crack-text); }
+
+/* ---------- reduced motion: no glow / pulse / depleting bar / hit flash; the numbers keep counting ---------- */
+.reduced-motion .mhud-crack, .reduced-motion .mhud-banner { box-shadow: var(--shadow-1) !important; animation: none; }
+.reduced-motion .mhud-crack[data-state='ATTACK'] { box-shadow: 0 0 0 2px var(--c-crack) !important; }
+.reduced-motion .mhud-banner__bar { display: none; }
+.reduced-motion .mhud-curse-flash { display: none; }
+.reduced-motion .mhud-crack__meter > span { transition: none; }
+
+/* ---------- high contrast ---------- */
+.high-contrast .mhud-banner { background: #000; }

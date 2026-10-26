@@ -1,0 +1,50 @@
+{
+  "name": "raven-regatta",
+  "private": true,
+  "version": "2.5.0",
+  "type": "module",
+  "description": "Nevermore: Deadly Secrets - A Nevermore Mystery - Pokemon Day III Halloween Arcade (rules mystery-v3.1)",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "npm run sync:shared && tsc --noEmit -p tsconfig.json && vite build",
+    "preview": "vite preview --host",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "sync:shared": "node scripts/sync-shared.mjs",
+    "data:generate": "tsx scripts/generate-synthetic-data.ts",
+    "models:train": "tsx scripts/train-models.ts",
+    "models:evaluate": "tsx scripts/evaluate-models.ts",
+    "mystery:generate": "tsx scripts/mystery-generate.ts",
+    "mystery:train": "tsx scripts/mystery-train.ts",
+    "mystery:evaluate": "tsx scripts/mystery-evaluate.ts",
+    "e2e": "node tests/e2e/smoke.mjs",
+    "typecheck:functions": "tsc --noEmit -p tsconfig.functions.json",
+    "test:supabase-unit": "vitest run --config supabase/tests/unit/vitest.config.mts",
+    "test:db:offline": "node supabase/tests/offline/run-pglite.mjs",
+    "test:db:roundtrip": "tsx supabase/tests/offline/engine-roundtrip.ts 300",
+    "test:all": "npm run typecheck && npm run typecheck:functions && npm test && npm run test:supabase-unit",
+    "art:pokeapi": "node scripts/fetch-pokeapi-art.mjs",
+    "art:models3d": "tsx scripts/fetch-pokemon-models.ts"
+  },
+  "dependencies": {
+    "@fontsource/alegreya-sans": "^5.1.0",
+    "@fontsource/cinzel": "^5.1.0",
+    "@supabase/supabase-js": "^2.45.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.170.0",
+    "@vitejs/plugin-react": "^4.3.3",
+    "playwright": "^1.48.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4"
+  }
+}

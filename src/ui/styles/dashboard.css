@@ -1,0 +1,259 @@
+/* Laptop 1 dashboard — 60/40 top row, three panels below, operator drawer on the right. */
+.dashboard {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) 11.25rem;
+  grid-template-areas:
+    'head head head head head'
+    'board board board stations stations'
+    'recent recent defeated defeated today';
+  gap: var(--gutter);
+  background: radial-gradient(120% 90% at 50% 0%, var(--c-surface-1), var(--c-bg) 70%);
+}
+.dash-head { grid-area: head; display: flex; align-items: center; gap: var(--sp-4); min-height: 4rem; }
+.dash-head__title { font-size: var(--fs-xl); line-height: 1.1; }
+.dash-head__badges { display: flex; align-items: center; gap: var(--sp-3); margin-left: auto; }
+.dash-head__clock { font-size: var(--fs-lg); font-weight: var(--fw-bold); color: var(--c-text-2); }
+.dash-section-title { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.dash-empty { padding: var(--sp-5) 0; font-size: var(--fs-lg); }
+.dash-empty--italic { font-style: italic; color: var(--c-text-2); }
+
+.dash-board { grid-area: board; padding: var(--sp-4) var(--sp-5); min-height: 0; overflow: hidden; }
+.lb { width: 100%; table-layout: fixed; }
+.lb th { font-size: var(--fs-xs); color: var(--c-text-muted); text-transform: uppercase; letter-spacing: var(--tracking-caps); text-align: left; padding-bottom: var(--sp-2); }
+.lb th:nth-child(1) { width: 3.5rem; }
+.lb th:nth-child(3) { width: 4rem; }
+.lb th:nth-child(4) { width: 6.5rem; }
+.lb th:nth-child(5) { width: 7rem; }
+.lb th:nth-child(6) { width: 9rem; }
+.lb td { height: 2.75rem; border-top: 1px solid var(--c-border); vertical-align: middle; overflow: hidden; text-overflow: clip; }
+.lb .num-col { text-align: right; padding-right: var(--sp-3); }
+.lb__rank { font: var(--fw-bold) var(--fs-xl) / 1 var(--font-display); }
+.lb__rank--first { color: var(--c-lantern); }
+.lb__first { display: block; font: var(--fw-bold) var(--fs-xs) / 1 var(--font-body); }
+.lb__name { display: block; font-size: var(--fs-md); font-weight: var(--fw-bold); line-height: 1.1; }
+.lb__crew { display: block; font-size: var(--fs-xs); color: var(--c-text-2); line-height: 1.15; }
+.lb__score { font-size: var(--fs-lg); font-weight: var(--fw-bold); color: var(--c-lantern); }
+.lb__badges { display: flex; gap: var(--sp-1); justify-content: flex-end; }
+.lb tr.is-new td { animation: new-row 6s var(--ease-out) 1; }
+@keyframes new-row { from { background: var(--c-lantern-soft); } to { background: transparent; } }
+
+.dash-stations { grid-area: stations; display: grid; grid-auto-rows: minmax(0, 1fr); gap: var(--gutter); min-height: 0; }
+.station { padding: var(--sp-3) var(--sp-4); display: grid; align-content: start; gap: var(--sp-1); min-height: 0; overflow: hidden; }
+.station.is-stale { opacity: 0.6; }
+.station__head { display: flex; justify-content: space-between; align-items: center; }
+.station__name { font-size: var(--fs-xl); font-weight: var(--fw-bold); line-height: 1.1; }
+.station__crew { font-size: var(--fs-sm); }
+.station__idle { font-style: italic; font-size: var(--fs-lg); color: var(--c-text-2); padding: var(--sp-3) 0; }
+.station__legs { display: flex; gap: 4px; margin: var(--sp-1) 0; }
+.seg { flex: 1; text-align: center; font-size: var(--fs-xs); font-weight: var(--fw-bold); padding: 2px 0; border-radius: var(--r-sm); background: var(--c-surface-2); color: var(--c-text-muted); }
+.seg.is-done { background: var(--c-accent); color: var(--c-ink); }
+.seg.is-current { background: var(--c-lantern); color: var(--c-ink); }
+.station__stats { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); }
+.station__stats dt { display: flex; align-items: center; gap: 4px; font-size: var(--fs-xs); color: var(--c-text-muted); text-transform: uppercase; letter-spacing: var(--tracking-caps); font-weight: var(--fw-bold); }
+.station__stats dt .icon { width: 1em; height: 1em; }
+.station__stats dd { font-size: var(--fs-lg); font-weight: var(--fw-bold); }
+.station__stats .stat--warn dd { color: var(--c-warning); }
+.station__stats .stat--danger dd { color: var(--c-danger); }
+.station__foot { font-size: var(--fs-xs); }
+.badge--phase { color: var(--c-text-2); }
+.badge--phase-in_progress { color: var(--c-lantern); }
+.badge--phase-completed { color: var(--c-success); }
+.badge--phase-dnf { color: var(--c-danger); }
+
+.dash-mini { padding: var(--sp-3) var(--sp-4); min-height: 0; overflow: hidden; }
+[data-testid='recent-finishes'] { grid-area: recent; }
+[data-testid='defeated-log'] { grid-area: defeated; }
+[data-testid='today-stats'] { grid-area: today; }
+.dash-list { display: grid; gap: 2px; }
+.dash-list li { display: grid; grid-template-columns: 1fr auto auto; gap: var(--sp-3); font-size: var(--fs-sm); align-items: baseline; }
+.dash-list__name { font-weight: var(--fw-semi); font-size: var(--fs-md); }
+.today__runs { font-size: var(--fs-md); font-weight: var(--fw-semi); }
+.today__grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); margin: var(--sp-1) 0; }
+.today__grid dt { font-size: var(--fs-xs); }
+.today__grid dd { font-size: var(--fs-lg); font-weight: var(--fw-bold); }
+.route-mix { display: grid; gap: 2px; font-size: var(--fs-xs); }
+.route-mix__bar { display: block; height: 8px; border-radius: 4px; background: var(--c-accent); overflow: hidden; }
+.route-mix__bar > span { display: block; height: 100%; background: var(--c-success); }
+
+/* Operator drawer */
+.drawer-scrim { position: fixed; inset: 0; z-index: var(--z-overlay); background: var(--c-scrim); }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: var(--z-overlay); width: 26rem; padding: var(--sp-5);
+  border-radius: var(--r-lg) 0 0 var(--r-lg); background: var(--c-surface-1); display: grid; align-content: start; gap: var(--sp-4);
+  border-left: 3px solid var(--c-danger); animation: drawer-in var(--dur-3) var(--ease-out);
+}
+@keyframes drawer-in { from { transform: translateX(100%); } to { transform: none; } }
+.drawer__head { display: flex; justify-content: space-between; align-items: center; }
+.drawer__title { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-lg); }
+.drawer__actions { display: grid; gap: var(--sp-3); }
+.drawer__actions .btn { justify-content: flex-start; }
+
+.dash-problem { display: grid; gap: var(--sp-3); padding: var(--sp-4) 0; max-width: 40rem; }
+.dash-problem__title { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-lg); color: var(--c-danger); }
+
+/* Two stacked live station cards must fit 1366x768 without clipping the footer. */
+.station { gap: 2px; padding: var(--sp-2) var(--sp-4); }
+.station__name { font-size: var(--fs-lg); }
+.station__legs { margin: 2px 0; }
+.station__stats dd { font-size: var(--fs-md); }
+
+/* ---- Mystery board: three cases (case tiles = filter + per-case summary, case tags, clue matrix, outcomes) ------ */
+/* Fits 1366x768: row A and C give up 1rem each for the case-tile row. */
+.mdash__grid.mdash__grid--cases { grid-template-rows: minmax(11.5rem, auto) auto minmax(10.5rem, auto) minmax(14.5rem, auto); }
+.mdash-case { grid-column: 1 / -1; display: grid; gap: 0.2rem; min-width: 0; }
+.mdash-case__note { margin: 0; }
+.mdash-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; }
+.mdash-tile {
+  display: grid; gap: 0.05rem; min-width: 0; padding: 0.3rem 0.7rem; text-align: left; cursor: pointer; font: inherit; font-size: var(--fs-xs);
+  color: var(--c-text); background: var(--c-hud); border: 1px solid var(--c-border); border-radius: var(--r-lg);
+}
+.mdash-tile:hover:not(:disabled) { border-color: var(--c-lantern); }
+.mdash-tile:focus-visible { outline: 2px solid var(--c-lantern); outline-offset: 2px; }
+.mdash-tile.is-on { border-color: var(--c-lantern); background: var(--c-lantern-soft); box-shadow: inset 0 0 0 1px var(--c-lantern); }
+.mdash-tile:disabled { opacity: 0.45; cursor: not-allowed; }
+.mdash-tile__head { display: flex; align-items: baseline; gap: 0.45rem; min-width: 0; }
+.mdash-tile__head strong { text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+.mdash-tile.is-on .mdash-tile__head strong { color: var(--c-lantern); }
+.mdash-tile__title { flex: 1; min-width: 0; color: var(--c-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mdash-tile__runs { white-space: nowrap; color: var(--c-text-muted); }
+.mdash-tile__stats { display: flex; flex-wrap: wrap; gap: 0 0.7rem; color: var(--c-text-muted); font-size: 0.75rem; }
+.mdash-tile__stats b { color: var(--c-text); }
+.mdash-casetag { padding: 0 0.3rem; border-radius: var(--r-pill); border: 1px solid var(--c-border-strong); font-size: 0.6875rem; font-weight: var(--fw-bold); color: var(--c-text-2); }
+.mdash-standings.mdash-standings--cases li { grid-template-columns: 1.4rem minmax(0, 1fr) auto auto auto; }
+.mdash-standings.mdash-standings--cases .mdash-duo { overflow: hidden; text-overflow: ellipsis; }
+.mdash-cluemx { display: grid; gap: 0.2rem; }
+.mdash-cluemx__row { display: grid; grid-template-columns: 2.6rem repeat(3, minmax(0, 1fr)); gap: 0.5rem; align-items: end; }
+.mdash-cluemx__case { font-weight: var(--fw-bold); color: var(--c-lantern); white-space: nowrap; }
+.mdash-cluemx__cell { display: grid; min-width: 0; }
+.mdash-cluemx__title { font-size: 0.6875rem; color: var(--c-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mdash-cluemx__val { display: grid; grid-template-columns: minmax(0, 1fr) 2.4rem; gap: 0.3rem; align-items: center; font-size: 0.75rem; }
+.mdash-cluemx__val b { text-align: right; }
+.mdash-acc { display: grid; gap: 0.1rem; min-width: 0; }
+.mdash-acc__legend { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mdash-acc__bar { display: flex; height: 6px; border-radius: var(--r-pill); overflow: hidden; background: var(--c-surface-2); }
+.mdash-acc__seg { display: block; height: 100%; }
+.mdash-acc__seg--solved { background: var(--c-success); }
+.mdash-acc__seg--right_suspect_wrong_evidence { background: var(--c-lantern); }
+.mdash-acc__seg--wrong_suspect { background: var(--c-accent-text); }
+.mdash-acc__seg--not_accused { background: var(--c-text-muted); }
+.mdash-acc__seg--unsolved { background: var(--c-border-strong); }
+.mdash-acc__seg--dnf { background: var(--c-hyde, #9b2c4a); }
+.lp-badge--case { border: 1px solid var(--c-lantern); color: var(--c-lantern); }
+
+/* ---- Overhaul (UX_OVERHAUL §10): header KPI ribbon + StationLiveCard rows. Status = icon + word (never colour alone);
+   red only for the Hyde (CHASING); numbers in the sans face, proportional for stat tiles, tabular for the live clock. */
+.mdash__head--kpi { gap: 0.75rem; min-width: 0; }
+.mdash__head--kpi .mdash__title { font-size: var(--fs-lg); white-space: nowrap; }
+.mdash-kpis { display: flex; gap: 0.5rem; margin: 0 0 0 auto; min-width: 0; }
+.mdash-kpi { display: grid; align-content: center; min-width: 6rem; padding: 0.1rem 0.65rem 0.15rem; border-radius: var(--r-md); background: var(--c-hud); border: 1px solid var(--c-border); }
+.mdash-kpi dt { font-size: 0.75rem; color: var(--c-text-muted); white-space: nowrap; line-height: 1.2; }
+.mdash-kpi dd { margin: 0; display: flex; align-items: baseline; gap: 0.35rem; line-height: 1.15; }
+.mdash-kpi__v { font: var(--fw-semi) var(--fs-md) / 1.1 var(--font-body); color: var(--c-text); }
+.mdash-kpi__small { font-size: 0.6875rem; font-style: italic; color: var(--c-text-muted); white-space: nowrap; }
+
+.mdash.mdash--kpi { padding: 0.8rem 1.25rem; gap: 0.6rem; }
+.mdash__grid.mdash__grid--cases.mdash__grid--live { grid-template-rows: minmax(12.75rem, auto) auto minmax(10.5rem, auto) minmax(14.5rem, auto); gap: 0.6rem; }
+.mdash-card.mstation { gap: 0.1rem; padding-top: 0.5rem; padding-bottom: 0.45rem; }
+.mstation > * { flex: none; }
+.mstation.is-chase { border: 2px solid var(--c-hyde); box-shadow: 0 0 18px rgba(229, 72, 77, 0.3); }
+.mstation.is-lost { border-style: dashed; border-color: var(--c-warning); }
+.mstation.is-dnf .mdash-phase .icon { opacity: 0.55; }
+.mdash-phase { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
+.mdash-phase .icon { width: 0.9rem; height: 0.9rem; }
+.mstation__r1 { display: flex; align-items: center; gap: 0.5rem; min-height: 1.5rem; }
+.mstation__label { margin: 0; white-space: nowrap; }
+.mstation__chasing { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0 0.5rem; border-radius: var(--r-pill); border: 1px solid var(--c-hyde); color: var(--c-hyde-text, #ff8a8a); font-weight: var(--fw-bold); font-size: 0.75rem; letter-spacing: 0.06em; }
+.mstation__chasing .icon { width: 0.85rem; height: 0.85rem; }
+.mstation__time { margin-left: auto; font: var(--fw-bold) var(--fs-lg) / 1 var(--font-body); font-variant-numeric: tabular-nums; }
+.mstation__idle { margin: 0; }
+.mstation__r2 { display: flex; align-items: center; gap: 0.5rem; min-height: 1.5rem; min-width: 0; }
+.mstation__faces { display: inline-flex; flex: none; }
+.mstation__faces img { width: 1.5rem; height: 1.5rem; border-radius: 50%; object-fit: cover; object-position: 50% 20%; border: 1.5px solid var(--c-border-strong); background: var(--c-surface-2); }
+.mstation__faces img + img { margin-left: -0.35rem; }
+.mstation__nick { font-size: var(--fs-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 10rem; }
+.mstation__duo { color: var(--c-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.mstation__case { margin: 0; min-height: 1.05rem; line-height: 1.25; color: var(--c-text-2); font-size: 0.8125rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mstation__track { display: flex; align-items: center; gap: 0.4rem; min-height: 1.45rem; min-width: 0; white-space: nowrap; }
+.mstation__step { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--c-text-muted); }
+.mstation__step .icon { width: 0.95rem; height: 0.95rem; }
+.mstation__egg.is-on { color: var(--c-egg-common); }
+.mstation__egg.is-dropped { color: var(--c-lantern); }
+.mstation__tower.is-on { color: var(--c-lantern); }
+.mstation__arrow { color: var(--c-text-muted); }
+.mstation__obj { margin-left: auto; padding: 0 0.5rem; border-radius: var(--r-pill); border: 1px solid var(--c-lantern); color: var(--c-lantern); font-weight: var(--fw-bold); font-size: 0.75rem; }
+.mstation__r5 { display: flex; align-items: center; gap: 0.7rem; min-height: 1.45rem; white-space: nowrap; min-width: 0; }
+.mstation__hp { display: inline-flex; align-items: center; gap: 0.3rem; }
+.mstation__hp .icon { width: 0.85rem; height: 0.85rem; color: var(--c-text-muted); }
+.mstation__hpbar { display: inline-block; width: 6rem; height: 6px; background: var(--c-surface-2); }
+.mstation__hpbar > span { display: block; height: 100%; background: var(--c-text-2); border-radius: 0 3px 3px 0; }
+.mstation__hpbar > span.is-low { background: var(--c-lantern); }
+.mstation__hyde { display: inline-flex; align-items: center; gap: 0.25rem; margin-left: auto; padding: 0 0.45rem; border-radius: var(--r-pill); border: 1px solid var(--c-border-strong); }
+.mstation__hyde .icon { width: 0.85rem; height: 0.85rem; }
+.mstation__hyde.is-chase { border-color: var(--c-hyde); color: var(--c-hyde-text, #ff8a8a); }
+.mstation__r6 { margin: 0; display: flex; align-items: center; gap: 0.75rem; min-height: 1.35rem; white-space: nowrap; overflow: hidden; }
+.mstation__src { color: var(--c-text-muted); font-weight: var(--fw-regular); }
+.mstation__r7 { margin: 0; display: flex; align-items: center; gap: 0.4rem; min-width: 0; min-height: 1.5rem; }
+.mstation__head { flex: none; font-size: 0.6875rem; letter-spacing: 0.06em; font-weight: var(--fw-bold); color: var(--c-text-muted); white-space: nowrap; }
+.mstation__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-2); }
+.mstation__followed { flex: none; margin-left: auto; white-space: nowrap; font-size: 0.75rem; color: var(--c-text-muted); }
+.mstation__age { margin-top: auto; min-height: 0.9rem; line-height: 1.1; }
+
+/* ---- Joseph Crackstone on the station card (UX_ENEMIES §8): his MODE only (never his position); a DOUBLE green border
+   + "HUNTED" chip while he chases (shape differs from the Hyde's solid red CHASING frame — never both, R6). */
+.mstation.is-hunted { border: 2px double var(--c-crack); box-shadow: 0 0 18px rgba(168, 224, 99, 0.25); }
+.mstation__hunted { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0 0.5rem; border-radius: var(--r-sm); border: 1px solid var(--c-crack); color: var(--c-crack-text); font-weight: var(--fw-bold); font-size: 0.75rem; letter-spacing: 0.06em; }
+.mstation__hunted .icon { width: 0.85rem; height: 0.85rem; }
+.mstation__crack { display: inline-flex; align-items: center; gap: 0.25rem; max-width: 6.25rem; padding: 0 0.45rem; border-radius: var(--r-sm); border: 1px solid var(--c-border-strong); white-space: nowrap; overflow: hidden; }
+.mstation__crack .icon { width: 0.85rem; height: 0.85rem; flex: none; color: var(--c-crack); }
+.mstation__crack.is-hunting { border: 3px double var(--c-crack); color: var(--c-crack-text); font-weight: var(--fw-bold); }
+.mstation__r5 > .mstation__crack:not(.mstation__hyde + .mstation__crack) { margin-left: auto; }
+.mstation__r5 > .mstation__hyde + .mstation__crack { margin-left: -0.3rem; }
+.mstation__case { display: flex; gap: 0.6rem; }
+/* R5 with both enemy chips: a shorter HP bar and tighter gaps keep the Crackstone chip whole (≤ 100 px) */
+.mstation__r5:has(.mstation__crack) { gap: 0.45rem; }
+.mstation__r5:has(.mstation__crack) .mstation__hpbar { width: 4rem; }
+.mstation__casetext { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mstation__chases { flex: none; margin-left: auto; color: var(--c-text); font-weight: var(--fw-semi); }
+
+/* ---- P3 (deploy carry-over): the header never lets the KPI tiles slide under the "Live · verified" badge — badges and
+   buttons keep their size, the six tiles use short labels (full label + n in the tooltip) and may only shrink to their
+   label; at 1366 the title steps down one size and the "N verified runs" note (the Runs tile says it) gives way. */
+.mdash__head--kpi > :not(.mdash-kpis) { flex: none; }
+.mdash-kpis { flex: 1 1 auto; justify-content: flex-end; min-width: 0; gap: 0.4rem; }
+.mdash-kpi { min-width: 0; flex: 0 0 auto; padding: 0.1rem 0.5rem 0.15rem; }
+.mdash-kpi dd { flex-wrap: nowrap; }
+@media (max-width: 1500px) {
+  .mdash__head--kpi .mdash__title { font-size: var(--fs-md); }
+  .mdash__head--kpi .mdash__count { display: none; }
+  .mdash__head--kpi .badge { padding: 0 0.6rem; }
+}
+
+/* ---- Final wave (UX_FINAL, FINAL_CONTRACT §10): v4 standings + defeat log with the monster; three monster chips on the
+   station card (mode word only; shape + glyph per monster, never colour alone; Slurp = orchid "drooping coffin"). */
+.mdash-standings li.is-first .mdash-rank, .mdash-standings li.is-first .mdash-score { color: var(--c-lantern); }
+.mdash-dnf { display: grid; gap: 0.1rem; }
+.mdash-standings__head { display: flex; justify-content: space-between; gap: 0.5rem; }
+.mdash-standings__n { color: var(--c-text-muted); font-weight: var(--fw-semi); letter-spacing: 0.04em; }
+.mdash-dnf__head { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--c-text-muted); }
+.mdash-dnf__row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.5rem; align-items: center; }
+.mdash-dnf__by { font-size: 0.75rem; }
+.mdash-dnf__by .icon { width: 0.85rem; height: 0.85rem; }
+.mstation__mons { display: inline-flex; align-items: center; gap: 0.25rem; margin-left: auto; min-width: 0; }
+.mstation__mon {
+  display: inline-flex; align-items: center; gap: 0.2rem; max-width: 6rem; padding: 0 0.35rem; font-size: 0.75rem; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--c-border-strong); color: var(--c-text-2);
+}
+.mstation__mon .icon { width: 0.8rem; height: 0.8rem; flex: none; }
+.mstation__mon--hyde { border-radius: var(--r-pill); }
+.mstation__mon--hyde .icon { color: var(--c-hyde-text, #ff8a8a); }
+.mstation__mon--crackstone { border-radius: var(--r-sm); }
+.mstation__mon--crackstone .icon { color: var(--c-crack, #a8e063); }
+.mstation__mon--slurp { border-radius: 3px 3px 9px 9px; }
+.mstation__mon--slurp .icon { color: var(--c-slurp-text, #eeb0f3); }
+.mstation__mon.is-away { border-style: dotted; opacity: 0.7; }
+.mstation__mon.is-hot { font-weight: var(--fw-bold); border-width: 2px; }
+.mstation__mon--hyde.is-hot { border-color: var(--c-hyde); color: var(--c-hyde-text, #ff8a8a); }
+.mstation__mon--crackstone.is-hot { border: 3px double var(--c-crack); color: var(--c-crack-text, #c4ef8a); }
+.mstation__mon--slurp.is-hot { border-color: var(--c-slurp, #d77be0); color: var(--c-slurp-text, #eeb0f3); box-shadow: 0 0 10px rgba(215, 123, 224, 0.4); }
+.mstation__r5:has(.mstation__mons) { gap: 0.4rem; }
+.mstation__r5:has(.mstation__mons) .mstation__hpbar { width: 3rem; }

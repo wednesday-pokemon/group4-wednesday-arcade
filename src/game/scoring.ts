@@ -1,0 +1,86 @@
+// Scoring and leaderboard ordering (rules v2.5). Pure; integer centiseconds / centi-points throughout.
+import type { PokemonId, ScoreRecord } from './types.ts';
+
+/** Final surviving egg points: Gholdengo floor(banked x 1.25) (exact integer math), others raw banked. */
+export function computeFinalEggPoints(bankedEggPoints: number, pokemonId: PokemonId): number {
+  if (pokemonId === 'gholdengo') return Math.floor((bankedEggPoints * 5) / 4);
+  return bankedEggPoints;
+}
+
+/** Score in hundredths of a point: eggs x 100 points - seconds  ==  eggs x 10000 - timeCs. Exact integer. */
+export function computeScoreCenti(finalEggPoints: number, totalSimulatedTimeCs: number): number {
+  return finalEggPoints * 10000 - totalSimulatedTimeCs;
+}
+
+/** Ranked score with 2 decimals (may be negative). */
+export function computeFinalScore(finalEggPoints: number, totalSimulatedTimeCs: number): number {
+  return computeScoreCenti(finalEggPoints, totalSimulatedTimeCs) / 100;
+}
+
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+const ISO_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?\s*(Z|[+-]\d{2}:?\d{2})?$/i;
+
+/** Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's days_from_civil). */
+function daysFromCivil(y: number, m: number, d: number): number {
+  const yy = m <= 2 ? y - 1 : y;
+  const era = Math.floor(yy / 400);
+  const yoe = yy - era * 400;
+  const doy = Math.floor((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1;
+  const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+  return era * 146097 + doe - 719468;
+}
+
+/** Pure ISO-8601 -> epoch milliseconds (no Date object). Missing zone = UTC. NaN when unparseable. */
+export function isoToEpochMs(iso: string): number {
+  const m = ISO_RE.exec(iso.trim());
+  if (!m) return Number.NaN;
+  const [, y, mo, d, h = '0', mi = '0', s = '0', frac = '', zone = 'Z'] = m;
+  const ms = frac ? Math.floor(Number(`0.${frac}`) * 1000 + 1e-9) : 0;
+  let offsetMin = 0;
+  if (zone.toUpperCase() !== 'Z') {
+    const digits = zone.replace(':', '');
+    const sign = digits[0] === '-' ? -1 : 1;
+    offsetMin = sign * (Number(digits.slice(1, 3)) * 60 + Number(digits.slice(3, 5)));
+  }
+  const days = daysFromCivil(Number(y), Number(mo), Number(d));
+  return ((days * 24 + Number(h)) * 60 + Number(mi) - offsetMin) * 60000 + Number(s) * 1000 + ms;
+}
+
+/** Deterministic timestamp ordering; parses ISO strings, falls back to string comparison. */
+function compareTimestamps(a: string, b: string): number {
+  const ta = isoToEpochMs(a);
+  const tb = isoToEpochMs(b);
+  if (Number.isFinite(ta) && Number.isFinite(tb)) return ta - tb;
+  return compareStrings(a, b);
+}
+
+/**
+ * Ranked sort comparator (GDD §5): score desc, final egg points desc, simulated time asc,
+ * verified completion time asc, session id asc (final stable key).
+ */
+export function compareScoreRecords(a: ScoreRecord, b: ScoreRecord): number {
+  const sa = Math.round(a.finalScore * 100);
+  const sb = Math.round(b.finalScore * 100);
+  if (sa !== sb) return sb - sa;
+  if (a.finalEggPoints !== b.finalEggPoints) return b.finalEggPoints - a.finalEggPoints;
+  if (a.totalSimulatedTimeCs !== b.totalSimulatedTimeCs) return a.totalSimulatedTimeCs - b.totalSimulatedTimeCs;
+  const t = compareTimestamps(a.completedAt, b.completedAt);
+  if (t !== 0) return t;
+  return compareStrings(a.sessionId, b.sessionId);
+}
+
+/** Completed sessions only (dnf / abandoned / in_progress excluded), sorted by `compareScoreRecords`. */
+export function rankLeaderboard(records: ScoreRecord[]): ScoreRecord[] {
+  return records.filter((r) => r.status === 'completed').sort(compareScoreRecords);
+}
+
+/** Centiseconds -> "45.60" (exact; integer formatting, no float rounding). */
+export function formatSeconds(cs: number): string {
+  const rounded = Math.round(cs);
+  const sign = rounded < 0 ? '-' : '';
+  const abs = Math.abs(rounded);
+  return `${sign}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, '0')}`;
+}

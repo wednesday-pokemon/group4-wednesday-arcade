@@ -1,0 +1,413 @@
+// Thing's subtitled lines (plan §9, UX spec §3–§6). Game-designer owned.
+//
+// Rules: every line ≤ 60 chars where possible (hard cap 90) — the exact Stay Silent sentence is the only exception
+// to the 60 budget. Overhaul budgets (UX_OVERHAUL): log-style event lines ≤ 34 chars, advice-style lines ≤ 52 chars
+// after filling placeholders. Thing NEVER names or hints at the culprit, and never names a suspect at all before the
+// verdict. Templates use {placeholders} filled by formatThingLine(): {character} = NightshadeDef.shortName,
+// {pokemon} = PokemonPartnerDef.name, {power} = power name, {move} = move name, {n} = a number, {area} = AreaDef.name
+// (≤ 18), {direction} = compass word (≤ 10, e.g. "north-east"), {label} = SiteDef.label (≤ 20).
+// Keys: the character power is pressed with Q, the Pokémon move with R (slot ids stay 'F' / 'Q' in data).
+//
+// Final (2026-10-24, FINAL_CONTRACT §8): Thing = mascot, prologue, FREE prescriptive advice (`prescriptive`, ≤ 52 chars
+// filled, rate-limited by the caller) and status reactions (`slurp`, `cabinet`, `status`, log-style ≤ 34 chars).
+// Principal Weems = OPTIONAL hints only (`WEEMS`, ≤ 90 chars): every press is a scored `hint_requested` (−50).
+// Weems never names a suspect. `DEATH_LINES` / `CABINET_PROMPTS` are UI copy for the game-over card and cabinets.
+import type { CaseId, DnfReason, EnemyId, HydeMode, Verdict } from '../types.ts';
+
+export type ThingPose = 'stand' | 'wave' | 'point' | 'shush' | 'count1' | 'count2' | 'count3' | 'thumbsUp' | 'tap' | 'fist';
+export interface ThingLine { id: string; text: string; pose: ThingPose }
+
+/** The exact tutorial sentence required by the plan (§7) — asserted verbatim by e2e. Do not edit. */
+export const THING_STAY_SILENT = 'Stay Silent: Move slowly and avoid making noise — Hydes are sensitive to sound.';
+
+export type TutorialStepId = 'move' | 'look' | 'stay_silent' | 'crouch' | 'sprint' | 'interact' | 'power' | 'move_q' | 'board' | 'hint' | 'go';
+
+export interface TutorialLine extends ThingLine { step: TutorialStepId; keys: string }
+
+const line = (id: string, pose: ThingPose, text: string): ThingLine => ({ id, pose, text });
+
+export interface ThingScript {
+  welcome: ThingLine[];
+  duoIntro: ThingLine;
+  tutorial: TutorialLine[];
+  objective: Record<'find_clues' | 'find_egg' | 'retrieve_egg' | 'deliver_egg' | 'accuse', ThingLine>;
+  search: { start: ThingLine; interrupted: ThingLine };
+  /** Generic clue-found line; each case's ClueDef.thing.found is preferred. */
+  clueFound: ThingLine;
+  clueCount: Record<1 | 2 | 3, ThingLine>;
+  /** Reveal-power lines for the egg / nothing; per-clue vision lines come from ClueDef.thing.vision. */
+  vision: Record<'egg' | 'nothing', ThingLine>;
+  threat: Record<HydeMode, ThingLine[]>;
+  catch: { first: ThingLine; blocked: ThingLine; invulnerable: ThingLine };
+  egg: { seen: ThingLine; pickup: ThingLine; setDown: ThingLine; forcedDrop: ThingLine; lowSecurity: ThingLine };
+  tower: { approach: ThingLine; deposit: ThingLine; fewClues: ThingLine };
+  accusation: { prompt: ThingLine; reminder: ThingLine };
+  results: Record<Verdict, ThingLine>;
+  dnf: Record<DnfReason, ThingLine>;
+  hints: ThingLine[];
+  idle: ThingLine;
+  // ---- overhaul (2026-10-23)
+  /** Hyde emergence: `soon` is advice-style ({n} = seconds left), the rest log-style. */
+  hyde: { soon: ThingLine; emerged: ThingLine; calm: ThingLine };
+  /** A candidate site seen empty (clue / egg). */
+  site: { clueEmpty: ThingLine; eggEmpty: ThingLine };
+  trace: { found: ThingLine };
+  /** `intro` before the result text; `noTrace` after an examine that gives no egg trace. */
+  examine: { intro: ThingLine; noTrace: ThingLine };
+  passage: { opened: ThingLine };
+  hazard: Record<'glass' | 'boards' | 'rubble' | 'puddle' | 'searchlight', ThingLine>;
+  /** V hints, one level per press for the same target: 1 area → 2 direction → 3 most likely spot (advice-style). */
+  progressiveHints: Record<1 | 2 | 3, ThingLine>;
+  // ---- enemy contract (2026-10-24): Joseph Crackstone
+  /**
+   * `area` / `deaf` are advice-style (said at the start of play; {area} = CrackstoneDef.areaName ≤ 15 chars); the rest
+   * are log-style event lines (≤ 34 chars): telegraphs (`scanWarn`, `curseWarn`), detection (`glimpse` = INVESTIGATE,
+   * `seen` / `sensed` / `scanHit` = CHASE by sight / proximity / scan), outcomes and his mode changes.
+   */
+  crackstone: Record<
+    | 'area' | 'deaf' | 'scanWarn' | 'curseWarn' | 'glimpse' | 'seen' | 'sensed' | 'scanHit' | 'escaped'
+    | 'curseHit' | 'curseBlocked' | 'curseDodged' | 'gaveUp' | 'returned' | 'deferred',
+    ThingLine
+  >;
+  // ---- final (2026-10-24)
+  /**
+   * FREE prescriptive advice (never a `hint_requested`). Advice-style ≤ 52 chars after filling: {area} ≤ 18,
+   * {direction} ≤ 10, {move} = Pokémon move name (≤ 15).
+   */
+  prescriptive: Record<
+    | 'hideHyde' | 'hideSlurp' | 'hideCrackstone' | 'closeCabinet' | 'stayQuiet' | 'exitCabinet' | 'creak'
+    | 'saferPath' | 'saferPathArea' | 'defensive' | 'defensiveMove' | 'searchArea' | 'searchDirection' | 'breakSight'
+    | 'sprintAway' | 'avoidArea' | 'deliver',
+    ThingLine
+  >;
+  /** Slurp status reactions (log-style ≤ 34). */
+  slurp: Record<'appeared' | 'glimpse' | 'seen' | 'sensed' | 'heard' | 'heardCabinet' | 'lunge' | 'hit' | 'blocked' | 'escaped' | 'left', ThingLine>;
+  /** Cabinet reactions (log-style ≤ 34). */
+  cabinet: Record<'hidden' | 'doorShut' | 'loud' | 'witnessed' | 'pulledOut' | 'out', ThingLine>;
+  /** Director / generic status reactions (log-style ≤ 34). */
+  status: Record<'enemyGone' | 'twoHunters' | 'blocked' | 'hpLow', ThingLine>;
+}
+
+export const THING: ThingScript = {
+  welcome: [
+    line('welcome_dead', 'wave', 'Professor Orloff is dead. His egg is gone.'),
+    line('welcome_hyde', 'point', 'A Hyde stalks the ruins. Someone set it loose.'),
+    line('welcome_sign', 'tap', 'Sign the case file.'),
+  ],
+
+  /** Shown right after the duo is chosen. Longest pair ("Wednesday" + "Galarian Corsola") = 60 chars. */
+  duoIntro: line('duo_intro', 'wave', '{character} and {pokemon}. Good. Follow me — quietly.'),
+
+  tutorial: [
+    { step: 'move', keys: 'W A S D', ...line('tut_move', 'point', 'W A S D to walk. Follow the lamps inland.') },
+    { step: 'look', keys: 'Mouse / ← →', ...line('tut_look', 'point', 'Mouse or arrow keys to look around.') },
+    { step: 'stay_silent', keys: '', ...line('tut_stay_silent', 'shush', THING_STAY_SILENT) },
+    { step: 'crouch', keys: 'C', ...line('tut_crouch', 'shush', 'C to crouch. Slow and quiet — heard within 2 m.') },
+    { step: 'sprint', keys: 'Shift', ...line('tut_sprint', 'tap', 'Shift sprints. Fast, but heard within 13 m.') },
+    { step: 'interact', keys: 'E', ...line('tut_interact', 'point', 'E searches. Try the crate — and stand still.') },
+    { step: 'power', keys: 'Q', ...line('tut_power', 'tap', 'Q uses {power}. Watch for the LOUD tag.') },
+    { step: 'move_q', keys: 'R', ...line('tut_move_q', 'tap', 'R calls {move}. Each has a cooldown.') },
+    { step: 'board', keys: 'Tab', ...line('tut_board', 'count3', 'Tab opens your evidence board.') },
+    { step: 'hint', keys: 'V', ...line('tut_hint', 'tap', 'V asks Principal Weems for a hint. Each costs 50.') },
+    { step: 'go', keys: '', ...line('tut_go', 'point', 'Sprinting is loud. Tab: evidence. V: Weems. Go.') },
+  ],
+
+  objective: {
+    // Same wording as the HUD objective (UX_OVERHAUL); the accuse line avoids verdict words on purpose.
+    find_clues: line('obj_clues', 'point', 'Find 3 clues.'),
+    find_egg: line('obj_egg', 'point', 'Find the egg.'),
+    retrieve_egg: line('obj_retrieve', 'point', 'Pick up the egg (E).'),
+    deliver_egg: line('obj_deliver', 'point', 'Take the egg to Iago Tower.'),
+    accuse: line('obj_accuse', 'point', 'Name who released the Hyde.'),
+  },
+
+  search: {
+    start: line('search_start', 'shush', 'Hold still. Searching makes a little noise.'),
+    interrupted: line('search_paused', 'tap', 'Search paused. Your progress is kept.'),
+  },
+
+  /** On pickup when the case has no line of its own (content-neutral: points to the board, not to a person). */
+  clueFound: line('clue_found', 'point', 'Evidence. Read it on the board.'),
+
+  /** Progress line after the per-clue line; index = clues found (1..3). */
+  clueCount: {
+    1: line('clue_count_1', 'count1', 'One clue. Two more on this island.'),
+    2: line('clue_count_2', 'count2', "That's 2 of 3."),
+    3: line('clue_count_3', 'count3', 'All three. Weigh them before you accuse.'),
+  },
+
+  /** Psychic Vision / reveal effects: a light inference prompt, never a suspect. */
+  vision: {
+    egg: line('vision_egg', 'point', 'A vision of a shell, waiting in the dark.'),
+    nothing: line('vision_none', 'tap', 'The vision is quiet. Nothing left nearby.'),
+  },
+
+  threat: {
+    PATROL: [
+      line('threat_patrol_1', 'stand', "It's on its rounds. Learn the route."),
+      line('threat_patrol_2', 'stand', 'Heavy footsteps. Keep stone between you.'),
+    ],
+    INVESTIGATE_SOUND: [
+      line('threat_investigate_1', 'shush', 'It heard something. Freeze or crouch.'),
+      line('threat_investigate_2', 'shush', 'It is coming to check that noise.'),
+    ],
+    SEARCH: [
+      line('threat_search_1', 'shush', "It's searching. Hide and stay quiet."),
+      line('threat_search_2', 'shush', 'It lost you. Do not make a sound.'),
+    ],
+    CHASE: [
+      line('threat_chase_1', 'fist', 'It sees you! Break its line of sight!'),
+      line('threat_chase_2', 'fist', 'Run, then hide! Walls and corners help.'),
+    ],
+    COOLDOWN: [
+      line('threat_cooldown_1', 'tap', "It's losing interest. Breathe."),
+      line('threat_cooldown_2', 'tap', 'It is turning back to its route.'),
+    ],
+  },
+
+  catch: {
+    first: line('catch_first', 'fist', 'Caught! You got loose. Once more ends it.'),
+    blocked: line('catch_blocked', 'thumbsUp', 'Shield held. No damage — but the catch counts.'),
+    invulnerable: line('catch_safe', 'tap', 'A few seconds of safety. Move.'),
+  },
+
+  egg: {
+    seen: line('egg_seen', 'point', "The egg. E to pick it up — it's heavy."),
+    pickup: line('egg_pickup', 'thumbsUp', 'Got it. Heavier means slower and louder.'),
+    setDown: line('egg_set_down', 'tap', 'Egg set down. Come back for it.'),
+    forcedDrop: line('egg_forced_drop', 'fist', 'You dropped it! That crash carried far.'),
+    lowSecurity: line('egg_low_security', 'shush', 'The shell is cracking. Avoid hits and walls.'),
+  },
+
+  tower: {
+    approach: line('tower_approach', 'point', 'Iago Tower. Step inside and press E.'),
+    deposit: line('tower_deposit', 'thumbsUp', 'Egg secured. Now — who released the Hyde?'),
+    fewClues: line('tower_few_clues', 'tap', 'Only {n} of {total} clues. The case may stay unsolved.'),
+  },
+
+  accusation: {
+    prompt: line('accuse_prompt', 'point', 'Name one suspect. You only get one try.'),
+    reminder: line('accuse_reminder', 'tap', 'Which suspect do all three clues name?'),
+  },
+
+  results: {
+    case_solved: line('result_solved', 'thumbsUp', 'Case solved. Every clue held.'),
+    egg_secured_mystery_unsolved: line('result_unsolved', 'tap', 'The egg is safe. The truth slipped away.'),
+    not_accused: line('result_not_accused', 'tap', 'The egg is safe. The case stays open.'),
+  },
+
+  dnf: {
+    second_catch: line('dnf_second_catch', 'fist', 'Dragged into the fog. It caught you twice.'),
+    hp_depleted: line('dnf_hp', 'fist', 'Dragged into the fog. Your strength ran out.'),
+  },
+
+  /** Generic fallback hints for V when the prescriptive service has nothing feasible to add. Never names anyone. */
+  hints: [
+    line('hint_crouch', 'shush', 'Crouch near the Hyde. Walking is heard at 7 m.'),
+    line('hint_hide', 'shush', 'Hiding spots hide you. It can still hear you.'),
+    line('hint_walls', 'tap', 'Walls muffle sound. Keep stone between you.'),
+    line('hint_where', 'point', 'Tab shows where clues may be.'),
+    line('hint_board', 'tap', 'On the board: who is explained, who is not?'),
+    line('hint_patrol', 'point', 'It walks a loop. Wait for it to pass.'),
+  ],
+
+  idle: line('idle_tap', 'tap', 'Still here? The Hyde certainly is.'),
+
+  // ---- overhaul lines (log-style ≤ 34 chars, advice-style ≤ 52 chars filled)
+  hyde: {
+    soon: line('hyde_soon', 'shush', 'The Hyde wakes in {n} s. Get under cover.'), // advice, 40 filled
+    emerged: line('hyde_emerged', 'fist', 'The Hyde is loose. Stay quiet.'), // 30
+    calm: line('hyde_calm', 'tap', 'It gave up. Catch your breath.'), // 30
+  },
+  site: {
+    clueEmpty: line('site_clue_empty', 'tap', 'Nothing here. Cross it off.'), // 27
+    eggEmpty: line('site_egg_empty', 'tap', 'No egg here. Map updated.'), // 25
+  },
+  trace: { found: line('trace_found', 'point', 'An egg trace! Map updated.') }, // 26
+  examine: {
+    intro: line('examine_intro', 'point', 'Let me look closer...'), // 21
+    noTrace: line('examine_no_trace', 'tap', 'Strange. Remember that.'), // 23
+  },
+  passage: { opened: line('passage_opened', 'thumbsUp', 'A hidden way opens!') }, // 19
+  hazard: {
+    glass: line('hazard_glass', 'shush', 'Glass! Crouch to cross.'), // 23
+    boards: line('hazard_boards', 'shush', 'Creaky boards. Crouch.'), // 22
+    rubble: line('hazard_rubble', 'shush', 'Loose rubble. Crouch.'), // 21
+    puddle: line('hazard_puddle', 'shush', 'Splash! Crouch in water.'), // 24
+    searchlight: line('hazard_searchlight', 'fist', 'Spotted by the light! Hide.'), // 27
+  },
+  progressiveHints: {
+    1: line('hint_lvl1_area', 'point', 'Search the {area} next.'), // ≤ 35 filled
+    2: line('hint_lvl2_direction', 'point', 'Head {direction}, toward the {area}.'), // ≤ 48 filled
+    3: line('hint_lvl3_spot', 'point', 'Most likely spot: the {label}.'), // ≤ 50 filled
+  },
+  // ---- Joseph Crackstone (advice-style ≤ 52 filled, log-style ≤ 34). Never a suspect; plain words.
+  crackstone: {
+    area: line('crackstone_area', 'point', 'Crackstone haunts the {area}. Stay unseen.'), // ≤ 50 filled
+    deaf: line('crackstone_deaf', 'tap', "He can't hear you, but he sees far. Use walls."), // 46
+    scanWarn: line('crackstone_scan_warn', 'fist', 'A scan! Get behind a wall or hide!'), // 34
+    curseWarn: line('crackstone_curse_warn', 'fist', 'Curse circle — step out of it!'), // 30
+    glimpse: line('crackstone_glimpse', 'shush', 'Crackstone noticed you. Hide!'), // 29
+    seen: line('crackstone_seen', 'fist', 'Crackstone saw you! Hide or run!'), // 32
+    sensed: line('crackstone_sensed', 'fist', 'Too close! Crackstone sensed you.'), // 33
+    scanHit: line('crackstone_scan_hit', 'fist', 'The scan found you! Run or hide!'), // 32
+    escaped: line('crackstone_escaped', 'thumbsUp', 'You lost Crackstone. Stay unseen.'), // 33
+    curseHit: line('crackstone_curse_hit', 'fist', 'Cursed! Slowed for a moment.'), // 28
+    curseBlocked: line('crackstone_curse_blocked', 'thumbsUp', 'Shield held. The curse fizzled.'), // 31
+    curseDodged: line('crackstone_curse_dodged', 'thumbsUp', 'Curse dodged! Keep moving.'), // 26
+    gaveUp: line('crackstone_gave_up', 'tap', 'Crackstone gave up the hunt.'), // 28
+    returned: line('crackstone_returned', 'tap', 'Crackstone is back on his rounds.'), // 33
+    deferred: line('crackstone_deferred', 'tap', 'Crackstone backs off for now.'), // 29
+  },
+  // ---- final: FREE prescriptive advice (advice-style ≤ 52 filled) — Thing's, never scored
+  prescriptive: {
+    hideHyde: line('rx_hide_hyde', 'shush', 'Hide. The Hyde is approaching.'), // 30
+    hideSlurp: line('rx_hide_slurp', 'shush', 'Hide. Slurp is shambling closer.'), // 32
+    hideCrackstone: line('rx_hide_crackstone', 'shush', 'Hide. Crackstone is looking this way.'), // 37
+    closeCabinet: line('rx_close_cabinet', 'shush', 'Close the cabinet. Press E.'), // 27
+    stayQuiet: line('rx_stay_quiet', 'shush', 'Stay quiet. It is right outside.'), // 32
+    exitCabinet: line('rx_exit_cabinet', 'tap', 'All clear. E to step out.'), // 25
+    creak: line('rx_creak', 'tap', 'The door creaks. Move out soon.'), // 31
+    saferPath: line('rx_safer_path', 'point', 'Take the safer path.'), // 20
+    saferPathArea: line('rx_safer_path_area', 'point', 'Take the safer path through the {area}.'), // ≤ 51
+    defensive: line('rx_defensive', 'fist', 'Use your Pokémon’s defensive move.'), // 34
+    defensiveMove: line('rx_defensive_move', 'fist', 'Use {move} now — R!'), // ≤ 34
+    searchArea: line('rx_search_area', 'point', 'Search the {area}.'), // ≤ 30
+    searchDirection: line('rx_search_direction', 'point', 'Search the {area} to the {direction}.'), // ≤ 48
+    breakSight: line('rx_break_sight', 'fist', 'Break its line of sight. Get behind a wall.'), // 43
+    sprintAway: line('rx_sprint_away', 'fist', 'Sprint! You are faster than it.'), // 31
+    avoidArea: line('rx_avoid_area', 'point', 'Crackstone watches the {area}. Go round.'), // ≤ 50
+    deliver: line('rx_deliver', 'point', 'Carry the egg to Iago Tower. Stay low.'), // 38
+  },
+  // ---- final: Slurp reactions (log-style ≤ 34). Isaac Night's zombie form; plain words, nothing graphic.
+  slurp: {
+    appeared: line('slurp_appeared', 'shush', 'Slurp is out there. Stay unseen.'), // 32
+    glimpse: line('slurp_glimpse', 'shush', 'Slurp noticed something. Hide!'), // 30
+    seen: line('slurp_seen', 'fist', 'Slurp saw you! Run or hide!'), // 27
+    sensed: line('slurp_sensed', 'fist', 'Too close! Slurp smelled you.'), // 29
+    heard: line('slurp_heard', 'shush', 'Slurp heard that. Freeze.'), // 25
+    heardCabinet: line('slurp_heard_cabinet', 'shush', 'Slurp heard the cabinet door.'), // 29
+    lunge: line('slurp_lunge', 'fist', 'Slurp lunges — get clear!'), // 25
+    hit: line('slurp_hit', 'fist', 'Slurp grabbed you! Get away!'), // 28
+    blocked: line('slurp_blocked', 'thumbsUp', 'Shield held. Slurp let go.'), // 26
+    escaped: line('slurp_escaped', 'thumbsUp', 'You lost Slurp. Stay quiet.'), // 27
+    left: line('slurp_left', 'tap', 'Slurp shuffles off into the dark.'), // 33
+  },
+  // ---- final: cabinet reactions (log-style ≤ 34)
+  cabinet: {
+    hidden: line('cabinet_hidden', 'shush', 'Inside. Now close the door.'), // 27
+    doorShut: line('cabinet_door_shut', 'shush', 'Door shut. Nothing can see you.'), // 31
+    loud: line('cabinet_loud', 'fist', 'Too loud! Something heard that.'), // 31
+    witnessed: line('cabinet_witnessed', 'fist', 'It saw you hide! Get out!'), // 25
+    pulledOut: line('cabinet_pulled_out', 'fist', 'Pulled out! It saw you go in.'), // 29
+    out: line('cabinet_out', 'tap', 'Out again. Keep moving.'), // 23
+  },
+  // ---- final: director / generic status (log-style ≤ 34)
+  status: {
+    enemyGone: line('status_enemy_gone', 'tap', 'It slipped away. For now.'), // 25
+    twoHunters: line('status_two_hunters', 'shush', 'Two hunters out. Tread lightly.'), // 31
+    blocked: line('status_blocked', 'thumbsUp', 'Your Pokémon blocked the attack.'), // 32
+    hpLow: line('status_hp_low', 'fist', 'You are hurt. Hide and recover.'), // 31
+  },
+};
+
+// ----------------------------------------------------------------------------------------------------- Weems
+
+/**
+ * Principal Larissa Weems — the ghostly guide (FINAL_CONTRACT §8). OPTIONAL hints on "Ask Weems" (V): each press is a
+ * `hint_requested {level}` and costs 50 points. Voice: dry, principled, a little amused, from beyond the veil.
+ * Rules: ≤ 90 chars per line (after filling {area} ≤ 18 / {label} ≤ 20 / {direction} ≤ 10); never names or hints at
+ * a suspect by name; L3 guides the reasoning, never states who did it.
+ * - L1 general search area · L2 specific spot or evidence relationship · L3 deduction guidance.
+ * - `templates` are filled from the live posterior (the most likely unchecked area / site) — honest, never the hidden
+ *   layout; `byCase` are the case's fixed lines (index = how many hints of that level were already given, clamped).
+ */
+export interface WeemsScript {
+  name: string;
+  intro: string;
+  cooldown: string;
+  exhausted: string;
+  templates: Record<1 | 2 | 3, string>;
+  byCase: Record<CaseId, Record<1 | 2 | 3, readonly string[]>>;
+}
+
+export const WEEMS: WeemsScript = {
+  name: 'Principal Weems',
+  intro: 'I advise, I do not solve. And every word from me costs you fifty points.', // 73
+  cooldown: 'Patience. Even the departed wait their turn.', // 44
+  exhausted: 'I have said all a principal may. The rest is yours.', // 51
+  templates: {
+    1: 'Nevermore hides its secrets in the {area}. Begin there.', // ≤ 72 filled
+    2: 'The {label}, in the {area}. Look properly this time.', // ≤ 77 filled
+    3: 'Lay your clues side by side. Who is explained, and who is not?', // 63
+  },
+  byCase: {
+    poisoned_archive: {
+      1: [
+        'A poisoner needs a garden and a desk. Try the greenhouse, then the archive.', // 75
+        'Doors keep diaries here. The porter’s lodge keeps them for the doors.', // 70
+      ],
+      2: [
+        'The vial inventory sits with the plants — or in the Poison Garden’s bed.', // 72
+        'Read the door ledger beside the time on that transfer form.', // 59
+      ],
+      3: [
+        'One badge stood at two doors while its owner claims a third room. Follow the badge.', // 84
+        'Whoever signed the egg away also held the poison. Let the clocks agree.', // 71
+      ],
+    },
+    crypt_last_witness: {
+      1: [
+        'The gate fell at the crypt’s north door. Begin where the professor ended.', // 73
+        'Below ground, a sheet remembers every name. Find the tunnel office.', // 67
+      ],
+      2: [
+        'Something was hidden by the cage — or round the tunnel bend. Tools talk.', // 72
+        'Set the sign-in times against the moment the gate fell.', // 55
+      ],
+      3: [
+        'A key, a signature, a satchel. Find the one person all three belong to.', // 71
+        'Test each statement against what was found below. One claim cannot survive it.', // 79
+      ],
+    },
+    midnight_signal: {
+      1: [
+        'Alarms are silenced from a control room. Ours leans on the alley wall.', // 70
+        'Guards keep logs. Try the ravine post or the checkpoint booth.', // 62
+      ],
+      2: [
+        'The override console remembers a card. The patrol log remembers a wall.', // 71
+        'The watchtower recorder knows where the all-clear was truly sent from.', // 70
+      ],
+      3: [
+        'A card, a lamp, a log. Ask which single person they all point to.', // 65
+        'Check each alibi against a record that cannot lie: lamps, cards, star logs.', // 75
+      ],
+    },
+  },
+};
+
+// ----------------------------------------------------------------------------------------------------- final UI copy
+
+/** Death cutscene → game-over card (FINAL_CONTRACT §7). Not graphic; names the monster. */
+export const DEATH_LINES: Readonly<Record<EnemyId, { title: string; line: string }>> = {
+  hyde: { title: 'Defeated by the Hyde', line: 'The Hyde dragged you into the fog.' },
+  crackstone: { title: 'Defeated by Joseph Crackstone', line: 'Crackstone’s curse pulled you into the cold.' },
+  slurp: { title: 'Defeated by Slurp', line: 'Slurp dragged you into the dark.' },
+};
+
+/** Cabinet prompts (FINAL_BRIEF §5, exact wording). */
+export const CABINET_PROMPTS = {
+  hide: 'E — Hide',
+  close: 'E — Close Door',
+  quiet: 'Stay Quiet',
+  exit: 'E — Exit',
+} as const;
+
+/** Fill {placeholders}; unknown placeholders are left untouched so a missing value is visible in tests. */
+export function formatThingLine(template: string, vars: Readonly<Record<string, string | number>>): string {
+  return template.replace(/\{(\w+)\}/g, (whole, key: string) => {
+    const v = vars[key];
+    return v === undefined ? whole : String(v);
+  });
+}

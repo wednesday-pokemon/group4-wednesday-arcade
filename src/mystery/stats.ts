@@ -1,0 +1,122 @@
+// Duo modifiers and the six card stats (pure; shared with Deno). Imports only shared types + data.
+// Formula = docs/MYSTERY_DESIGN.md §6 (designer intent), implemented literally:
+//
+// combineMods(n, p): every PlayMods field = clamp(modsClamp.min, modsClamp.max, Nightshade value × Pokémon value)
+//   (missing Pokémon fields = 1; MYSTERY_TUNING.modsClamp = 0.6..1.4).
+//
+// Card scale "1 low · 3 typical · 5 high": each stat is a monotone piecewise-linear map of its 0..1 score through
+// three anchors: score 0 → 1, the NEUTRAL score (all mods 1, no relevant effect) → 3, score 1 → 5; rounded to an
+// integer and clamped 1..5. Hyde Control has no passive part, so its neutral score is 0 and the map is simply
+// round(1 + 4 × score): no control effect = 1 (truthful), not "typical".
+//   lin(x, best, worst) = clamp01((worst − x) / (worst − best))     (smaller multiplier = better)
+//   u(e) = min(e.durationS × durMult, 8) × 60 / cooldownS            (effect-seconds per minute; durMult =
+//          hydeEffectDurationMult for stun / slow / distract, else 1; 8 = abilities.maxEffectDurationS)
+//   rng(r, ref) = r ≤ 0 ? 1 : min(1, r / ref)                         (rangeM 0 = unlimited)
+//
+//   investigation = 0.5·lin(interactTimeMult, 0.8, 1.2) + 0.5·min(1, R/9)
+//                   R = Σ reveal_clues u·rng(rangeM, 25) + Σ reveal_hazards 0.5·u·rng(rangeM, 15)
+//   stealth       = 0.6·lin(footstepNoiseMult, 0.75, 1.25) + 0.4·clamp(S/8, −1, 1)
+//                   S = Σ distract 0.6·u + Σ premonition u + Σ lure 0.5·u − Σ speed_boost u·(noiseMult − 1)·0.5
+//   mobility      = 0.6·clamp01((walkSpeedMult·(0.5 + 0.5·sprintSpeedMult) − 0.85) / 0.35) + 0.4·min(1, M/15)
+//                   M = Σ speed_boost magnitude·durationS·3.2·60/cd + Σ dash magnitude·60/cd + Σ power_switch 6
+//   defense       = 0.6·lin(catchDamageMult, 0.75, 1.25) + 0.4·min(1, D)
+//                   D = 0.8·[block_grab] + Σ healHp·60/cd/25 + 0.4·[stun with rangeM ≤ 4 and no line of sight]
+//   hydeControl   = min(1, C/10),  C = Σ stun u + Σ slow u·magnitude + Σ distract 0.6·u + Σ lure 0.5·u
+//   eggProtection = 0.6·lin(eggSecurityLossMult, 0.75, 1.25) + 0.4·min(1, E/6)
+//                   E = Σ egg_shield magnitude·u + 0.4·u(block_grab)
+//
+// Monotonicity (tested): investigation never rises with interactTimeMult, stealth with footstepNoiseMult, defense with
+// catchDamageMult, eggProtection with eggSecurityLossMult; mobility never falls with walk/sprint mults; hydeControl
+// never falls with hydeEffectDurationMult.
+import { MYSTERY_TUNING } from './data/tuning.ts';
+import type { AbilityDef, AbilityEffect, DuoStats, NightshadeDef, PlayMods, PokemonPartnerDef } from './types.ts';
+
+export const NEUTRAL_MODS: PlayMods = {
+  walkSpeedMult: 1, sprintSpeedMult: 1, footstepNoiseMult: 1, interactTimeMult: 1, catchDamageMult: 1,
+  eggSecurityLossMult: 1, hydeEffectDurationMult: 1,
+};
+
+const MOD_KEYS = Object.keys(NEUTRAL_MODS) as (keyof PlayMods)[];
+
+export function combineMods(n: Pick<NightshadeDef, 'mods'>, p: Pick<PokemonPartnerDef, 'mods'>): PlayMods {
+  const out = { ...NEUTRAL_MODS };
+  const { min, max } = MYSTERY_TUNING.modsClamp;
+  for (const k of MOD_KEYS) {
+    const a = n.mods[k] ?? 1;
+    const b = p.mods[k] ?? 1;
+    out[k] = Math.min(max, Math.max(min, Math.round(a * b * 10000) / 10000));
+  }
+  return out;
+}
+
+const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
+const lin = (x: number, best: number, worst: number) => clamp01((worst - x) / (worst - best));
+const rangeFactor = (r: number, ref: number) => (r <= 0 ? 1 : Math.min(1, r / ref));
+
+/** Score 0..1 → integer stat 1..5 with `neutral` mapped to 3 (or, when neutral ≤ 0, linearly 0 → 1, 1 → 5). */
+export function toStat(score: number, neutral = 0): number {
+  const x = clamp01(score);
+  let v: number;
+  if (neutral <= 0 || neutral >= 1) v = 1 + 4 * x;
+  else if (x <= neutral) v = 1 + (2 * x) / neutral;
+  else v = 3 + (2 * (x - neutral)) / (1 - neutral);
+  return Math.min(5, Math.max(1, Math.round(v + 1e-9)));
+}
+
+interface Fx { e: AbilityEffect; cd: number }
+
+export interface StatScores { investigation: number; stealth: number; mobility: number; defense: number; hydeControl: number; eggProtection: number }
+
+/** The raw 0..1 scores behind the stats (exposed for tests and card tie-breaks). */
+export function duoScores(mods: PlayMods, power: AbilityDef, move: AbilityDef): StatScores {
+  const all: Fx[] = [...power.effects.map((e) => ({ e, cd: power.cooldownS })), ...move.effects.map((e) => ({ e, cd: move.cooldownS }))];
+  const cap = MYSTERY_TUNING.abilities.maxEffectDurationS;
+  const u = ({ e, cd }: Fx) => {
+    const durMult = e.kind === 'stun' || e.kind === 'slow' || e.kind === 'distract' ? mods.hydeEffectDurationMult : 1;
+    return (Math.min(e.durationS * durMult, cap) * 60) / Math.max(1, cd);
+  };
+  const sum = (kind: AbilityEffect['kind'], f: (x: Fx) => number) => all.reduce((s, x) => s + (x.e.kind === kind ? f(x) : 0), 0);
+  const has = (pred: (e: AbilityEffect) => boolean) => all.some((x) => pred(x.e));
+
+  const R = sum('reveal_clues', (x) => u(x) * rangeFactor(x.e.rangeM, 25)) + sum('reveal_hazards', (x) => 0.5 * u(x) * rangeFactor(x.e.rangeM, 15));
+  const investigation = 0.5 * lin(mods.interactTimeMult, 0.8, 1.2) + 0.5 * Math.min(1, R / 9);
+
+  const S = sum('distract', (x) => 0.6 * u(x)) + sum('premonition', u) + sum('lure', (x) => 0.5 * u(x))
+    - sum('speed_boost', (x) => u(x) * Math.max(0, (x.e.noiseMult ?? 1) - 1) * 0.5);
+  const stealth = 0.6 * lin(mods.footstepNoiseMult, 0.75, 1.25) + 0.4 * Math.max(-1, Math.min(1, S / 8));
+
+  const M = sum('speed_boost', (x) => (x.e.magnitude * x.e.durationS * 3.2 * 60) / Math.max(1, x.cd))
+    + sum('dash', (x) => (x.e.magnitude * 60) / Math.max(1, x.cd)) + sum('power_switch', () => 6);
+  const mobility = 0.6 * clamp01((mods.walkSpeedMult * (0.5 + 0.5 * mods.sprintSpeedMult) - 0.85) / 0.35) + 0.4 * Math.min(1, M / 15);
+
+  const D = (has((e) => e.kind === 'block_grab') ? 0.8 : 0)
+    + all.reduce((s, x) => s + ((x.e.healHp ?? 0) * 60) / Math.max(1, x.cd) / 25, 0)
+    + (has((e) => e.kind === 'stun' && e.rangeM <= 4 && !e.needsLineOfSight) ? 0.4 : 0);
+  const defense = 0.6 * lin(mods.catchDamageMult, 0.75, 1.25) + 0.4 * Math.min(1, D);
+
+  const C = sum('stun', u) + sum('slow', (x) => u(x) * x.e.magnitude) + sum('distract', (x) => 0.6 * u(x)) + sum('lure', (x) => 0.5 * u(x));
+  const hydeControl = Math.min(1, C / 10);
+
+  const E = sum('egg_shield', (x) => x.e.magnitude * u(x)) + sum('block_grab', (x) => 0.4 * u(x));
+  const eggProtection = 0.6 * lin(mods.eggSecurityLossMult, 0.75, 1.25) + 0.4 * Math.min(1, E / 6);
+
+  return { investigation, stealth, mobility, defense, hydeControl, eggProtection };
+}
+
+const NO_ABILITY: AbilityDef = { id: 'none', name: 'none', key: 'F', cooldownS: 60, noise: 0, effects: [], text: '' };
+
+/** Scores of a neutral duo (all mods 1, no effects): the anchor that maps to 3 on the card. */
+export const NEUTRAL_SCORES: StatScores = duoScores(NEUTRAL_MODS, NO_ABILITY, { ...NO_ABILITY, key: 'Q' });
+
+export function duoStats(mods: PlayMods, power: AbilityDef, move: AbilityDef): DuoStats {
+  const s = duoScores(mods, power, move);
+  const n = NEUTRAL_SCORES;
+  return {
+    investigation: toStat(s.investigation, n.investigation),
+    stealth: toStat(s.stealth, n.stealth),
+    mobility: toStat(s.mobility, n.mobility),
+    defense: toStat(s.defense, n.defense),
+    hydeControl: toStat(s.hydeControl, n.hydeControl),
+    eggProtection: toStat(s.eggProtection, n.eggProtection),
+  };
+}

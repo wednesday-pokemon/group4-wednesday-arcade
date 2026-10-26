@@ -1,0 +1,24 @@
+// Move legality per species/form, generated from docs/MOVE_LEGALITY.md (research agent, sources fetched 2026-10-21;
+// orchestrator spot-checked two). In-game effects are game adaptations, not battle mechanics.
+import type { MoveLegality, PokemonId } from '../types.ts';
+
+export const MOVE_LEGALITY: Record<PokemonId, MoveLegality> = {
+  gengar: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'Level-up Lv. 48; TM114', sourceUrl: 'https://pokemondb.net/pokedex/gengar/moves/9' },
+  alolan_marowak: { status: 'verified', generation: 'Gen VIII', game: 'Sword/Shield', method: 'Level-up Lv. 36 (Alola Form table); TM38', sourceUrl: 'https://www.serebii.net/pokedex-swsh/marowak/' },
+  misdreavus: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'Level-up Lv. 14; TM017', sourceUrl: 'https://pokemondb.net/pokedex/misdreavus/moves/9' },
+  galarian_corsola: { status: 'verified', generation: 'Gen VIII', game: 'Sword/Shield', method: 'Level-up Lv. 35 (Galarian Form table)', sourceUrl: 'https://pokemondb.net/pokedex/corsola/moves/8' },
+  sableye: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'Level-up Lv. 9', sourceUrl: 'https://pokemondb.net/pokedex/sableye/moves/9' },
+  dusknoir: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'Level-up Lv. 1', sourceUrl: 'https://pokemondb.net/pokedex/dusknoir/moves/9' },
+  drifblim: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'Level-up Lv. 48; TM113', sourceUrl: 'https://pokemondb.net/pokedex/drifblim/moves/9' },
+  froslass: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'TM034', sourceUrl: 'https://pokemondb.net/pokedex/froslass/moves/9' },
+  jellicent: { status: 'verified', generation: 'Gen VIII', game: 'Sword/Shield', method: 'Level-up Lv. 12', sourceUrl: 'https://pokemondb.net/pokedex/jellicent/moves/8' },
+  chandelure: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'Level-up Lv. 1; TM107', sourceUrl: 'https://pokemondb.net/pokedex/chandelure/moves/9' },
+  aegislash: { status: 'verified', generation: 'Gen VIII', game: 'Sword/Shield', method: 'Evolution move (also listed at Lv. 1)', sourceUrl: 'https://pokemondb.net/pokedex/aegislash/moves/8' },
+  trevenant: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'Level-up Lv. 1', sourceUrl: 'https://pokemondb.net/pokedex/trevenant/moves/9' },
+  dhelmise: { status: 'verified', generation: 'Gen VIII', game: 'Sword/Shield', method: 'Level-up Lv. 52', sourceUrl: 'https://pokemondb.net/pokedex/dhelmise/moves/8' },
+  decidueye: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'Evolution move', sourceUrl: 'https://pokemondb.net/pokedex/decidueye/moves/9' },
+  dragapult: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'Evolution move', sourceUrl: 'https://pokemondb.net/pokedex/dragapult/moves/9' },
+  basculegion: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'Level-up Lv. 12 (both forms)', sourceUrl: 'https://www.serebii.net/pokedex-sv/basculegion/' },
+  ceruledge: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'Level-up Lv. 48', sourceUrl: 'https://pokemondb.net/pokedex/ceruledge/moves/9' },
+  gholdengo: { status: 'verified', generation: 'Gen IX', game: 'Scarlet/Violet', method: 'Level-up Lv. 56', sourceUrl: 'https://pokemondb.net/pokedex/gholdengo/moves/9' },
+};

@@ -1,0 +1,244 @@
+/* Case-file reveal (docs/MYSTERY_CASES.md): three related-but-distinct case folders on a dark plum desk, antique-gold
+   ink. Positions are per-phase CSS variables set by CaseReveal.tsx (pure filePose); the outer .cfile transitions the
+   individual translate/rotate/scale properties while the inner .cfile__body carries the deal/riffle/press keyframes,
+   so the two never fight over `transform`. Red stays reserved for the Hyde. */
+.case-reveal {
+  --cr-plum: #2a1838;
+  --cr-plum-deep: #1b0f26;
+  --cr-gold: #c9a45c;
+  --cr-gold-ink: #e0c27e;
+  --cr-gold-soft: rgba(201, 164, 92, 0.38);
+  --file-w: min(19rem, 29vw);
+  --file-h: calc(var(--file-w) * 0.68);
+  --spread: 1;
+  --move: 650ms;
+
+  position: fixed; inset: 0; z-index: var(--z-overlay);
+  display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden; color: var(--c-text);
+  background:
+    radial-gradient(46% 42% at 50% 40%, rgba(91, 42, 110, 0.42), transparent 72%),
+    radial-gradient(110% 60% at 50% 115%, rgba(201, 164, 92, 0.1), transparent 62%),
+    linear-gradient(180deg, #140b20 0%, #0d0b1c 55%, #06070f 100%);
+}
+.case-reveal::after {
+  content: ''; position: fixed; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.6) 100%);
+}
+
+/* ---------- Top line ---------- */
+.case-reveal__top {
+  position: relative; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-4);
+  min-height: 3.25rem; padding: var(--sp-3) var(--page-pad) 0;
+}
+.case-reveal__kicker {
+  font: var(--fw-semi) var(--fs-sm) / 1.2 var(--font-display); letter-spacing: 0.16em; text-transform: uppercase; color: var(--cr-gold);
+}
+.case-reveal__tools { display: inline-flex; align-items: center; gap: var(--sp-2); margin-left: auto; }
+
+/* ---------- Body: the area under the header ----------
+   The stack is centred in it during deal / shuffle / assign. The brief is collapsed (0fr) until ready and then unfolds,
+   so the stack glides up and stack + brief stay centred as one group (the stack alone dead-centre would push the
+   brief off a 768 px laptop). `safe` keeps the top reachable if a tiny window cannot fit the group. */
+.case-reveal__body {
+  min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: safe center;
+  padding: var(--sp-3) 0;
+}
+
+/* ---------- Stage + folders ---------- */
+/* Fixed height around the 3-folder stack; the top padding offsets the tabs/sheets that stick out above the folders,
+   so the visible stack (tabs included) is what sits on the centre line. */
+.case-reveal__stage {
+  position: relative; z-index: 1; flex: none; width: 100%; height: calc(var(--file-h) * 1.5 + 1.6rem);
+  display: grid; place-items: center; padding-top: 1.6rem;
+}
+.case-reveal__stage::before {
+  content: ''; position: absolute; left: 50%; top: 50%; width: min(56rem, 100%); height: 85%; translate: -50% -50%; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(245, 176, 76, 0.09), transparent);
+}
+.case-reveal__files { position: relative; width: var(--file-w); height: var(--file-h); margin: 0; padding: 0; list-style: none; }
+
+.cfile {
+  position: absolute; inset: 0;
+  translate: calc(var(--x) * var(--file-w) * var(--spread)) var(--y);
+  rotate: var(--rot); scale: var(--scale);
+  transition: translate var(--move) var(--ease-out), rotate var(--move) var(--ease-out), scale var(--move) var(--ease-out), filter 500ms ease;
+}
+.cfile--01 { --file-tint: #3d2152; --tab-x: 6%; }
+.cfile--02 { --file-tint: #2d2550; --tab-x: 37%; }
+.cfile--03 { --file-tint: #44203f; --tab-x: 66%; }
+.cfile--dim { filter: brightness(0.55) saturate(0.75); }
+
+.cfile__body {
+  position: absolute; inset: 0; border-radius: 3px 10px 10px 10px;
+  background:
+    radial-gradient(120% 90% at 18% 0%, rgba(255, 255, 255, 0.07), transparent 52%),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.016) 0 2px, transparent 2px 5px),
+    linear-gradient(165deg, var(--file-tint) 0%, var(--cr-plum) 68%, var(--cr-plum-deep) 100%);
+  border: 1px solid rgba(201, 164, 92, 0.42);
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 0.4rem rgba(0, 0, 0, 0.14),
+    inset 0 0 0 calc(0.4rem + 1px) rgba(201, 164, 92, 0.2);
+  transition: box-shadow 500ms ease, border-color 500ms ease;
+}
+/* Folder tab (a different position per case) and a sheet of aged paper peeking out of the top. */
+.cfile__tab {
+  position: absolute; bottom: calc(100% - 1px); left: var(--tab-x);
+  padding: 0.2rem 0.9rem 0.1rem; border: 1px solid rgba(201, 164, 92, 0.42); border-bottom: 0; border-radius: 8px 8px 0 0;
+  background: linear-gradient(180deg, var(--file-tint), var(--cr-plum));
+  font: var(--fw-bold) var(--fs-xs) / 1.3 var(--font-display); letter-spacing: 0.14em; text-transform: uppercase; white-space: nowrap;
+  color: var(--cr-gold);
+}
+.cfile__sheet {
+  position: absolute; top: -0.6rem; right: 8%; width: 30%; height: 0.62rem; border-radius: 2px 2px 0 0; rotate: 2deg;
+  background: linear-gradient(180deg, #d8c79e, #b29d72); box-shadow: inset 0 -3px 5px rgba(0, 0, 0, 0.25);
+}
+.cfile--02 .cfile__sheet { right: auto; left: 6%; width: 24%; rotate: -2.5deg; }
+.cfile--03 .cfile__sheet { right: 4%; width: 22%; rotate: 1deg; }
+
+.cfile__face { position: absolute; inset: 0; display: grid; align-content: start; gap: 0.35rem; padding: 1rem 1.15rem; }
+.cfile__kicker { font: var(--fw-semi) var(--fs-xs) / 1.2 var(--font-display); letter-spacing: 0.16em; text-transform: uppercase; color: rgba(224, 194, 126, 0.82); }
+.cfile__title { font: var(--fw-bold) var(--fs-lg) / 1.15 var(--font-display); color: var(--c-text); text-wrap: balance; max-width: 88%; }
+.cfile__rule {
+  width: 60%; height: 2.2rem; margin-top: 0.25rem;
+  background: repeating-linear-gradient(180deg, transparent 0 0.62rem, rgba(201, 164, 92, 0.18) 0.62rem calc(0.62rem + 1px));
+}
+.cfile__seal {
+  position: absolute; right: 1rem; bottom: 0.9rem; width: 2.8rem; height: 2.8rem; display: grid; place-items: center;
+  border-radius: 48% 52% 50% 46%;
+  background: radial-gradient(circle at 35% 30%, #7d4092, #4a1f5c 60%, #2b1036);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5), inset 0 0 0 3px rgba(0, 0, 0, 0.18), inset 0 0 0 4px rgba(201, 164, 92, 0.35);
+  font: var(--fw-bold) var(--fs-sm) / 1 var(--font-display); color: var(--cr-gold-ink);
+}
+.cfile--02 .cfile__seal { border-radius: 52% 46% 49% 51%; background: radial-gradient(circle at 35% 30%, #5b4a96, #35286a 60%, #1f1745); }
+.cfile--03 .cfile__seal { border-radius: 50% 47% 53% 49%; background: radial-gradient(circle at 35% 30%, #8a3d76, #55204a 60%, #321029); }
+
+/* ASSIGNED: double-ruled antique-gold ink stamp. */
+.cfile__stamp {
+  position: absolute; right: 7%; top: 50%; z-index: 2; padding: 0.15em 0.6em 0.1em;
+  border: 3px double var(--cr-gold-ink); border-radius: 6px; rotate: -11deg; opacity: 0;
+  font: var(--fw-bold) var(--fs-lg) / 1.1 var(--font-display); letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--cr-gold-ink); text-shadow: 0 0 12px rgba(201, 164, 92, 0.35); pointer-events: none;
+  background: rgba(27, 15, 38, 0.35);
+}
+
+/* Assigned file: forward, gold edge, a soft glow that breathes once ready. */
+.case-reveal:is([data-phase='assign'], [data-phase='ready']) .cfile--assigned .cfile__body {
+  border-color: var(--cr-gold);
+  box-shadow:
+    0 22px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(201, 164, 92, 0.65), 0 0 38px rgba(201, 164, 92, 0.26),
+    inset 0 0 0 0.4rem rgba(0, 0, 0, 0.14), inset 0 0 0 calc(0.4rem + 1px) rgba(201, 164, 92, 0.32);
+}
+.case-reveal[data-phase='ready'] .cfile--assigned .cfile__body::after {
+  content: ''; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none;
+  box-shadow: 0 0 52px rgba(201, 164, 92, 0.22); animation: cr-breathe 3.2s ease-in-out infinite alternate;
+}
+.case-reveal[data-phase='ready'] .cfile__stamp { opacity: 0.94; }
+
+/* ---------- Phase choreography ---------- */
+.case-reveal[data-phase='deal'] .cfile__body { animation: cr-deal 600ms var(--ease-out) both; }
+.case-reveal[data-phase='deal'] .cfile:nth-child(2) .cfile__body { animation-delay: 110ms; }
+.case-reveal[data-phase='deal'] .cfile:nth-child(3) .cfile__body { animation-delay: 220ms; }
+@keyframes cr-deal { from { opacity: 0; transform: translateY(-2.5rem) rotate(-5deg) scale(1.05); } to { opacity: 1; transform: none; } }
+
+.case-reveal[data-phase='shuffle'] { --move: 450ms; }
+.case-reveal[data-phase='shuffle'] .cfile:nth-child(1) { animation: cr-z-up 1150ms linear both; }
+.case-reveal[data-phase='shuffle'] .cfile:nth-child(3) { animation: cr-z-down 1150ms linear both; }
+.case-reveal[data-phase='shuffle'] .cfile:nth-child(1) .cfile__body { animation: cr-riffle-a 1150ms var(--ease-in-out) both; }
+.case-reveal[data-phase='shuffle'] .cfile:nth-child(2) .cfile__body { animation: cr-riffle-b 1150ms var(--ease-in-out) both; }
+.case-reveal[data-phase='shuffle'] .cfile:nth-child(3) .cfile__body { animation: cr-riffle-c 1150ms var(--ease-in-out) both; }
+@keyframes cr-riffle-a { 0%, 100% { transform: none; } 30% { transform: translateX(-58%) rotate(-9deg); } 55% { transform: translateX(-6%) rotate(-2deg); } 78% { transform: translateX(26%) rotate(4deg); } }
+@keyframes cr-riffle-b { 0%, 100% { transform: none; } 30% { transform: translateX(54%) translateY(-4%) rotate(8deg); } 60% { transform: translateX(4%); } 80% { transform: translateX(-24%) rotate(-4deg); } }
+@keyframes cr-riffle-c { 0%, 100% { transform: none; } 22% { transform: translateY(-9%) rotate(3deg); } 50% { transform: translateX(-36%) rotate(-6deg); } 80% { transform: translateX(16%) rotate(2deg); } }
+@keyframes cr-z-up { 0%, 40% { z-index: 0; } 41%, 100% { z-index: 4; } }
+@keyframes cr-z-down { 0%, 55% { z-index: 2; } 56%, 100% { z-index: 0; } }
+
+.case-reveal[data-phase='assign'] { --move: 700ms; }
+.case-reveal[data-phase='assign'] .cfile--assigned .cfile__body { animation: cr-press 420ms 440ms var(--ease-out) both; }
+.case-reveal[data-phase='assign'] .cfile__stamp { animation: cr-stamp 360ms 440ms cubic-bezier(0.2, 1.3, 0.4, 1) both; }
+@keyframes cr-press { 0%, 100% { transform: none; } 35% { transform: scale(0.975); } }
+@keyframes cr-stamp { from { opacity: 0; transform: scale(2.2); } 70% { opacity: 0.94; transform: scale(0.96); } to { opacity: 0.94; transform: none; } }
+@keyframes cr-breathe { from { opacity: 0.35; } to { opacity: 1; } }
+
+/* ---------- Thing ---------- */
+.case-reveal__thing {
+  position: absolute; z-index: 20; left: 50%; bottom: calc(50% - var(--file-h) * 0.66);
+  margin: 0 0 0 calc(var(--file-w) * 0.5); display: grid; place-items: center;
+  animation: cr-thing-rise 520ms 160ms var(--ease-out) both;
+}
+.case-reveal__thing > .thing-sigil { filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.55)); transform-origin: 50% 85%; }
+.case-reveal__thing[data-pose='point'] > .thing-sigil { animation: cr-thing-point 760ms 620ms ease-in-out 2 both; }
+.case-reveal__thing[data-pose='thumbsUp'] > .thing-sigil { animation: cr-thing-pop 560ms var(--ease-out) both; }
+@keyframes cr-thing-rise { from { opacity: 0; transform: translateY(1.5rem); } to { opacity: 1; transform: none; } }
+@keyframes cr-thing-point { 0%, 100% { transform: none; } 45% { transform: translateX(-12px) rotate(-9deg); } }
+@keyframes cr-thing-pop { from { transform: scale(0.85); } 60% { transform: scale(1.07); } to { transform: none; } }
+
+/* ---------- Brief (ready) ---------- */
+.case-reveal__briefwrap {
+  flex: none; width: 100%; display: grid; grid-template-rows: 0fr; transition: grid-template-rows 500ms var(--ease-out);
+}
+.case-reveal[data-phase='ready'] .case-reveal__briefwrap { grid-template-rows: 1fr; }
+/* collapsed = truly 0 px (its padding too, else the hidden brief still nudges the stack up); clipped while unfolding
+   so it never overhangs the screen bottom mid-animation */
+.case-reveal:not([data-phase='ready']) .case-reveal__brief { padding-block: 0; }
+.case-reveal__brief {
+  min-height: 0; overflow: hidden;
+  position: relative; z-index: 2; justify-self: center; width: min(46rem, calc(100% - 2 * var(--page-pad)));
+  display: grid; justify-items: center; gap: var(--sp-2); padding: var(--sp-3) 0 var(--sp-6); text-align: center;
+  visibility: hidden; opacity: 0; translate: 0 10px;
+  transition: opacity 500ms var(--ease-out), translate 500ms var(--ease-out), padding 500ms var(--ease-out), visibility 0s linear 500ms;
+}
+.case-reveal__brief.is-ready { visibility: visible; opacity: 1; translate: none; transition-delay: 0s; }
+.case-reveal__assigned { color: var(--cr-gold); }
+.case-reveal__title { display: grid; gap: 0.15rem; }
+.case-reveal__no { font-size: var(--fs-sm); letter-spacing: 0.22em; text-transform: uppercase; color: var(--cr-gold); }
+.case-reveal__name { font-size: var(--fs-2xl); line-height: 1.05; color: var(--c-text); text-wrap: balance; }
+.case-reveal__tagline { max-width: 40rem; font: var(--fw-regular) var(--fs-md) / 1.4 var(--font-body); color: var(--c-text-2); text-wrap: pretty; }
+.case-reveal__setting { display: inline-flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--c-text); }
+.case-reveal__setting .caps { color: var(--cr-gold); }
+.case-reveal__actions { display: grid; justify-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
+.case-reveal__thing-line { font-size: var(--fs-xs); font-style: italic; color: var(--c-text-muted); }
+
+/* A window too short for stack + brief may scroll once the brief is shown — never during the animation. */
+.case-reveal[data-phase='ready'] { overflow-y: auto; }
+
+/* ---------- Reduced motion: final state at once, one short opacity fade (no movement) ---------- */
+.case-reveal--still { animation: fade-in 450ms ease-out both; }
+.reduced-motion .case-reveal.case-reveal--still { animation-duration: 450ms !important; }
+@media (prefers-reduced-motion: reduce) {
+  .case-reveal.case-reveal--still { animation-duration: 450ms !important; }
+  .case-reveal .cfile, .case-reveal .cfile * , .case-reveal__thing, .case-reveal__thing * { animation: none !important; transition: none !important; }
+}
+.reduced-motion .case-reveal .cfile, .reduced-motion .case-reveal .cfile *, .reduced-motion .case-reveal__thing, .reduced-motion .case-reveal__thing * {
+  animation: none !important; transition: none !important;
+}
+.reduced-motion .case-reveal[data-phase='ready'] .cfile__stamp { opacity: 0.94; }
+.reduced-motion .case-reveal__briefwrap { transition: none; }
+@media (prefers-reduced-motion: reduce) { .case-reveal__briefwrap { transition: none; } }
+
+/* ---------- High contrast ---------- */
+.high-contrast .case-reveal { background: #000; }
+.high-contrast .case-reveal::after, .high-contrast .case-reveal__stage::before { display: none; }
+.high-contrast .cfile__body, .high-contrast .cfile__tab { background: #000; border: 2px solid var(--c-text); box-shadow: none; }
+.high-contrast .cfile--assigned .cfile__body { border-color: var(--c-lantern) !important; }
+.high-contrast .cfile__stamp { color: var(--c-lantern); border-color: var(--c-lantern); background: #000; text-shadow: none; }
+.high-contrast .cfile--dim { filter: none; opacity: 0.6; }
+.high-contrast .case-reveal__tagline { color: var(--c-text); }
+
+/* ---------- Narrow and short windows ---------- */
+@media (max-width: 720px) {
+  .case-reveal { --file-w: min(17rem, 72vw); --spread: 0.34; }
+  .case-reveal__kicker { font-size: var(--fs-xs); letter-spacing: 0.1em; }
+  .case-reveal__thing { margin-left: calc(var(--file-w) * 0.3); bottom: calc(50% - var(--file-h) * 0.8); }
+  .case-reveal__thing > .thing-sigil { width: 4rem !important; height: 4rem !important; }
+  .case-reveal__name { font-size: var(--fs-xl); }
+  .case-reveal__tagline { font-size: var(--fs-sm); }
+  .cfile__stamp { font-size: var(--fs-md); top: 58%; }
+  .case-reveal__setting { display: grid; gap: 0.1rem; }
+}
+@media (max-height: 640px) and (min-width: 721px) {
+  .case-reveal { --file-w: min(15rem, 26vw); }
+  .case-reveal__name { font-size: var(--fs-xl); }
+  .case-reveal__brief { padding-bottom: var(--sp-4); }
+}

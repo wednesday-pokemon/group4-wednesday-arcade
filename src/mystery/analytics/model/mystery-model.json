@@ -1,0 +1,4291 @@
+{
+ "schema": "mystery-analytics-model/1",
+ "modelVersion": "det15-20261024-mys-v4-g5",
+ "rulesVersion": "mystery-v4",
+ "createdAt": "2026-10-24T09:56:07.814Z",
+ "modelType": "logistic_regression",
+ "trainedOn": "1134 simulated episodes (scripted bots on the real sim, all 126 duos, 3 cases); not real players",
+ "detection": {
+  "features": [
+   "near10",
+   "near4",
+   "occluded",
+   "hydeVisible",
+   "visibleNear",
+   "suspicion",
+   "mode_investigate",
+   "mode_search",
+   "mode_cooldown",
+   "stance_walk",
+   "stance_crouch",
+   "stance_sprint",
+   "speed",
+   "hidden",
+   "recentNoise",
+   "noiseReach",
+   "noiseReachOccluded",
+   "approach",
+   "facingNear",
+   "inFog",
+   "hideSpotFar",
+   "hydeNeutralized",
+   "hpFrac",
+   "catches",
+   "egg_carried",
+   "egg_dropped",
+   "eggSecurity",
+   "clues",
+   "obj_find_egg",
+   "obj_retrieve_egg",
+   "obj_deliver_egg",
+   "powerReady",
+   "moveReady",
+   "controlReady",
+   "escapeReady",
+   "duo_footstepNoise",
+   "duo_walkSpeed",
+   "duo_sprintSpeed",
+   "duo_effectDuration",
+   "duo_catchDamage",
+   "stat_stealth",
+   "stat_mobility",
+   "stat_hydeControl",
+   "room_courtyard",
+   "room_crypt",
+   "room_egg_chamber",
+   "room_path",
+   "room_research_room",
+   "room_shortcut",
+   "room_tower",
+   "case_crypt_last_witness",
+   "case_midnight_signal",
+   "case_poisoned_archive"
+  ],
+  "mean": [
+   0.1686,
+   0.032793,
+   0.668467,
+   0.221585,
+   0.088991,
+   0.107259,
+   0.045119,
+   0.142022,
+   0.069724,
+   0.582477,
+   0.157278,
+   0.162237,
+   0.462019,
+   0.045814,
+   0.525738,
+   0.483437,
+   0.280098,
+   0.046719,
+   0.040043,
+   0.032596,
+   0.27007,
+   0.022694,
+   0.930502,
+   0.143112,
+   0.160579,
+   0.035138,
+   0.982935,
+   0.688387,
+   0.205335,
+   0.035138,
+   0.160579,
+   0.85932,
+   0.917279,
+   0.824024,
+   0.345225,
+   0.977331,
+   0.979666,
+   0.985008,
+   1.021652,
+   0.975202,
+   0.668157,
+   0.572328,
+   0.613572,
+   0.3499,
+   0.032596,
+   0.102241,
+   0.456294,
+   0.037728,
+   0.007628,
+   0.013613,
+   0.344988,
+   0.294436,
+   0.360575
+  ],
+  "std": [
+   0.153026,
+   0.076274,
+   0.470764,
+   0.415313,
+   0.161307,
+   0.257579,
+   0.207566,
+   0.349073,
+   0.254681,
+   0.493151,
+   0.364063,
+   0.368668,
+   0.248152,
+   0.209082,
+   0.302188,
+   0.375968,
+   0.310408,
+   0.435332,
+   0.11106,
+   0.177576,
+   0.156187,
+   0.148926,
+   0.150177,
+   0.350187,
+   0.367142,
+   0.18413,
+   0.079245,
+   0.299019,
+   0.403946,
+   0.18413,
+   0.367142,
+   0.347691,
+   0.275461,
+   0.3808,
+   0.475442,
+   0.116421,
+   0.048738,
+   0.077824,
+   0.052716,
+   0.113561,
+   0.231412,
+   0.179812,
+   0.213334,
+   0.476938,
+   0.177576,
+   0.302965,
+   0.498086,
+   0.190539,
+   0.087004,
+   0.115879,
+   0.475364,
+   0.455789,
+   0.480167
+  ],
+  "coef": [
+   -1.223605,
+   0.993218,
+   -0.508689,
+   0.096479,
+   -0.072959,
+   0.192279,
+   0.197812,
+   0.107726,
+   -0.016921,
+   0.047605,
+   0.141519,
+   -0.021877,
+   0.309802,
+   -0.201044,
+   -0.124759,
+   0.191269,
+   0.040182,
+   -0.021836,
+   0.556495,
+   0.184325,
+   -0.052253,
+   0.158914,
+   -0.154524,
+   -0.034022,
+   -0.062161,
+   -0.063319,
+   -0.050325,
+   -0.143595,
+   0.198884,
+   0.093496,
+   -0.050325,
+   -0.063319,
+   -0.033898,
+   0.042484,
+   0.001017,
+   -0.069792,
+   0.028075,
+   -0.129641,
+   0.178539,
+   -0.030979,
+   -0.097889,
+   0.046836,
+   0.040478,
+   0.016396,
+   0.020393,
+   -0.052253,
+   -0.117818,
+   0.160817,
+   -0.008122,
+   -0.061485,
+   -0.32755,
+   -0.027777,
+   0.021792,
+   0.006813
+  ],
+  "target": "hyde_mode→CHASE or catch within (t, t+15] s, player not already chased",
+  "horizonS": 15
+ },
+ "extraction": {
+  "features": [
+   "near10",
+   "near4",
+   "occluded",
+   "hydeVisible",
+   "visibleNear",
+   "suspicion",
+   "mode_investigate",
+   "mode_search",
+   "mode_cooldown",
+   "stance_walk",
+   "stance_crouch",
+   "stance_sprint",
+   "speed",
+   "hidden",
+   "recentNoise",
+   "noiseReach",
+   "noiseReachOccluded",
+   "approach",
+   "facingNear",
+   "inFog",
+   "hideSpotFar",
+   "hydeNeutralized",
+   "hpFrac",
+   "catches",
+   "egg_carried",
+   "egg_dropped",
+   "eggSecurity",
+   "clues",
+   "obj_find_egg",
+   "obj_retrieve_egg",
+   "obj_deliver_egg",
+   "powerReady",
+   "moveReady",
+   "controlReady",
+   "escapeReady",
+   "duo_footstepNoise",
+   "duo_walkSpeed",
+   "duo_sprintSpeed",
+   "duo_effectDuration",
+   "duo_catchDamage",
+   "stat_stealth",
+   "stat_mobility",
+   "stat_hydeControl",
+   "room_courtyard",
+   "room_crypt",
+   "room_egg_chamber",
+   "room_path",
+   "room_research_room",
+   "room_shortcut",
+   "room_tower",
+   "case_crypt_last_witness",
+   "case_midnight_signal",
+   "case_poisoned_archive"
+  ],
+  "mean": [
+   0.142122,
+   0.038802,
+   0.7294,
+   0.217052,
+   0.094492,
+   0.192093,
+   0.021355,
+   0.067218,
+   0.033,
+   0.491614,
+   0.075784,
+   0.299833,
+   0.516029,
+   0.022453,
+   0.577337,
+   0.500862,
+   0.223618,
+   0.008317,
+   0.068832,
+   0.024397,
+   0.283785,
+   0.011212,
+   0.928829,
+   0.15115,
+   0.169821,
+   0.030817,
+   0.983696,
+   0.652851,
+   0.218465,
+   0.030817,
+   0.169821,
+   0.855181,
+   0.910695,
+   0.822727,
+   0.335688,
+   0.978523,
+   0.979512,
+   0.984972,
+   1.020504,
+   0.972816,
+   0.664901,
+   0.572929,
+   0.615369,
+   0.333946,
+   0.024397,
+   0.069349,
+   0.50302,
+   0.045707,
+   0.010778,
+   0.012804,
+   0.337885,
+   0.303375,
+   0.358739
+  ],
+  "std": [
+   0.188213,
+   0.09933,
+   0.44427,
+   0.412239,
+   0.186889,
+   0.375866,
+   0.144564,
+   0.2504,
+   0.178636,
+   0.49993,
+   0.264652,
+   0.458184,
+   0.287002,
+   0.148153,
+   0.325609,
+   0.544014,
+   0.307437,
+   0.339457,
+   0.165263,
+   0.154278,
+   0.148688,
+   0.10529,
+   0.15287,
+   0.358195,
+   0.375475,
+   0.172823,
+   0.0774,
+   0.355932,
+   0.413205,
+   0.172823,
+   0.375475,
+   0.351918,
+   0.285184,
+   0.3819,
+   0.47223,
+   0.116028,
+   0.04863,
+   0.077737,
+   0.051529,
+   0.113453,
+   0.231931,
+   0.180393,
+   0.21411,
+   0.471621,
+   0.154278,
+   0.254046,
+   0.499991,
+   0.208848,
+   0.103257,
+   0.112427,
+   0.472989,
+   0.459716,
+   0.47963
+  ],
+  "coef": [
+   2.200583,
+   -0.119987,
+   -0.023628,
+   -0.007451,
+   -0.03583,
+   -0.058202,
+   -0.08861,
+   -0.05324,
+   -0.020715,
+   -0.037763,
+   -0.002589,
+   0.037248,
+   -0.062937,
+   0.047231,
+   -0.037725,
+   -0.054411,
+   -0.100167,
+   -0.025333,
+   -0.095665,
+   0.001431,
+   0.007377,
+   -0.015711,
+   0.045764,
+   0.25384,
+   -0.24959,
+   0.015129,
+   0.061412,
+   0.092449,
+   0.17493,
+   0.199241,
+   0.061412,
+   0.015129,
+   0.011793,
+   -0.02904,
+   0.031339,
+   0.062913,
+   -0.317639,
+   0.073302,
+   0.128219,
+   0.046917,
+   0.18244,
+   -0.307108,
+   0.256316,
+   0.172177,
+   0.033803,
+   0.007377,
+   0.004676,
+   -0.061205,
+   -0.027346,
+   -0.056137,
+   0.212059,
+   0.308022,
+   -0.062798,
+   -0.243566
+  ],
+  "target": "egg delivered at Iago Tower this run (outcome finished)"
+ },
+ "eta": {
+  "features": [
+   "near10",
+   "near4",
+   "occluded",
+   "hydeVisible",
+   "visibleNear",
+   "suspicion",
+   "mode_investigate",
+   "mode_search",
+   "mode_cooldown",
+   "stance_walk",
+   "stance_crouch",
+   "stance_sprint",
+   "speed",
+   "hidden",
+   "recentNoise",
+   "noiseReach",
+   "noiseReachOccluded",
+   "approach",
+   "facingNear",
+   "inFog",
+   "hideSpotFar",
+   "hydeNeutralized",
+   "hpFrac",
+   "catches",
+   "egg_carried",
+   "egg_dropped",
+   "eggSecurity",
+   "clues",
+   "obj_find_egg",
+   "obj_retrieve_egg",
+   "obj_deliver_egg",
+   "powerReady",
+   "moveReady",
+   "controlReady",
+   "escapeReady",
+   "duo_footstepNoise",
+   "duo_walkSpeed",
+   "duo_sprintSpeed",
+   "duo_effectDuration",
+   "duo_catchDamage",
+   "stat_stealth",
+   "stat_mobility",
+   "stat_hydeControl",
+   "room_courtyard",
+   "room_crypt",
+   "room_egg_chamber",
+   "room_path",
+   "room_research_room",
+   "room_shortcut",
+   "room_tower",
+   "case_crypt_last_witness",
+   "case_midnight_signal",
+   "case_poisoned_archive",
+   "objectiveDist",
+   "objectiveDistCarry",
+   "objectiveDistSlow"
+  ],
+  "mean": [
+   0.131075,
+   0.033587,
+   0.748268,
+   0.19736,
+   0.084234,
+   0.171705,
+   0.019421,
+   0.066064,
+   0.03109,
+   0.50319,
+   0.073252,
+   0.284854,
+   0.510891,
+   0.022042,
+   0.568303,
+   0.468764,
+   0.223127,
+   0.003722,
+   0.059832,
+   0.025212,
+   0.281696,
+   0.01028,
+   0.9386,
+   0.127129,
+   0.157694,
+   0.02821,
+   0.986063,
+   0.642072,
+   0.218375,
+   0.02821,
+   0.157694,
+   0.860621,
+   0.916382,
+   0.826181,
+   0.343291,
+   0.979154,
+   0.980316,
+   0.986238,
+   1.020957,
+   0.973364,
+   0.662034,
+   0.576079,
+   0.613094,
+   0.331905,
+   0.025212,
+   0.072051,
+   0.500169,
+   0.04629,
+   0.010947,
+   0.013426,
+   0.347434,
+   0.301804,
+   0.350762,
+   1.07022,
+   0.155014,
+   1.094324
+  ],
+  "std": [
+   0.178483,
+   0.089877,
+   0.434008,
+   0.398007,
+   0.175139,
+   0.359178,
+   0.138001,
+   0.248394,
+   0.173561,
+   0.49999,
+   0.26055,
+   0.451345,
+   0.287642,
+   0.146821,
+   0.324198,
+   0.51486,
+   0.298049,
+   0.338119,
+   0.15295,
+   0.15677,
+   0.145728,
+   0.100866,
+   0.142354,
+   0.333118,
+   0.364453,
+   0.165572,
+   0.071836,
+   0.357805,
+   0.413143,
+   0.165572,
+   0.364453,
+   0.346341,
+   0.276814,
+   0.378954,
+   0.474808,
+   0.116713,
+   0.04882,
+   0.078397,
+   0.052004,
+   0.114098,
+   0.233455,
+   0.18085,
+   0.213887,
+   0.470897,
+   0.15677,
+   0.258573,
+   0.5,
+   0.210111,
+   0.104052,
+   0.115091,
+   0.476155,
+   0.459041,
+   0.477208,
+   0.825404,
+   0.439652,
+   0.847421
+  ],
+  "coef": [
+   25.059913,
+   5.229173,
+   -3.10337,
+   0.09722,
+   1.13241,
+   -1.325394,
+   1.318021,
+   0.365783,
+   -0.607567,
+   0.004902,
+   0.863628,
+   1.208734,
+   1.411572,
+   0.005434,
+   0.437525,
+   -1.072554,
+   0.280833,
+   -0.179786,
+   1.647177,
+   2.273269,
+   -0.160642,
+   0.499288,
+   -0.290537,
+   2.176217,
+   0.05102,
+   -0.616211,
+   0.656788,
+   0.866982,
+   1.62658,
+   1.320312,
+   0.656788,
+   -0.616211,
+   0.237039,
+   0.650778,
+   -0.901845,
+   -0.324415,
+   -0.189201,
+   -0.691345,
+   2.300483,
+   1.31687,
+   -2.647792,
+   -0.434738,
+   -2.008271,
+   -0.587992,
+   0.527126,
+   -0.160642,
+   -0.519899,
+   -0.005859,
+   -0.240576,
+   0.101845,
+   -0.397305,
+   -0.192588,
+   -0.113323,
+   0.301172,
+   0.344135,
+   3.060283,
+   9.030806
+  ],
+  "target": "seconds to the next clue_found / egg_pickup / egg_delivered",
+  "naive": {
+   "find_clues": 21.83,
+   "crypt_last_witness:find_clues": 20.21,
+   "midnight_signal:find_clues": 21.98,
+   "poisoned_archive:find_clues": 23.32,
+   "find_egg": 31.73,
+   "crypt_last_witness:find_egg": 26.21,
+   "midnight_signal:find_egg": 23.42,
+   "poisoned_archive:find_egg": 39.23,
+   "deliver_egg": 27.4,
+   "crypt_last_witness:deliver_egg": 26.31,
+   "midnight_signal:deliver_egg": 25.76,
+   "poisoned_archive:deliver_egg": 31.12,
+   "retrieve_egg": 28.52,
+   "crypt_last_witness:retrieve_egg": 24.02,
+   "midnight_signal:retrieve_egg": 30.83,
+   "poisoned_archive:retrieve_egg": 31.75
+  }
+ },
+ "training": {
+  "generator": "mystery-gen-5",
+  "episodes": 1134,
+  "duos": 126,
+  "cases": {
+   "crypt_last_witness": 378,
+   "midnight_signal": 378,
+   "poisoned_archive": 378
+  },
+  "sessionsTrain": 909,
+  "sessionsTest": 225,
+  "rowsTrain": 63321,
+  "rowsTest": 15719,
+  "split": "session-grouped holdout: prfUniform(seed, 'mystery-holdout-v1') < 0.2 → test",
+  "seedPrefix": "mys-v4",
+  "profiles": {
+   "stealthy": 189,
+   "stealthy_abilities": 189,
+   "sprinter_light": 189,
+   "sprinter_heavy": 189,
+   "mixed": 189,
+   "semi_careful": 189
+  },
+  "l2": 0.0001,
+  "l2Extraction": 0.01,
+  "l2ExtractionSelection": "inner session-grouped validation (prfUniform(seed, 'mystery-inner-validation-v1') < 0.25 of the training sessions), grid 0.0001, 0.001, 0.01, 0.03, 0.1"
+ },
+ "zoneFilter": {
+  "params": {
+   "diffusionPerS": 0.0025,
+   "offPatrolReturnPerS": 0.06666666666666667,
+   "beta": 0.4225,
+   "chaseNearM": 12,
+   "chaseFarLikelihood": 0.02,
+   "alertNearM": 25,
+   "alertFarLikelihood": 0.3
+  },
+  "selection": "β = P(player does not see the Hyde | it is in the player's zone, no chase), counted on the training sessions (15764 rows); diffusion ∈ {0.0025…0.08}/s × alertFar ∈ {0.15…1} by mean log-loss on the training sessions",
+  "betaRows": 15764,
+  "grid": [
+   {
+    "diffusionPerS": 0.0025,
+    "alertFarLikelihood": 0.15,
+    "logLoss": 0.7009,
+    "brier": 0.3596
+   },
+   {
+    "diffusionPerS": 0.0025,
+    "alertFarLikelihood": 0.3,
+    "logLoss": 0.7,
+    "brier": 0.3594
+   },
+   {
+    "diffusionPerS": 0.0025,
+    "alertFarLikelihood": 0.6,
+    "logLoss": 0.7008,
+    "brier": 0.359
+   },
+   {
+    "diffusionPerS": 0.0025,
+    "alertFarLikelihood": 1,
+    "logLoss": 0.7062,
+    "brier": 0.3598
+   },
+   {
+    "diffusionPerS": 0.005,
+    "alertFarLikelihood": 0.15,
+    "logLoss": 0.7086,
+    "brier": 0.3603
+   },
+   {
+    "diffusionPerS": 0.005,
+    "alertFarLikelihood": 0.3,
+    "logLoss": 0.7079,
+    "brier": 0.3601
+   },
+   {
+    "diffusionPerS": 0.005,
+    "alertFarLikelihood": 0.6,
+    "logLoss": 0.7088,
+    "brier": 0.3598
+   },
+   {
+    "diffusionPerS": 0.005,
+    "alertFarLikelihood": 1,
+    "logLoss": 0.7148,
+    "brier": 0.3608
+   },
+   {
+    "diffusionPerS": 0.01,
+    "alertFarLikelihood": 0.15,
+    "logLoss": 0.7259,
+    "brier": 0.3638
+   },
+   {
+    "diffusionPerS": 0.01,
+    "alertFarLikelihood": 0.3,
+    "logLoss": 0.7254,
+    "brier": 0.3636
+   },
+   {
+    "diffusionPerS": 0.01,
+    "alertFarLikelihood": 0.6,
+    "logLoss": 0.7267,
+    "brier": 0.3634
+   },
+   {
+    "diffusionPerS": 0.01,
+    "alertFarLikelihood": 1,
+    "logLoss": 0.7334,
+    "brier": 0.3647
+   },
+   {
+    "diffusionPerS": 0.02,
+    "alertFarLikelihood": 0.15,
+    "logLoss": 0.7575,
+    "brier": 0.3731
+   },
+   {
+    "diffusionPerS": 0.02,
+    "alertFarLikelihood": 0.3,
+    "logLoss": 0.7573,
+    "brier": 0.3729
+   },
+   {
+    "diffusionPerS": 0.02,
+    "alertFarLikelihood": 0.6,
+    "logLoss": 0.7593,
+    "brier": 0.373
+   },
+   {
+    "diffusionPerS": 0.02,
+    "alertFarLikelihood": 1,
+    "logLoss": 0.7672,
+    "brier": 0.3749
+   },
+   {
+    "diffusionPerS": 0.04,
+    "alertFarLikelihood": 0.15,
+    "logLoss": 0.8073,
+    "brier": 0.3918
+   },
+   {
+    "diffusionPerS": 0.04,
+    "alertFarLikelihood": 0.3,
+    "logLoss": 0.8076,
+    "brier": 0.3918
+   },
+   {
+    "diffusionPerS": 0.04,
+    "alertFarLikelihood": 0.6,
+    "logLoss": 0.8106,
+    "brier": 0.3921
+   },
+   {
+    "diffusionPerS": 0.04,
+    "alertFarLikelihood": 1,
+    "logLoss": 0.8201,
+    "brier": 0.3949
+   },
+   {
+    "diffusionPerS": 0.08,
+    "alertFarLikelihood": 0.15,
+    "logLoss": 0.8751,
+    "brier": 0.4207
+   },
+   {
+    "diffusionPerS": 0.08,
+    "alertFarLikelihood": 0.3,
+    "logLoss": 0.876,
+    "brier": 0.4207
+   },
+   {
+    "diffusionPerS": 0.08,
+    "alertFarLikelihood": 0.6,
+    "logLoss": 0.8803,
+    "brier": 0.4214
+   },
+   {
+    "diffusionPerS": 0.08,
+    "alertFarLikelihood": 1,
+    "logLoss": 0.8914,
+    "brier": 0.4248
+   }
+  ],
+  "metrics": {
+   "evaluatedAt": "2026-10-24T09:56:26.222Z",
+   "zones": {
+    "all": {
+     "rows": 19642,
+     "sessions": 225,
+     "brier": 0.3406,
+     "logLoss": 0.6541,
+     "top1": 0.7289,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 79024,
+       "meanPredicted": 0.0101,
+       "observedRate": 0.0137
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 8310,
+       "meanPredicted": 0.1496,
+       "observedRate": 0.1349
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 6336,
+       "meanPredicted": 0.2489,
+       "observedRate": 0.1889
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 6596,
+       "meanPredicted": 0.35,
+       "observedRate": 0.3867
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 3164,
+       "meanPredicted": 0.4407,
+       "observedRate": 0.4681
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 2266,
+       "meanPredicted": 0.5464,
+       "observedRate": 0.534
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 1300,
+       "meanPredicted": 0.6473,
+       "observedRate": 0.5931
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 1266,
+       "meanPredicted": 0.7525,
+       "observedRate": 0.7164
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 1446,
+       "meanPredicted": 0.8476,
+       "observedRate": 0.8845
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 8144,
+       "meanPredicted": 0.99,
+       "observedRate": 0.9876
+      }
+     ]
+    },
+    "hidden": {
+     "rows": 13008,
+     "sessions": 225,
+     "brier": 0.5138,
+     "logLoss": 0.9853,
+     "top1": 0.5909,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 45854,
+       "meanPredicted": 0.0173,
+       "observedRate": 0.0235
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 8310,
+       "meanPredicted": 0.1496,
+       "observedRate": 0.1349
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 6336,
+       "meanPredicted": 0.2489,
+       "observedRate": 0.1889
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 6596,
+       "meanPredicted": 0.35,
+       "observedRate": 0.3867
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 3164,
+       "meanPredicted": 0.4407,
+       "observedRate": 0.4681
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 2266,
+       "meanPredicted": 0.5464,
+       "observedRate": 0.534
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 1300,
+       "meanPredicted": 0.6473,
+       "observedRate": 0.5931
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 1266,
+       "meanPredicted": 0.7525,
+       "observedRate": 0.7164
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 1446,
+       "meanPredicted": 0.8476,
+       "observedRate": 0.8845
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 1510,
+       "meanPredicted": 0.9484,
+       "observedRate": 0.9351
+      }
+     ]
+    },
+    "occupancy": {
+     "rows": 19642,
+     "sessions": 225,
+     "brier": 0.7411,
+     "logLoss": 3.1178,
+     "top1": 0.3785,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 39284,
+       "meanPredicted": 0,
+       "observedRate": 0.0348
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 39284,
+       "meanPredicted": 0.139,
+       "observedRate": 0.1292
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 7378,
+       "meanPredicted": 0.286,
+       "observedRate": 0.2493
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 19197,
+       "meanPredicted": 0.3502,
+       "observedRate": 0.3668
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 12709,
+       "meanPredicted": 0.4208,
+       "observedRate": 0.3396
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      }
+     ]
+    },
+    "occupancyHidden": {
+     "rows": 13008,
+     "sessions": 225,
+     "brier": 0.7269,
+     "logLoss": 2.452,
+     "top1": 0.3762,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 26016,
+       "meanPredicted": 0,
+       "observedRate": 0.0223
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 26016,
+       "meanPredicted": 0.138,
+       "observedRate": 0.1303
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 4920,
+       "meanPredicted": 0.286,
+       "observedRate": 0.2911
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 12234,
+       "meanPredicted": 0.3494,
+       "observedRate": 0.3888
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 8862,
+       "meanPredicted": 0.4215,
+       "observedRate": 0.3216
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      }
+     ]
+    },
+    "noObservation": {
+     "rows": 19642,
+     "sessions": 225,
+     "brier": 0.715,
+     "logLoss": 1.4652,
+     "top1": 0.4022,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 44965,
+       "meanPredicted": 0.0217,
+       "observedRate": 0.0366
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 32624,
+       "meanPredicted": 0.1383,
+       "observedRate": 0.1363
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 9084,
+       "meanPredicted": 0.2638,
+       "observedRate": 0.2136
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 24586,
+       "meanPredicted": 0.3502,
+       "observedRate": 0.3458
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 4977,
+       "meanPredicted": 0.4206,
+       "observedRate": 0.4027
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 791,
+       "meanPredicted": 0.5399,
+       "observedRate": 0.5689
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 272,
+       "meanPredicted": 0.645,
+       "observedRate": 0.8015
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 270,
+       "meanPredicted": 0.7511,
+       "observedRate": 0.7593
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 157,
+       "meanPredicted": 0.8508,
+       "observedRate": 0.7134
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 126,
+       "meanPredicted": 0.9274,
+       "observedRate": 0.9365
+      }
+     ]
+    },
+    "byCase": {
+     "midnight_signal": {
+      "all": {
+       "rows": 6933,
+       "sessions": 82,
+       "brier": 0.2847,
+       "logLoss": 0.5495,
+       "top1": 0.7953,
+       "calibration": [
+        {
+         "lower": 0,
+         "upper": 0.1,
+         "count": 28847,
+         "meanPredicted": 0.009,
+         "observedRate": 0.0105
+        },
+        {
+         "lower": 0.1,
+         "upper": 0.2,
+         "count": 2748,
+         "meanPredicted": 0.1554,
+         "observedRate": 0.1332
+        },
+        {
+         "lower": 0.2,
+         "upper": 0.3,
+         "count": 2089,
+         "meanPredicted": 0.2445,
+         "observedRate": 0.1833
+        },
+        {
+         "lower": 0.3,
+         "upper": 0.4,
+         "count": 1644,
+         "meanPredicted": 0.3475,
+         "observedRate": 0.4453
+        },
+        {
+         "lower": 0.4,
+         "upper": 0.5,
+         "count": 741,
+         "meanPredicted": 0.4399,
+         "observedRate": 0.4818
+        },
+        {
+         "lower": 0.5,
+         "upper": 0.6,
+         "count": 683,
+         "meanPredicted": 0.5518,
+         "observedRate": 0.511
+        },
+        {
+         "lower": 0.6,
+         "upper": 0.7,
+         "count": 486,
+         "meanPredicted": 0.6446,
+         "observedRate": 0.5082
+        },
+        {
+         "lower": 0.7,
+         "upper": 0.8,
+         "count": 395,
+         "meanPredicted": 0.7508,
+         "observedRate": 0.8025
+        },
+        {
+         "lower": 0.8,
+         "upper": 0.9,
+         "count": 521,
+         "meanPredicted": 0.8424,
+         "observedRate": 0.9002
+        },
+        {
+         "lower": 0.9,
+         "upper": 1,
+         "count": 3444,
+         "meanPredicted": 0.9907,
+         "observedRate": 0.9898
+        }
+       ]
+      },
+      "occupancy": {
+       "rows": 6933,
+       "sessions": 82,
+       "brier": 0.7204,
+       "logLoss": 3.8067,
+       "top1": 0.4499,
+       "calibration": [
+        {
+         "lower": 0,
+         "upper": 0.1,
+         "count": 13866,
+         "meanPredicted": 0,
+         "observedRate": 0.0494
+        },
+        {
+         "lower": 0.1,
+         "upper": 0.2,
+         "count": 13866,
+         "meanPredicted": 0.1448,
+         "observedRate": 0.0832
+        },
+        {
+         "lower": 0.2,
+         "upper": 0.3,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.3,
+         "upper": 0.4,
+         "count": 13866,
+         "meanPredicted": 0.3552,
+         "observedRate": 0.3674
+        },
+        {
+         "lower": 0.4,
+         "upper": 0.5,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.5,
+         "upper": 0.6,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.6,
+         "upper": 0.7,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.7,
+         "upper": 0.8,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.8,
+         "upper": 0.9,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.9,
+         "upper": 1,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        }
+       ]
+      }
+     },
+     "poisoned_archive": {
+      "all": {
+       "rows": 7378,
+       "sessions": 78,
+       "brier": 0.3512,
+       "logLoss": 0.6926,
+       "top1": 0.7109,
+       "calibration": [
+        {
+         "lower": 0,
+         "upper": 0.1,
+         "count": 30543,
+         "meanPredicted": 0.0116,
+         "observedRate": 0.0178
+        },
+        {
+         "lower": 0.1,
+         "upper": 0.2,
+         "count": 2024,
+         "meanPredicted": 0.1424,
+         "observedRate": 0.1294
+        },
+        {
+         "lower": 0.2,
+         "upper": 0.3,
+         "count": 2281,
+         "meanPredicted": 0.2556,
+         "observedRate": 0.2047
+        },
+        {
+         "lower": 0.3,
+         "upper": 0.4,
+         "count": 2507,
+         "meanPredicted": 0.3482,
+         "observedRate": 0.3753
+        },
+        {
+         "lower": 0.4,
+         "upper": 0.5,
+         "count": 1521,
+         "meanPredicted": 0.4384,
+         "observedRate": 0.4306
+        },
+        {
+         "lower": 0.5,
+         "upper": 0.6,
+         "count": 771,
+         "meanPredicted": 0.5427,
+         "observedRate": 0.4617
+        },
+        {
+         "lower": 0.6,
+         "upper": 0.7,
+         "count": 465,
+         "meanPredicted": 0.6511,
+         "observedRate": 0.6172
+        },
+        {
+         "lower": 0.7,
+         "upper": 0.8,
+         "count": 581,
+         "meanPredicted": 0.7518,
+         "observedRate": 0.6661
+        },
+        {
+         "lower": 0.8,
+         "upper": 0.9,
+         "count": 604,
+         "meanPredicted": 0.8514,
+         "observedRate": 0.8924
+        },
+        {
+         "lower": 0.9,
+         "upper": 1,
+         "count": 2971,
+         "meanPredicted": 0.9899,
+         "observedRate": 0.9899
+        }
+       ]
+      },
+      "occupancy": {
+       "rows": 7378,
+       "sessions": 78,
+       "brier": 0.7695,
+       "logLoss": 2.7867,
+       "top1": 0.3355,
+       "calibration": [
+        {
+         "lower": 0,
+         "upper": 0.1,
+         "count": 14756,
+         "meanPredicted": 0,
+         "observedRate": 0.027
+        },
+        {
+         "lower": 0.1,
+         "upper": 0.2,
+         "count": 14756,
+         "meanPredicted": 0.1522,
+         "observedRate": 0.1807
+        },
+        {
+         "lower": 0.2,
+         "upper": 0.3,
+         "count": 7378,
+         "meanPredicted": 0.286,
+         "observedRate": 0.2493
+        },
+        {
+         "lower": 0.3,
+         "upper": 0.4,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.4,
+         "upper": 0.5,
+         "count": 7378,
+         "meanPredicted": 0.4096,
+         "observedRate": 0.3355
+        },
+        {
+         "lower": 0.5,
+         "upper": 0.6,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.6,
+         "upper": 0.7,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.7,
+         "upper": 0.8,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.8,
+         "upper": 0.9,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.9,
+         "upper": 1,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        }
+       ]
+      }
+     },
+     "crypt_last_witness": {
+      "all": {
+       "rows": 5331,
+       "sessions": 65,
+       "brier": 0.3985,
+       "logLoss": 0.7369,
+       "top1": 0.6676,
+       "calibration": [
+        {
+         "lower": 0,
+         "upper": 0.1,
+         "count": 19634,
+         "meanPredicted": 0.0093,
+         "observedRate": 0.012
+        },
+        {
+         "lower": 0.1,
+         "upper": 0.2,
+         "count": 3538,
+         "meanPredicted": 0.1494,
+         "observedRate": 0.1393
+        },
+        {
+         "lower": 0.2,
+         "upper": 0.3,
+         "count": 1966,
+         "meanPredicted": 0.2457,
+         "observedRate": 0.1765
+        },
+        {
+         "lower": 0.3,
+         "upper": 0.4,
+         "count": 2445,
+         "meanPredicted": 0.3536,
+         "observedRate": 0.3591
+        },
+        {
+         "lower": 0.4,
+         "upper": 0.5,
+         "count": 902,
+         "meanPredicted": 0.4452,
+         "observedRate": 0.52
+        },
+        {
+         "lower": 0.5,
+         "upper": 0.6,
+         "count": 812,
+         "meanPredicted": 0.5455,
+         "observedRate": 0.6219
+        },
+        {
+         "lower": 0.6,
+         "upper": 0.7,
+         "count": 349,
+         "meanPredicted": 0.6461,
+         "observedRate": 0.6791
+        },
+        {
+         "lower": 0.7,
+         "upper": 0.8,
+         "count": 290,
+         "meanPredicted": 0.756,
+         "observedRate": 0.7
+        },
+        {
+         "lower": 0.8,
+         "upper": 0.9,
+         "count": 321,
+         "meanPredicted": 0.8489,
+         "observedRate": 0.8442
+        },
+        {
+         "lower": 0.9,
+         "upper": 1,
+         "count": 1729,
+         "meanPredicted": 0.989,
+         "observedRate": 0.9792
+        }
+       ]
+      },
+      "occupancy": {
+       "rows": 5331,
+       "sessions": 65,
+       "brier": 0.7288,
+       "logLoss": 2.68,
+       "top1": 0.3453,
+       "calibration": [
+        {
+         "lower": 0,
+         "upper": 0.1,
+         "count": 10662,
+         "meanPredicted": 0,
+         "observedRate": 0.0268
+        },
+        {
+         "lower": 0.1,
+         "upper": 0.2,
+         "count": 10662,
+         "meanPredicted": 0.1132,
+         "observedRate": 0.1179
+        },
+        {
+         "lower": 0.2,
+         "upper": 0.3,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.3,
+         "upper": 0.4,
+         "count": 5331,
+         "meanPredicted": 0.3372,
+         "observedRate": 0.3652
+        },
+        {
+         "lower": 0.4,
+         "upper": 0.5,
+         "count": 5331,
+         "meanPredicted": 0.4364,
+         "observedRate": 0.3453
+        },
+        {
+         "lower": 0.5,
+         "upper": 0.6,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.6,
+         "upper": 0.7,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.7,
+         "upper": 0.8,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.8,
+         "upper": 0.9,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.9,
+         "upper": 1,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        }
+       ]
+      }
+     }
+    }
+   },
+   "spawn": {
+    "posterior": {
+     "rows": 225,
+     "sessions": 225,
+     "brier": 0.3032,
+     "logLoss": 0.4766,
+     "top1": 0.7067,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 265,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 57,
+       "meanPredicted": 0.25,
+       "observedRate": 0.2807
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 96,
+       "meanPredicted": 0.3323,
+       "observedRate": 0.3438
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 107,
+       "meanPredicted": 0.4068,
+       "observedRate": 0.4206
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 32,
+       "meanPredicted": 0.5772,
+       "observedRate": 0.4688
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 3,
+       "meanPredicted": 0.6154,
+       "observedRate": 0.3333
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 115,
+       "meanPredicted": 1,
+       "observedRate": 1
+      }
+     ]
+    },
+    "prior": {
+     "rows": 225,
+     "sessions": 225,
+     "brier": 0.6703,
+     "logLoss": 1.1095,
+     "top1": 0.4311,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 143,
+       "meanPredicted": 0.25,
+       "observedRate": 0.5035
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 307,
+       "meanPredicted": 0.3233,
+       "observedRate": 0.1824
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 225,
+       "meanPredicted": 0.4,
+       "observedRate": 0.4311
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      }
+     ]
+    }
+   },
+   "eggPosterior": {
+    "posterior": {
+     "rows": 26898,
+     "sessions": 225,
+     "brier": 0.1685,
+     "logLoss": 0.2858,
+     "top1": 0.873,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 41370,
+       "meanPredicted": 0.0082,
+       "observedRate": 0.0086
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 2246,
+       "meanPredicted": 0.1355,
+       "observedRate": 0.1776
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 5199,
+       "meanPredicted": 0.2281,
+       "observedRate": 0.1725
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 4322,
+       "meanPredicted": 0.3251,
+       "observedRate": 0.345
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 1813,
+       "meanPredicted": 0.4054,
+       "observedRate": 0.4203
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 3270,
+       "meanPredicted": 0.5172,
+       "observedRate": 0.555
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 1331,
+       "meanPredicted": 0.6328,
+       "observedRate": 0.5597
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 869,
+       "meanPredicted": 0.7277,
+       "observedRate": 0.7399
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 2052,
+       "meanPredicted": 0.8577,
+       "observedRate": 0.885
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 18222,
+       "meanPredicted": 0.9879,
+       "observedRate": 0.9865
+      }
+     ]
+    },
+    "prior": {
+     "rows": 26898,
+     "sessions": 225,
+     "brier": 0.6121,
+     "logLoss": 1.0155,
+     "top1": 0.501,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 26898,
+       "meanPredicted": 0.2138,
+       "observedRate": 0.1662
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 26898,
+       "meanPredicted": 0.3138,
+       "observedRate": 0.3327
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 7440,
+       "meanPredicted": 0.4,
+       "observedRate": 0.4417
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 19458,
+       "meanPredicted": 0.5,
+       "observedRate": 0.5237
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      }
+     ]
+    }
+   },
+   "cluePosterior": {
+    "posterior": {
+     "rows": 30316,
+     "sessions": 225,
+     "brier": 0.3669,
+     "logLoss": 0.5112,
+     "top1": 0.6814,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 7670,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 22646,
+       "meanPredicted": 0.4199,
+       "observedRate": 0.4265
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 9012,
+       "meanPredicted": 0.55,
+       "observedRate": 0.5819
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 13634,
+       "meanPredicted": 0.6,
+       "observedRate": 0.568
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 7670,
+       "meanPredicted": 1,
+       "observedRate": 1
+      }
+     ]
+    },
+    "prior": {
+     "rows": 30316,
+     "sessions": 225,
+     "brier": 0.5046,
+     "logLoss": 0.6979,
+     "top1": 0.5386,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 30316,
+       "meanPredicted": 0.4203,
+       "observedRate": 0.4614
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 12288,
+       "meanPredicted": 0.55,
+       "observedRate": 0.5748
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 18028,
+       "meanPredicted": 0.6,
+       "observedRate": 0.5139
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      }
+     ]
+    }
+   }
+  }
+ },
+ "metrics": {
+  "evaluatedAt": "2026-10-24T09:56:26.222Z",
+  "detection": {
+   "rows": 15719,
+   "sessions": 225,
+   "positives": 3858,
+   "baseRate": 0.2454,
+   "trainBaseRate": 0.2826,
+   "brier": 0.145,
+   "baselineBrier": 0.1866,
+   "brierSkill": 0.223,
+   "logLoss": 0.4512,
+   "baselineLogLoss": 0.5608,
+   "auc": 0.7889,
+   "calibration": [
+    {
+     "lower": 0,
+     "upper": 0.1,
+     "count": 3390,
+     "meanPredicted": 0.0577,
+     "observedRate": 0.0475
+    },
+    {
+     "lower": 0.1,
+     "upper": 0.2,
+     "count": 3878,
+     "meanPredicted": 0.1471,
+     "observedRate": 0.1271
+    },
+    {
+     "lower": 0.2,
+     "upper": 0.3,
+     "count": 2751,
+     "meanPredicted": 0.2466,
+     "observedRate": 0.2126
+    },
+    {
+     "lower": 0.3,
+     "upper": 0.4,
+     "count": 1958,
+     "meanPredicted": 0.3482,
+     "observedRate": 0.2819
+    },
+    {
+     "lower": 0.4,
+     "upper": 0.5,
+     "count": 1352,
+     "meanPredicted": 0.447,
+     "observedRate": 0.3994
+    },
+    {
+     "lower": 0.5,
+     "upper": 0.6,
+     "count": 948,
+     "meanPredicted": 0.5468,
+     "observedRate": 0.4958
+    },
+    {
+     "lower": 0.6,
+     "upper": 0.7,
+     "count": 597,
+     "meanPredicted": 0.6483,
+     "observedRate": 0.6131
+    },
+    {
+     "lower": 0.7,
+     "upper": 0.8,
+     "count": 399,
+     "meanPredicted": 0.746,
+     "observedRate": 0.7694
+    },
+    {
+     "lower": 0.8,
+     "upper": 0.9,
+     "count": 305,
+     "meanPredicted": 0.8459,
+     "observedRate": 0.8689
+    },
+    {
+     "lower": 0.9,
+     "upper": 1,
+     "count": 141,
+     "meanPredicted": 0.9328,
+     "observedRate": 0.844
+    }
+   ]
+  },
+  "extraction": {
+   "rows": 32529,
+   "sessions": 225,
+   "positives": 29188,
+   "baseRate": 0.8973,
+   "trainBaseRate": 0.8632,
+   "brier": 0.0848,
+   "baselineBrier": 0.0933,
+   "brierSkill": 0.0911,
+   "logLoss": 0.2969,
+   "baselineLogLoss": 0.3363,
+   "auc": 0.7361,
+   "calibration": [
+    {
+     "lower": 0,
+     "upper": 0.1,
+     "count": 3,
+     "meanPredicted": 0.0709,
+     "observedRate": 0
+    },
+    {
+     "lower": 0.1,
+     "upper": 0.2,
+     "count": 29,
+     "meanPredicted": 0.1419,
+     "observedRate": 0.0345
+    },
+    {
+     "lower": 0.2,
+     "upper": 0.3,
+     "count": 61,
+     "meanPredicted": 0.2579,
+     "observedRate": 0.082
+    },
+    {
+     "lower": 0.3,
+     "upper": 0.4,
+     "count": 115,
+     "meanPredicted": 0.3563,
+     "observedRate": 0.3478
+    },
+    {
+     "lower": 0.4,
+     "upper": 0.5,
+     "count": 258,
+     "meanPredicted": 0.4556,
+     "observedRate": 0.5465
+    },
+    {
+     "lower": 0.5,
+     "upper": 0.6,
+     "count": 546,
+     "meanPredicted": 0.5575,
+     "observedRate": 0.6813
+    },
+    {
+     "lower": 0.6,
+     "upper": 0.7,
+     "count": 1410,
+     "meanPredicted": 0.6568,
+     "observedRate": 0.7582
+    },
+    {
+     "lower": 0.7,
+     "upper": 0.8,
+     "count": 3700,
+     "meanPredicted": 0.7576,
+     "observedRate": 0.8159
+    },
+    {
+     "lower": 0.8,
+     "upper": 0.9,
+     "count": 9249,
+     "meanPredicted": 0.858,
+     "observedRate": 0.8831
+    },
+    {
+     "lower": 0.9,
+     "upper": 1,
+     "count": 17158,
+     "meanPredicted": 0.9454,
+     "observedRate": 0.9542
+    }
+   ]
+  },
+  "eta": {
+   "rows": 31344,
+   "sessions": 225,
+   "mae": 14.9429,
+   "naiveMae": 19.1854,
+   "naiveDescription": "mean seconds-to-next-progress per (case, objective) (training set)"
+  },
+  "byCase": {
+   "poisoned_archive": {
+    "detection": {
+     "rows": 5905,
+     "sessions": 78,
+     "positives": 1520,
+     "baseRate": 0.2574,
+     "trainBaseRate": 0.328,
+     "brier": 0.1527,
+     "baselineBrier": 0.1961,
+     "brierSkill": 0.2216,
+     "logLoss": 0.4701,
+     "baselineLogLoss": 0.5821,
+     "auc": 0.7851,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 866,
+       "meanPredicted": 0.0615,
+       "observedRate": 0.0312
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 1378,
+       "meanPredicted": 0.1473,
+       "observedRate": 0.1197
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 1102,
+       "meanPredicted": 0.2493,
+       "observedRate": 0.1806
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 839,
+       "meanPredicted": 0.3489,
+       "observedRate": 0.2825
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 638,
+       "meanPredicted": 0.4469,
+       "observedRate": 0.3793
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 425,
+       "meanPredicted": 0.547,
+       "observedRate": 0.4447
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 268,
+       "meanPredicted": 0.6477,
+       "observedRate": 0.541
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 172,
+       "meanPredicted": 0.7452,
+       "observedRate": 0.7558
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 148,
+       "meanPredicted": 0.8479,
+       "observedRate": 0.8716
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 69,
+       "meanPredicted": 0.932,
+       "observedRate": 0.8261
+      }
+     ]
+    },
+    "extraction": {
+     "rows": 12207,
+     "sessions": 78,
+     "positives": 10731,
+     "baseRate": 0.8791,
+     "trainBaseRate": 0.8016,
+     "brier": 0.1053,
+     "baselineBrier": 0.1123,
+     "brierSkill": 0.062,
+     "logLoss": 0.3695,
+     "baselineLogLoss": 0.39,
+     "auc": 0.5995,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 3,
+       "meanPredicted": 0.0709,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 27,
+       "meanPredicted": 0.1397,
+       "observedRate": 0.037
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 48,
+       "meanPredicted": 0.2569,
+       "observedRate": 0.0208
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 62,
+       "meanPredicted": 0.3524,
+       "observedRate": 0.2258
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 117,
+       "meanPredicted": 0.4529,
+       "observedRate": 0.6154
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 327,
+       "meanPredicted": 0.557,
+       "observedRate": 0.7676
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 775,
+       "meanPredicted": 0.6576,
+       "observedRate": 0.8348
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 2139,
+       "meanPredicted": 0.7572,
+       "observedRate": 0.8597
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 4789,
+       "meanPredicted": 0.8575,
+       "observedRate": 0.9194
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 3920,
+       "meanPredicted": 0.9305,
+       "observedRate": 0.8936
+      }
+     ]
+    },
+    "eta": {
+     "rows": 11622,
+     "sessions": 78,
+     "mae": 15.696,
+     "naiveMae": 21.1405,
+     "naiveDescription": "mean seconds-to-next-progress per (case, objective) (training set)"
+    }
+   },
+   "crypt_last_witness": {
+    "detection": {
+     "rows": 4603,
+     "sessions": 65,
+     "positives": 936,
+     "baseRate": 0.2033,
+     "trainBaseRate": 0.2163,
+     "brier": 0.1234,
+     "baselineBrier": 0.1622,
+     "brierSkill": 0.2388,
+     "logLoss": 0.394,
+     "baselineLogLoss": 0.5055,
+     "auc": 0.8126,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 1698,
+       "meanPredicted": 0.0528,
+       "observedRate": 0.0412
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 1071,
+       "meanPredicted": 0.1455,
+       "observedRate": 0.1363
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 636,
+       "meanPredicted": 0.2452,
+       "observedRate": 0.2531
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 453,
+       "meanPredicted": 0.3489,
+       "observedRate": 0.2848
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 249,
+       "meanPredicted": 0.4454,
+       "observedRate": 0.3775
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 185,
+       "meanPredicted": 0.5462,
+       "observedRate": 0.5405
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 128,
+       "meanPredicted": 0.6514,
+       "observedRate": 0.7031
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 98,
+       "meanPredicted": 0.748,
+       "observedRate": 0.7755
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 60,
+       "meanPredicted": 0.8422,
+       "observedRate": 0.8833
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 25,
+       "meanPredicted": 0.9378,
+       "observedRate": 0.68
+      }
+     ]
+    },
+    "extraction": {
+     "rows": 9256,
+     "sessions": 65,
+     "positives": 8999,
+     "baseRate": 0.9722,
+     "trainBaseRate": 0.9412,
+     "brier": 0.0278,
+     "baselineBrier": 0.028,
+     "brierSkill": 0.0067,
+     "logLoss": 0.1273,
+     "baselineLogLoss": 0.1376,
+     "auc": 0.7618,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 1,
+       "meanPredicted": 0.4955,
+       "observedRate": 1
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 11,
+       "meanPredicted": 0.5696,
+       "observedRate": 0.9091
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 44,
+       "meanPredicted": 0.6729,
+       "observedRate": 0.8864
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 252,
+       "meanPredicted": 0.7623,
+       "observedRate": 0.9048
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 935,
+       "meanPredicted": 0.8627,
+       "observedRate": 0.9016
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 8013,
+       "meanPredicted": 0.9554,
+       "observedRate": 0.9832
+      }
+     ]
+    },
+    "eta": {
+     "rows": 9218,
+     "sessions": 65,
+     "mae": 13.7909,
+     "naiveMae": 17.2416,
+     "naiveDescription": "mean seconds-to-next-progress per (case, objective) (training set)"
+    }
+   },
+   "midnight_signal": {
+    "detection": {
+     "rows": 5211,
+     "sessions": 82,
+     "positives": 1402,
+     "baseRate": 0.269,
+     "trainBaseRate": 0.3049,
+     "brier": 0.1553,
+     "baselineBrier": 0.1979,
+     "brierSkill": 0.2155,
+     "logLoss": 0.4805,
+     "baselineLogLoss": 0.5854,
+     "auc": 0.7704,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 826,
+       "meanPredicted": 0.0638,
+       "observedRate": 0.0775
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 1429,
+       "meanPredicted": 0.1481,
+       "observedRate": 0.1274
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 1013,
+       "meanPredicted": 0.2446,
+       "observedRate": 0.2221
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 666,
+       "meanPredicted": 0.347,
+       "observedRate": 0.2793
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 465,
+       "meanPredicted": 0.448,
+       "observedRate": 0.4387
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 338,
+       "meanPredicted": 0.5471,
+       "observedRate": 0.5355
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 201,
+       "meanPredicted": 0.647,
+       "observedRate": 0.6517
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 129,
+       "meanPredicted": 0.7456,
+       "observedRate": 0.7829
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 97,
+       "meanPredicted": 0.8449,
+       "observedRate": 0.8557
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 47,
+       "meanPredicted": 0.9315,
+       "observedRate": 0.9574
+      }
+     ]
+    },
+    "extraction": {
+     "rows": 11066,
+     "sessions": 82,
+     "positives": 9458,
+     "baseRate": 0.8547,
+     "trainBaseRate": 0.8492,
+     "brier": 0.1099,
+     "baselineBrier": 0.1242,
+     "brierSkill": 0.1152,
+     "logLoss": 0.3587,
+     "baselineLogLoss": 0.4146,
+     "auc": 0.7655,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 0,
+       "meanPredicted": 0,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 2,
+       "meanPredicted": 0.1721,
+       "observedRate": 0
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 13,
+       "meanPredicted": 0.2618,
+       "observedRate": 0.3077
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 53,
+       "meanPredicted": 0.3608,
+       "observedRate": 0.4906
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 140,
+       "meanPredicted": 0.4575,
+       "observedRate": 0.4857
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 208,
+       "meanPredicted": 0.5577,
+       "observedRate": 0.5337
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 591,
+       "meanPredicted": 0.6545,
+       "observedRate": 0.6481
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 1309,
+       "meanPredicted": 0.7575,
+       "observedRate": 0.7273
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 3525,
+       "meanPredicted": 0.8576,
+       "observedRate": 0.8289
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 5225,
+       "meanPredicted": 0.9413,
+       "observedRate": 0.9554
+      }
+     ]
+    },
+    "eta": {
+     "rows": 10504,
+     "sessions": 82,
+     "mae": 15.1208,
+     "naiveMae": 18.7279,
+     "naiveDescription": "mean seconds-to-next-progress per (case, objective) (training set)"
+    }
+   }
+  }
+ },
+ "slurpRisk": {
+  "method": "logistic_regression",
+  "modelVersion": "slurp15-det15-20261024-mys-v4-g5",
+  "trainedOn": "35540 rows of 1134 simulated episodes (scripted bots on the real sim); not real players",
+  "horizonS": 15,
+  "features": [
+   "rule_logit",
+   "mode_INVESTIGATE",
+   "mode_SEARCH",
+   "mode_LEAVE",
+   "stance_idle",
+   "stance_crouch",
+   "stance_sprint",
+   "hidden"
+  ],
+  "mean": [
+   -3.189683,
+   0.060805,
+   0.099494,
+   0.128925,
+   0.088267,
+   0.09471,
+   0.246005,
+   0.030501
+  ],
+  "std": [
+   1.542759,
+   0.238972,
+   0.299324,
+   0.335117,
+   0.283682,
+   0.292814,
+   0.430681,
+   0.171961
+  ],
+  "coef": [
+   -1.647086,
+   0.853317,
+   -0.222053,
+   -0.441875,
+   -0.682988,
+   0.002816,
+   -0.320815,
+   0.028146,
+   0.150007
+  ],
+  "metrics": {
+   "brier": 0.1461,
+   "ruleBrier": 0.1769,
+   "constantBrier": 0.1641,
+   "rows": 8550,
+   "sessions": 200
+  }
+ },
+ "crackstoneRisk": {
+  "method": "rule_based",
+  "label": "Rule-based estimate",
+  "modelVersion": "crack-rule-1",
+  "horizonS": 10,
+  "cellM": 4,
+  "stepS": 0.5,
+  "belief": {
+   "sightSigmaM": 1.2,
+   "offLoopM": 3,
+   "unseenLikelihood": 0.15,
+   "relaxLoops": 1,
+   "returnSigma": 4,
+   "returnedSigma": 2,
+   "searchLooks": 2,
+   "lookCover": 0.5,
+   "searchGridM": 1.5
+  },
+  "metrics": {
+   "evaluatedAt": "2026-10-24T09:56:26.222Z",
+   "cells": {
+    "sessions": 225,
+    "samples": 30269,
+    "cellForecasts": 1816092,
+    "model": {
+     "n": 1816092,
+     "brier": 0.0922,
+     "logLoss": 0.4734,
+     "meanP": 0.1536,
+     "baseRate": 0.1586,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 1338156,
+       "meanPredicted": 0.0021,
+       "observedRate": 0.0434
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 43240,
+       "meanPredicted": 0.149,
+       "observedRate": 0.1723
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 45763,
+       "meanPredicted": 0.2517,
+       "observedRate": 0.2624
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 56695,
+       "meanPredicted": 0.3529,
+       "observedRate": 0.3495
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 59035,
+       "meanPredicted": 0.4509,
+       "observedRate": 0.403
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 60738,
+       "meanPredicted": 0.5471,
+       "observedRate": 0.4524
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 48183,
+       "meanPredicted": 0.6487,
+       "observedRate": 0.501
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 40857,
+       "meanPredicted": 0.7499,
+       "observedRate": 0.5792
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 32440,
+       "meanPredicted": 0.8502,
+       "observedRate": 0.6041
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 90985,
+       "meanPredicted": 0.9755,
+       "observedRate": 0.7899
+      }
+     ]
+    },
+    "staticRoute": {
+     "n": 1816092,
+     "brier": 0.1739,
+     "logLoss": 0.5307,
+     "meanP": 0.3309,
+     "baseRate": 0.1586,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 468116,
+       "meanPredicted": 0.0022,
+       "observedRate": 0.0242
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 86050,
+       "meanPredicted": 0.1478,
+       "observedRate": 0.0678
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 204002,
+       "meanPredicted": 0.2475,
+       "observedRate": 0.1165
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 315588,
+       "meanPredicted": 0.3628,
+       "observedRate": 0.1641
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 306841,
+       "meanPredicted": 0.4487,
+       "observedRate": 0.225
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 194815,
+       "meanPredicted": 0.5358,
+       "observedRate": 0.2668
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 76418,
+       "meanPredicted": 0.6553,
+       "observedRate": 0.2241
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 96894,
+       "meanPredicted": 0.7447,
+       "observedRate": 0.3055
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 44516,
+       "meanPredicted": 0.8346,
+       "observedRate": 0.4007
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 22852,
+       "meanPredicted": 0.9087,
+       "observedRate": 0.422
+      }
+     ]
+    },
+    "constant": {
+     "rate": 0.1527,
+     "brier": 0.1334
+    },
+    "area": {
+     "inRate": 0.2141,
+     "outRate": 0.092,
+     "brier": 0.1292
+    },
+    "byCase": {
+     "crypt_last_witness": {
+      "sessions": 65,
+      "model": {
+       "n": 860500,
+       "brier": 0.0794,
+       "logLoss": 0.3824,
+       "meanP": 0.1157,
+       "baseRate": 0.1188,
+       "calibration": [
+        {
+         "lower": 0,
+         "upper": 0.1,
+         "count": 658939,
+         "meanPredicted": 0.0029,
+         "observedRate": 0.0331
+        },
+        {
+         "lower": 0.1,
+         "upper": 0.2,
+         "count": 28084,
+         "meanPredicted": 0.1495,
+         "observedRate": 0.1677
+        },
+        {
+         "lower": 0.2,
+         "upper": 0.3,
+         "count": 28429,
+         "meanPredicted": 0.2511,
+         "observedRate": 0.2606
+        },
+        {
+         "lower": 0.3,
+         "upper": 0.4,
+         "count": 30509,
+         "meanPredicted": 0.3487,
+         "observedRate": 0.3471
+        },
+        {
+         "lower": 0.4,
+         "upper": 0.5,
+         "count": 29702,
+         "meanPredicted": 0.4503,
+         "observedRate": 0.3928
+        },
+        {
+         "lower": 0.5,
+         "upper": 0.6,
+         "count": 23706,
+         "meanPredicted": 0.5455,
+         "observedRate": 0.4265
+        },
+        {
+         "lower": 0.6,
+         "upper": 0.7,
+         "count": 18974,
+         "meanPredicted": 0.6467,
+         "observedRate": 0.484
+        },
+        {
+         "lower": 0.7,
+         "upper": 0.8,
+         "count": 13223,
+         "meanPredicted": 0.7443,
+         "observedRate": 0.5083
+        },
+        {
+         "lower": 0.8,
+         "upper": 0.9,
+         "count": 7958,
+         "meanPredicted": 0.8465,
+         "observedRate": 0.5709
+        },
+        {
+         "lower": 0.9,
+         "upper": 1,
+         "count": 20976,
+         "meanPredicted": 0.9762,
+         "observedRate": 0.7385
+        }
+       ]
+      },
+      "staticRoute": {
+       "n": 860500,
+       "brier": 0.1256,
+       "logLoss": 0.4321,
+       "meanP": 0.2371,
+       "baseRate": 0.1188,
+       "calibration": [
+        {
+         "lower": 0,
+         "upper": 0.1,
+         "count": 258150,
+         "meanPredicted": 0.004,
+         "observedRate": 0.0341
+        },
+        {
+         "lower": 0.1,
+         "upper": 0.2,
+         "count": 86050,
+         "meanPredicted": 0.1478,
+         "observedRate": 0.0678
+        },
+        {
+         "lower": 0.2,
+         "upper": 0.3,
+         "count": 172100,
+         "meanPredicted": 0.2455,
+         "observedRate": 0.12
+        },
+        {
+         "lower": 0.3,
+         "upper": 0.4,
+         "count": 154890,
+         "meanPredicted": 0.3728,
+         "observedRate": 0.15
+        },
+        {
+         "lower": 0.4,
+         "upper": 0.5,
+         "count": 111865,
+         "meanPredicted": 0.4475,
+         "observedRate": 0.2184
+        },
+        {
+         "lower": 0.5,
+         "upper": 0.6,
+         "count": 77445,
+         "meanPredicted": 0.5191,
+         "observedRate": 0.249
+        },
+        {
+         "lower": 0.6,
+         "upper": 0.7,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.7,
+         "upper": 0.8,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.8,
+         "upper": 0.9,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.9,
+         "upper": 1,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        }
+       ]
+      },
+      "constantBrier": 0.1047,
+      "areaBrier": 0.1025
+     },
+     "midnight_signal": {
+      "sessions": 82,
+      "model": {
+       "n": 429996,
+       "brier": 0.1001,
+       "logLoss": 0.5447,
+       "meanP": 0.2007,
+       "baseRate": 0.2006,
+       "calibration": [
+        {
+         "lower": 0,
+         "upper": 0.1,
+         "count": 301183,
+         "meanPredicted": 0.0016,
+         "observedRate": 0.0503
+        },
+        {
+         "lower": 0.1,
+         "upper": 0.2,
+         "count": 7556,
+         "meanPredicted": 0.1475,
+         "observedRate": 0.117
+        },
+        {
+         "lower": 0.2,
+         "upper": 0.3,
+         "count": 8030,
+         "meanPredicted": 0.2466,
+         "observedRate": 0.2437
+        },
+        {
+         "lower": 0.3,
+         "upper": 0.4,
+         "count": 10206,
+         "meanPredicted": 0.3585,
+         "observedRate": 0.3429
+        },
+        {
+         "lower": 0.4,
+         "upper": 0.5,
+         "count": 12584,
+         "meanPredicted": 0.4498,
+         "observedRate": 0.3712
+        },
+        {
+         "lower": 0.5,
+         "upper": 0.6,
+         "count": 15635,
+         "meanPredicted": 0.5484,
+         "observedRate": 0.4529
+        },
+        {
+         "lower": 0.6,
+         "upper": 0.7,
+         "count": 13365,
+         "meanPredicted": 0.6532,
+         "observedRate": 0.5318
+        },
+        {
+         "lower": 0.7,
+         "upper": 0.8,
+         "count": 12284,
+         "meanPredicted": 0.754,
+         "observedRate": 0.6276
+        },
+        {
+         "lower": 0.8,
+         "upper": 0.9,
+         "count": 8590,
+         "meanPredicted": 0.8495,
+         "observedRate": 0.679
+        },
+        {
+         "lower": 0.9,
+         "upper": 1,
+         "count": 40563,
+         "meanPredicted": 0.9747,
+         "observedRate": 0.7984
+        }
+       ]
+      },
+      "staticRoute": {
+       "n": 429996,
+       "brier": 0.2193,
+       "logLoss": 0.6091,
+       "meanP": 0.4288,
+       "baseRate": 0.2006,
+       "calibration": [
+        {
+         "lower": 0,
+         "upper": 0.1,
+         "count": 61428,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.1,
+         "upper": 0.2,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.2,
+         "upper": 0.3,
+         "count": 20476,
+         "meanPredicted": 0.2532,
+         "observedRate": 0.0952
+        },
+        {
+         "lower": 0.3,
+         "upper": 0.4,
+         "count": 92142,
+         "meanPredicted": 0.3556,
+         "observedRate": 0.1823
+        },
+        {
+         "lower": 0.4,
+         "upper": 0.5,
+         "count": 92142,
+         "meanPredicted": 0.4511,
+         "observedRate": 0.2179
+        },
+        {
+         "lower": 0.5,
+         "upper": 0.6,
+         "count": 71666,
+         "meanPredicted": 0.5434,
+         "observedRate": 0.2721
+        },
+        {
+         "lower": 0.6,
+         "upper": 0.7,
+         "count": 30714,
+         "meanPredicted": 0.6413,
+         "observedRate": 0.2782
+        },
+        {
+         "lower": 0.7,
+         "upper": 0.8,
+         "count": 51190,
+         "meanPredicted": 0.7415,
+         "observedRate": 0.3025
+        },
+        {
+         "lower": 0.8,
+         "upper": 0.9,
+         "count": 10238,
+         "meanPredicted": 0.807,
+         "observedRate": 0.3822
+        },
+        {
+         "lower": 0.9,
+         "upper": 1,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        }
+       ]
+      },
+      "constantBrier": 0.1604,
+      "areaBrier": 0.1545
+     },
+     "poisoned_archive": {
+      "sessions": 78,
+      "model": {
+       "n": 525596,
+       "brier": 0.1068,
+       "logLoss": 0.564,
+       "meanP": 0.1771,
+       "baseRate": 0.1892,
+       "calibration": [
+        {
+         "lower": 0,
+         "upper": 0.1,
+         "count": 378034,
+         "meanPredicted": 0.0012,
+         "observedRate": 0.056
+        },
+        {
+         "lower": 0.1,
+         "upper": 0.2,
+         "count": 7600,
+         "meanPredicted": 0.1484,
+         "observedRate": 0.2446
+        },
+        {
+         "lower": 0.2,
+         "upper": 0.3,
+         "count": 9304,
+         "meanPredicted": 0.2577,
+         "observedRate": 0.2839
+        },
+        {
+         "lower": 0.3,
+         "upper": 0.4,
+         "count": 15980,
+         "meanPredicted": 0.3574,
+         "observedRate": 0.3583
+        },
+        {
+         "lower": 0.4,
+         "upper": 0.5,
+         "count": 16749,
+         "meanPredicted": 0.4529,
+         "observedRate": 0.4452
+        },
+        {
+         "lower": 0.5,
+         "upper": 0.6,
+         "count": 21397,
+         "meanPredicted": 0.548,
+         "observedRate": 0.4808
+        },
+        {
+         "lower": 0.6,
+         "upper": 0.7,
+         "count": 15844,
+         "meanPredicted": 0.6471,
+         "observedRate": 0.4955
+        },
+        {
+         "lower": 0.7,
+         "upper": 0.8,
+         "count": 15350,
+         "meanPredicted": 0.7514,
+         "observedRate": 0.6016
+        },
+        {
+         "lower": 0.8,
+         "upper": 0.9,
+         "count": 15892,
+         "meanPredicted": 0.8524,
+         "observedRate": 0.5803
+        },
+        {
+         "lower": 0.9,
+         "upper": 1,
+         "count": 29446,
+         "meanPredicted": 0.9761,
+         "observedRate": 0.8149
+        }
+       ]
+      },
+      "staticRoute": {
+       "n": 525596,
+       "brier": 0.2158,
+       "logLoss": 0.628,
+       "meanP": 0.4044,
+       "baseRate": 0.1892,
+       "calibration": [
+        {
+         "lower": 0,
+         "upper": 0.1,
+         "count": 148538,
+         "meanPredicted": 0,
+         "observedRate": 0.017
+        },
+        {
+         "lower": 0.1,
+         "upper": 0.2,
+         "count": 0,
+         "meanPredicted": 0,
+         "observedRate": 0
+        },
+        {
+         "lower": 0.2,
+         "upper": 0.3,
+         "count": 11426,
+         "meanPredicted": 0.2676,
+         "observedRate": 0.1026
+        },
+        {
+         "lower": 0.3,
+         "upper": 0.4,
+         "count": 68556,
+         "meanPredicted": 0.3499,
+         "observedRate": 0.1712
+        },
+        {
+         "lower": 0.4,
+         "upper": 0.5,
+         "count": 102834,
+         "meanPredicted": 0.4478,
+         "observedRate": 0.2386
+        },
+        {
+         "lower": 0.5,
+         "upper": 0.6,
+         "count": 45704,
+         "meanPredicted": 0.5521,
+         "observedRate": 0.2888
+        },
+        {
+         "lower": 0.6,
+         "upper": 0.7,
+         "count": 45704,
+         "meanPredicted": 0.6648,
+         "observedRate": 0.1876
+        },
+        {
+         "lower": 0.7,
+         "upper": 0.8,
+         "count": 45704,
+         "meanPredicted": 0.7483,
+         "observedRate": 0.3088
+        },
+        {
+         "lower": 0.8,
+         "upper": 0.9,
+         "count": 34278,
+         "meanPredicted": 0.8428,
+         "observedRate": 0.4062
+        },
+        {
+         "lower": 0.9,
+         "upper": 1,
+         "count": 22852,
+         "meanPredicted": 0.9087,
+         "observedRate": 0.422
+        }
+       ]
+      },
+      "constantBrier": 0.1534,
+      "areaBrier": 0.1461
+     }
+    },
+    "byBasis": {
+     "inactive": {
+      "n": 994692,
+      "brier": 0.043,
+      "logLoss": 0.3963,
+      "meanP": 0,
+      "baseRate": 0.043,
+      "calibration": [
+       {
+        "lower": 0,
+        "upper": 0.1,
+        "count": 994692,
+        "meanPredicted": 0,
+        "observedRate": 0.043
+       },
+       {
+        "lower": 0.1,
+        "upper": 0.2,
+        "count": 0,
+        "meanPredicted": 0,
+        "observedRate": 0
+       },
+       {
+        "lower": 0.2,
+        "upper": 0.3,
+        "count": 0,
+        "meanPredicted": 0,
+        "observedRate": 0
+       },
+       {
+        "lower": 0.3,
+        "upper": 0.4,
+        "count": 0,
+        "meanPredicted": 0,
+        "observedRate": 0
+       },
+       {
+        "lower": 0.4,
+        "upper": 0.5,
+        "count": 0,
+        "meanPredicted": 0,
+        "observedRate": 0
+       },
+       {
+        "lower": 0.5,
+        "upper": 0.6,
+        "count": 0,
+        "meanPredicted": 0,
+        "observedRate": 0
+       },
+       {
+        "lower": 0.6,
+        "upper": 0.7,
+        "count": 0,
+        "meanPredicted": 0,
+        "observedRate": 0
+       },
+       {
+        "lower": 0.7,
+        "upper": 0.8,
+        "count": 0,
+        "meanPredicted": 0,
+        "observedRate": 0
+       },
+       {
+        "lower": 0.8,
+        "upper": 0.9,
+        "count": 0,
+        "meanPredicted": 0,
+        "observedRate": 0
+       },
+       {
+        "lower": 0.9,
+        "upper": 1,
+        "count": 0,
+        "meanPredicted": 0,
+        "observedRate": 0
+       }
+      ]
+     },
+     "patrol": {
+      "n": 636158,
+      "brier": 0.1578,
+      "logLoss": 0.5646,
+      "meanP": 0.3685,
+      "baseRate": 0.3064,
+      "calibration": [
+       {
+        "lower": 0,
+        "upper": 0.1,
+        "count": 237678,
+        "meanPredicted": 0.0093,
+        "observedRate": 0.0327
+       },
+       {
+        "lower": 0.1,
+        "upper": 0.2,
+        "count": 32493,
+        "meanPredicted": 0.1492,
+        "observedRate": 0.1395
+       },
+       {
+        "lower": 0.2,
+        "upper": 0.3,
+        "count": 37203,
+        "meanPredicted": 0.2526,
+        "observedRate": 0.2386
+       },
+       {
+        "lower": 0.3,
+        "upper": 0.4,
+        "count": 49195,
+        "meanPredicted": 0.3533,
+        "observedRate": 0.3421
+       },
+       {
+        "lower": 0.4,
+        "upper": 0.5,
+        "count": 50223,
+        "meanPredicted": 0.4512,
+        "observedRate": 0.3962
+       },
+       {
+        "lower": 0.5,
+        "upper": 0.6,
+        "count": 52206,
+        "meanPredicted": 0.5468,
+        "observedRate": 0.446
+       },
+       {
+        "lower": 0.6,
+        "upper": 0.7,
+        "count": 38352,
+        "meanPredicted": 0.6486,
+        "observedRate": 0.4878
+       },
+       {
+        "lower": 0.7,
+        "upper": 0.8,
+        "count": 31578,
+        "meanPredicted": 0.753,
+        "observedRate": 0.5714
+       },
+       {
+        "lower": 0.8,
+        "upper": 0.9,
+        "count": 29463,
+        "meanPredicted": 0.8497,
+        "observedRate": 0.5832
+       },
+       {
+        "lower": 0.9,
+        "upper": 1,
+        "count": 77767,
+        "meanPredicted": 0.9736,
+        "observedRate": 0.7689
+       }
+      ]
+     },
+     "chase": {
+      "n": 95522,
+      "brier": 0.151,
+      "logLoss": 0.676,
+      "meanP": 0.2554,
+      "baseRate": 0.2896,
+      "calibration": [
+       {
+        "lower": 0,
+        "upper": 0.1,
+        "count": 51649,
+        "meanPredicted": 0.0067,
+        "observedRate": 0.0939
+       },
+       {
+        "lower": 0.1,
+        "upper": 0.2,
+        "count": 5805,
+        "meanPredicted": 0.1501,
+        "observedRate": 0.3232
+       },
+       {
+        "lower": 0.2,
+        "upper": 0.3,
+        "count": 5298,
+        "meanPredicted": 0.2486,
+        "observedRate": 0.3669
+       },
+       {
+        "lower": 0.3,
+        "upper": 0.4,
+        "count": 4566,
+        "meanPredicted": 0.3499,
+        "observedRate": 0.4021
+       },
+       {
+        "lower": 0.4,
+        "upper": 0.5,
+        "count": 4673,
+        "meanPredicted": 0.4493,
+        "observedRate": 0.4428
+       },
+       {
+        "lower": 0.5,
+        "upper": 0.6,
+        "count": 4925,
+        "meanPredicted": 0.549,
+        "observedRate": 0.439
+       },
+       {
+        "lower": 0.6,
+        "upper": 0.7,
+        "count": 5394,
+        "meanPredicted": 0.651,
+        "observedRate": 0.4779
+       },
+       {
+        "lower": 0.7,
+        "upper": 0.8,
+        "count": 4756,
+        "meanPredicted": 0.7343,
+        "observedRate": 0.4977
+       },
+       {
+        "lower": 0.8,
+        "upper": 0.9,
+        "count": 0,
+        "meanPredicted": 0,
+        "observedRate": 0
+       },
+       {
+        "lower": 0.9,
+        "upper": 1,
+        "count": 8456,
+        "meanPredicted": 1,
+        "observedRate": 0.9434
+       }
+      ]
+     },
+     "search": {
+      "n": 89720,
+      "brier": 0.1104,
+      "logLoss": 0.4652,
+      "meanP": 0.2237,
+      "baseRate": 0.2516,
+      "calibration": [
+       {
+        "lower": 0,
+        "upper": 0.1,
+        "count": 54137,
+        "meanPredicted": 0.0057,
+        "observedRate": 0.0502
+       },
+       {
+        "lower": 0.1,
+        "upper": 0.2,
+        "count": 4942,
+        "meanPredicted": 0.1464,
+        "observedRate": 0.211
+       },
+       {
+        "lower": 0.2,
+        "upper": 0.3,
+        "count": 3262,
+        "meanPredicted": 0.2468,
+        "observedRate": 0.3636
+       },
+       {
+        "lower": 0.3,
+        "upper": 0.4,
+        "count": 2934,
+        "meanPredicted": 0.3502,
+        "observedRate": 0.3923
+       },
+       {
+        "lower": 0.4,
+        "upper": 0.5,
+        "count": 4139,
+        "meanPredicted": 0.4498,
+        "observedRate": 0.4409
+       },
+       {
+        "lower": 0.5,
+        "upper": 0.6,
+        "count": 3607,
+        "meanPredicted": 0.5491,
+        "observedRate": 0.5642
+       },
+       {
+        "lower": 0.6,
+        "upper": 0.7,
+        "count": 4437,
+        "meanPredicted": 0.6463,
+        "observedRate": 0.6432
+       },
+       {
+        "lower": 0.7,
+        "upper": 0.8,
+        "count": 4523,
+        "meanPredicted": 0.7445,
+        "observedRate": 0.7192
+       },
+       {
+        "lower": 0.8,
+        "upper": 0.9,
+        "count": 2977,
+        "meanPredicted": 0.8554,
+        "observedRate": 0.8109
+       },
+       {
+        "lower": 0.9,
+        "upper": 1,
+        "count": 4762,
+        "meanPredicted": 0.9619,
+        "observedRate": 0.8612
+       }
+      ]
+     }
+    },
+    "inArea": {
+     "model": {
+      "n": 904482,
+      "brier": 0.1234,
+      "logLoss": 0.6453,
+      "meanP": 0.2159,
+      "baseRate": 0.2237,
+      "calibration": [
+       {
+        "lower": 0,
+        "upper": 0.1,
+        "count": 589689,
+        "meanPredicted": 0.0025,
+        "observedRate": 0.0668
+       },
+       {
+        "lower": 0.1,
+        "upper": 0.2,
+        "count": 22973,
+        "meanPredicted": 0.1497,
+        "observedRate": 0.1767
+       },
+       {
+        "lower": 0.2,
+        "upper": 0.3,
+        "count": 23529,
+        "meanPredicted": 0.2505,
+        "observedRate": 0.255
+       },
+       {
+        "lower": 0.3,
+        "upper": 0.4,
+        "count": 28344,
+        "meanPredicted": 0.3484,
+        "observedRate": 0.3782
+       },
+       {
+        "lower": 0.4,
+        "upper": 0.5,
+        "count": 35720,
+        "meanPredicted": 0.4502,
+        "observedRate": 0.4246
+       },
+       {
+        "lower": 0.5,
+        "upper": 0.6,
+        "count": 42870,
+        "meanPredicted": 0.5492,
+        "observedRate": 0.4623
+       },
+       {
+        "lower": 0.6,
+        "upper": 0.7,
+        "count": 38784,
+        "meanPredicted": 0.6494,
+        "observedRate": 0.503
+       },
+       {
+        "lower": 0.7,
+        "upper": 0.8,
+        "count": 30298,
+        "meanPredicted": 0.7506,
+        "observedRate": 0.5986
+       },
+       {
+        "lower": 0.8,
+        "upper": 0.9,
+        "count": 22282,
+        "meanPredicted": 0.8465,
+        "observedRate": 0.6149
+       },
+       {
+        "lower": 0.9,
+        "upper": 1,
+        "count": 69993,
+        "meanPredicted": 0.9745,
+        "observedRate": 0.7985
+       }
+      ]
+     },
+     "areaRateBrier": 0.1738
+    },
+    "outArea": {
+     "model": {
+      "n": 911610,
+      "brier": 0.0614,
+      "logLoss": 0.3028,
+      "meanP": 0.0917,
+      "baseRate": 0.0939,
+      "calibration": [
+       {
+        "lower": 0,
+        "upper": 0.1,
+        "count": 748467,
+        "meanPredicted": 0.0018,
+        "observedRate": 0.0251
+       },
+       {
+        "lower": 0.1,
+        "upper": 0.2,
+        "count": 20267,
+        "meanPredicted": 0.1481,
+        "observedRate": 0.1674
+       },
+       {
+        "lower": 0.2,
+        "upper": 0.3,
+        "count": 22234,
+        "meanPredicted": 0.2529,
+        "observedRate": 0.2702
+       },
+       {
+        "lower": 0.3,
+        "upper": 0.4,
+        "count": 28351,
+        "meanPredicted": 0.3574,
+        "observedRate": 0.3208
+       },
+       {
+        "lower": 0.4,
+        "upper": 0.5,
+        "count": 23315,
+        "meanPredicted": 0.4521,
+        "observedRate": 0.37
+       },
+       {
+        "lower": 0.5,
+        "upper": 0.6,
+        "count": 17868,
+        "meanPredicted": 0.5421,
+        "observedRate": 0.4289
+       },
+       {
+        "lower": 0.6,
+        "upper": 0.7,
+        "count": 9399,
+        "meanPredicted": 0.6457,
+        "observedRate": 0.4929
+       },
+       {
+        "lower": 0.7,
+        "upper": 0.8,
+        "count": 10559,
+        "meanPredicted": 0.7479,
+        "observedRate": 0.5236
+       },
+       {
+        "lower": 0.8,
+        "upper": 0.9,
+        "count": 10158,
+        "meanPredicted": 0.8583,
+        "observedRate": 0.5804
+       },
+       {
+        "lower": 0.9,
+        "upper": 1,
+        "count": 20992,
+        "meanPredicted": 0.9787,
+        "observedRate": 0.7614
+       }
+      ]
+     },
+     "areaRateBrier": 0.0851
+    }
+   },
+   "here": {
+    "rows": 28209,
+    "sessions": 225,
+    "model": {
+     "n": 28209,
+     "brier": 0.0507,
+     "logLoss": 0.3796,
+     "meanP": 0.0306,
+     "baseRate": 0.0561,
+     "calibration": [
+      {
+       "lower": 0,
+       "upper": 0.1,
+       "count": 26800,
+       "meanPredicted": 0.0009,
+       "observedRate": 0.0376
+      },
+      {
+       "lower": 0.1,
+       "upper": 0.2,
+       "count": 229,
+       "meanPredicted": 0.1439,
+       "observedRate": 0.214
+      },
+      {
+       "lower": 0.2,
+       "upper": 0.3,
+       "count": 216,
+       "meanPredicted": 0.2523,
+       "observedRate": 0.2824
+      },
+      {
+       "lower": 0.3,
+       "upper": 0.4,
+       "count": 145,
+       "meanPredicted": 0.3435,
+       "observedRate": 0.3931
+      },
+      {
+       "lower": 0.4,
+       "upper": 0.5,
+       "count": 66,
+       "meanPredicted": 0.4466,
+       "observedRate": 0.2727
+      },
+      {
+       "lower": 0.5,
+       "upper": 0.6,
+       "count": 76,
+       "meanPredicted": 0.5444,
+       "observedRate": 0.4079
+      },
+      {
+       "lower": 0.6,
+       "upper": 0.7,
+       "count": 58,
+       "meanPredicted": 0.6539,
+       "observedRate": 0.3793
+      },
+      {
+       "lower": 0.7,
+       "upper": 0.8,
+       "count": 54,
+       "meanPredicted": 0.7487,
+       "observedRate": 0.3333
+      },
+      {
+       "lower": 0.8,
+       "upper": 0.9,
+       "count": 42,
+       "meanPredicted": 0.8532,
+       "observedRate": 0.4048
+      },
+      {
+       "lower": 0.9,
+       "upper": 1,
+       "count": 523,
+       "meanPredicted": 0.9899,
+       "observedRate": 0.5793
+      }
+     ]
+    },
+    "constant": {
+     "rate": 0.0531,
+     "brier": 0.053
+    },
+    "area": {
+     "inRate": 0.1395,
+     "outRate": 0.0415,
+     "brier": 0.0523
+    }
+   }
+  }
+ }
+}
