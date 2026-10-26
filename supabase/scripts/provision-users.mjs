@@ -5,7 +5,7 @@
 //   SUPABASE_URL=https://<ref>.supabase.co \
 //   SUPABASE_SERVICE_ROLE_KEY=<service role key> \
 //   PROVISION_PASSWORD='<12+ chars, upper+lower+digit>' \
-//   node supabase/scripts/provision-users.mjs <station|operator> <station_a|station_b|-> <email>
+//   node supabase/scripts/provision-users.mjs <station|operator> <station_a|station_b|station_c|-> <email>
 //
 // Examples:
 //   ... node supabase/scripts/provision-users.mjs station  station_a station-a@regatta.example
@@ -26,7 +26,7 @@ function fail(msg) {
 if (!url || !serviceKey) fail('set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
 if (!['station', 'operator'].includes(role)) fail('role must be "station" or "operator"');
 const stationId = role === 'station' ? stationArg : null;
-if (role === 'station' && !['station_a', 'station_b'].includes(stationId)) fail('station must be station_a or station_b');
+if (role === 'station' && !['station_a', 'station_b', 'station_c'].includes(stationId)) fail('station must be station_a, station_b or station_c');
 if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail('a valid email is required');
 if (!password || password.length < 12 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/\d/.test(password)) {
   fail('PROVISION_PASSWORD must be >= 12 chars with upper, lower and digit');
